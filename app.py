@@ -450,7 +450,7 @@ SEO_RULES = [
     ("Heading Structure", "REVIEW when headings are empty, highly repetitive, or structurally confusing."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
     ("Internal Links", "REVIEW/FAIL when important crawlable internal links are broken."),
-    ("External Links", "Request every discovered external HTTP link. PASS when all checked links resolve successfully. REVIEW broken, restricted, server error or unreachable destinations and show the affected URL and response."),
+    ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
     ("Images", "REVIEW when meaningful images are broken or lack useful alt text."),
     ("Structured Data", "Parse JSON LD and compare important article fields with visible page signals. PASS when JSON LD is valid and headline or article topic is consistent with the visible page. REVIEW parse errors, missing expected article data or material schema to page mismatch."),
     ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
@@ -459,7 +459,7 @@ SEO_RULES = [
     ("Mobile Content", "REVIEW/FAIL when mobile receives materially less main content than desktop."),
     ("JavaScript Rendering", "REVIEW when the initial HTML contains very little article text and depends heavily on scripts."),
     ("HTTPS", "PASS when the preferred page uses HTTPS."),
-    ("Broken Resources", "Request discovered image, stylesheet and JavaScript resource URLs. PASS when checked resources resolve successfully. REVIEW broken, server error, restricted or unreachable resources and show affected URLs."),
+    ("Broken Resources", "Request only render relevant image, stylesheet, font preload and JavaScript resources. Exclude API discovery, oEmbed, canonical, alternate and WordPress endpoint links. PASS when checked render resources resolve successfully. REVIEW confirmed broken or unreachable render resources."),
 ]
 
 CONTENT_RULES = [
@@ -474,13 +474,13 @@ CONTENT_RULES = [
     ("Generic / Filler Content", "REVIEW when a high share of text adds little topic specific information."),
     ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
-    ("Heading Relevance", "Evaluate each heading together with the section it introduces. A project, building, place or entity heading can be relevant even without repeating the Focus Keyword. PASS when headings or their section content are semantically related to the main topic. REVIEW when multiple sections remain weakly related after contextual analysis."),
+    ("Heading Relevance", "Evaluate each heading together with the section it introduces. Project, building, place and entity headings can be relevant without repeating the Focus Keyword. FAQ headings are structural and are judged by their questions and answers rather than the word FAQ itself. PASS when headings or their section content are contextually related to the main topic."),
     ("Introduction Quality", "PASS when the opening quickly establishes the promised topic."),
     ("FAQ Quality", "REVIEW when FAQ answers are empty, extremely short, repetitive or unrelated."),
     ("Unsupported Superlatives", "REVIEW claims such as best, cheapest, highest, most popular when no evidence/source is apparent."),
     ("Source Quality", "REVIEW important quantitative/regulatory claims with no visible source where sourcing is reasonably expected."),
     ("Data Accuracy", "REVIEW inconsistent prices, percentages, dates or repeated figures inside the page."),
-    ("Entity Accuracy", "Extract entity candidates from the isolated article body and headings and show the names that require verification. REVIEW entities that need an external or first party reference. FAIL only when a connected verification source confirms an entity is incorrect."),
+    ("Entity Accuracy", "Extract conservative entity candidates from proper noun headings, article links and proper noun phrases. Exclude CTA, FAQ, keyword phrases and sentence fragments. REVIEW only the remaining named entities that require external or first party verification. FAIL only when a connected verification source confirms an entity is incorrect."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
     ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
 ]
@@ -512,7 +512,7 @@ SYSTEM_USES = {
     "Canonical": "Canonical link element, canonical destination, current final URL, URL path comparison",
     "Title Tag": "HTML title element, character count as an advisory signal, Focus Keyword exact or semantic term overlap, title to article topic overlap, repeated title terms",
     "Meta Description": "Meta description element, description length, Focus Keyword presence",
-    "H1": "H1 elements, H1 count, H1 text, Focus Keyword exact match, semantic concept overlap and article topic relationship",
+    "H1": "Full page H1 elements including article header H1, H1 count, Focus Keyword exact match, semantic concept overlap and article topic relationship",
     "Heading Structure": "H1 through H6 elements, empty heading count, repeated heading count, heading order",
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
     "Internal Links": "Anchor elements, resolved link URLs, current domain, internal domain comparison",
@@ -525,7 +525,7 @@ SYSTEM_USES = {
     "Mobile Content": "Desktop User Agent, Mobile User Agent, extracted main content, text similarity",
     "JavaScript Rendering": "Extracted article word count, script count, initial HTML content availability",
     "HTTPS": "Final URL scheme and HTTPS detection",
-    "Broken Resources": "Image, stylesheet and JavaScript resource URLs, HTTP response codes, final destinations and request errors",
+    "Broken Resources": "Render relevant image, stylesheet, font preload and JavaScript resource URLs, HTTP response codes, final destinations and request errors while excluding API discovery and metadata links",
 
     # Content
     "Search Intent": "Focus Keyword when provided, otherwise title and H1, article body, topic keyword overlap",
@@ -545,7 +545,7 @@ SYSTEM_USES = {
     "Unsupported Superlatives": "Superlative terms such as best, cheapest and most popular, external source link presence",
     "Source Quality": "Numeric claims, data like statements, external source link count, visible attribution signals",
     "Data Accuracy": "Numbers and percentages extracted from the page, repeated values, internal consistency signals",
-    "Entity Accuracy": "Entity candidates from isolated article headings and text, internal context and external or first party verification requirement",
+    "Entity Accuracy": "Conservative entity candidates from proper noun headings, anchor text and proper noun phrases, with CTA, FAQ and keyword phrase filtering before external or first party verification",
     "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
     "Broken Content": "Placeholder terms, unfinished content indicators, empty headings, repeated paragraphs"
 }
@@ -939,6 +939,70 @@ def semantic_overlap(a, b):
     if not aa:
         return 0.0
     return len(aa & bb) / len(aa)
+
+
+def page_primary_h1(soup):
+    """
+    Return the primary visible H1 for the article.
+    The H1 may sit in the article header outside the isolated article body,
+    so this deliberately checks the full page before falling back to the body.
+    """
+    # Prefer H1s near article/main containers.
+    preferred = []
+    for selector in [
+        "article h1",
+        "main h1",
+        "[role='main'] h1",
+        ".entry-title",
+        ".post-title",
+        ".article-title",
+        "header h1",
+        "h1",
+    ]:
+        for node in soup.select(selector):
+            value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+            if value and value not in preferred:
+                preferred.append(value)
+        if preferred:
+            break
+
+    return preferred[0] if preferred else ""
+
+def page_h1s(soup):
+    """
+    Collect unique H1 values from the full page, because the article header
+    is often outside .entry-content or itemprop=articleBody.
+    """
+    values = []
+    for node in soup.find_all("h1"):
+        value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+FAQ_HEADING_LABELS = {
+    "faq", "faqs", "frequently asked questions",
+    "frequently asked question",
+    "أسئلة شائعة", "الأسئلة الشائعة", "الاسئلة الشائعة",
+}
+
+def is_faq_heading(text):
+    label = re.sub(r"\s+", " ", (text or "").strip()).lower()
+    return label in FAQ_HEADING_LABELS or "frequently asked" in label
+
+def faq_section_relevant(section_text, target_topic):
+    """
+    FAQ is structural. Judge it by its questions/answers, not by the literal
+    heading word 'FAQs'.
+    """
+    if not section_text:
+        return False
+
+    semantic = semantic_overlap(target_topic, section_text)
+    lexical = keyword_overlap(target_topic, section_text)
+
+    return semantic >= 0.30 or lexical >= 0.15
 
 def heading_sections(soup):
     """
@@ -2347,22 +2411,149 @@ def extract_page_links(soup, base_url):
     return unique_http_urls(internal), unique_http_urls(external)
 
 def extract_resource_urls(soup, base_url):
-    urls = []
-    for tag, attr in [
-        ("script", "src"),
-        ("link", "href"),
-        ("img", "src"),
-        ("source", "src"),
-    ]:
-        for node in soup.find_all(tag):
-            value = node.get(attr)
-            if not value:
-                continue
-            resolved = urljoin(base_url, value)
-            if resolved.startswith(("http://", "https://")):
-                urls.append(resolved)
+    """
+    Extract only resources that materially participate in page rendering.
 
-    return unique_http_urls(urls)
+    Excludes WordPress API discovery, oEmbed, canonical, alternate feeds,
+    shortlinks and other link relations that are not CSS, JS, image or font
+    resources required for rendering.
+    """
+    urls = []
+
+    # JavaScript
+    for node in soup.find_all("script", src=True):
+        resolved = urljoin(base_url, node.get("src"))
+        if resolved.startswith(("http://", "https://")):
+            urls.append(resolved)
+
+    # Images
+    for node in soup.find_all("img", src=True):
+        resolved = urljoin(base_url, node.get("src"))
+        if resolved.startswith(("http://", "https://")):
+            urls.append(resolved)
+
+    # Picture/video source assets
+    for node in soup.find_all("source", src=True):
+        resolved = urljoin(base_url, node.get("src"))
+        if resolved.startswith(("http://", "https://")):
+            urls.append(resolved)
+
+    # Only render-relevant <link> elements
+    for node in soup.find_all("link", href=True):
+        rel = {str(x).lower() for x in (node.get("rel") or [])}
+        as_value = (node.get("as") or "").lower()
+
+        is_stylesheet = "stylesheet" in rel
+        is_preload_resource = (
+            "preload" in rel
+            and as_value in {"style", "script", "font", "image"}
+        )
+
+        if not (is_stylesheet or is_preload_resource):
+            continue
+
+        resolved = urljoin(base_url, node.get("href"))
+        if resolved.startswith(("http://", "https://")):
+            urls.append(resolved)
+
+    # Explicitly remove known WordPress discovery/API endpoints if they were
+    # somehow included through unusual markup.
+    filtered = []
+    for url in unique_http_urls(urls):
+        low = url.lower()
+        if any(fragment in low for fragment in [
+            "/xmlrpc.php",
+            "/wp-json/",
+            "/oembed/",
+            "api.w.org",
+        ]):
+            continue
+        filtered.append(url)
+
+    return filtered
+
+
+SOCIAL_DOMAINS = {
+    "facebook.com", "www.facebook.com", "m.facebook.com",
+    "instagram.com", "www.instagram.com",
+    "linkedin.com", "www.linkedin.com",
+    "twitter.com", "www.twitter.com",
+    "x.com", "www.x.com",
+    "tiktok.com", "www.tiktok.com",
+    "pinterest.com", "www.pinterest.com",
+    "youtube.com", "www.youtube.com",
+}
+
+def is_social_domain(url):
+    host = urlparse(url or "").netloc.lower()
+    return host in SOCIAL_DOMAINS or any(host.endswith("." + d) for d in SOCIAL_DOMAINS)
+
+def social_platform_expected_block(item):
+    """
+    Some social platforms return login pages, 400/401/403 or anti-bot responses
+    to automated requests even when the user-facing link is valid.
+    These should not be classified as broken by status alone.
+    """
+    url = item.get("url", "")
+    final_url = item.get("final_url", "")
+    status = item.get("status")
+
+    if not is_social_domain(url):
+        return False
+
+    if status in {400, 401, 403, 429}:
+        return True
+
+    final_low = (final_url or "").lower()
+    if any(part in final_low for part in ["/login", "/checkpoint", "/signin", "/auth"]):
+        return True
+
+    return False
+
+def classify_link_validation(validation):
+    """
+    Separate genuinely broken links from expected automated access restrictions.
+    """
+    working = []
+    broken = []
+    restricted = []
+    expected_platform = []
+    unreachable = []
+    server_errors = []
+    redirected = []
+
+    for item in validation.get("checked", []):
+        status = item.get("status")
+
+        if social_platform_expected_block(item):
+            expected_platform.append(item)
+            continue
+
+        if status is None:
+            unreachable.append(item)
+        elif 200 <= status < 300:
+            working.append(item)
+            if item.get("final_url") and item["final_url"] != item["url"]:
+                redirected.append(item)
+        elif status in {401, 403, 429}:
+            restricted.append(item)
+        elif status in {404, 410}:
+            broken.append(item)
+        elif 400 <= status < 500:
+            broken.append(item)
+        elif status >= 500:
+            server_errors.append(item)
+
+    return {
+        "checked": validation.get("checked", []),
+        "working": working,
+        "broken": broken,
+        "restricted": restricted,
+        "expected_platform": expected_platform,
+        "unreachable": unreachable,
+        "server_errors": server_errors,
+        "redirected": redirected,
+    }
 
 def validation_problem_examples(validation, limit=6):
     items = (
@@ -2500,29 +2691,72 @@ def contextual_old_years(text):
     return output
 
 def factual_claim_examples(article_soup, base_url, limit=6):
+    """
+    Extract concrete verifiable claims, not generic promotional language.
+
+    Strong claim signals include:
+    numbers, dates, percentages, prices, distances, durations,
+    completion/launch facts, developer attribution, ranking/data claims,
+    named facilities and specific location statements.
+    """
     claims = []
+
+    strong_patterns = [
+        r"\bAED\s*\d",
+        r"\b\d+(?:\.\d+)?%",
+        r"\b20(?:1\d|2\d)\b",
+        r"\b\d+\s*(?:minute|minutes|min|km|kilometre|kilometer|metre|meter|sq\.?\s*ft|sqft)\b",
+        r"\b(?:average|avg\.?)\s+(?:price|rent|roi|yield)\b",
+        r"\b(?:completed|launched|established|opened|founded|developed by|developer is|consists of|comprises)\b",
+        r"\b(?:most searched|most popular|ranked|according to our data|data experts)\b",
+        r"\b(?:located in|located at|situated in|situated at)\b",
+        r"\b(?:أسعار|سعر|إيجار|ايجار|عائد|رسوم)\s+\d",
+        r"\b(?:دقيقة|دقائق|كم|كيلومتر|متر)\b",
+        r"\b(?:تم إطلاق|تم اطلاق|اكتمل|افتتح|تأسس|طورته|المطور)\b",
+        r"\b(?:الأكثر بحثا|الاكثر بحثا|وفقا لبيانات|بحسب البيانات)\b",
+    ]
+
+    weak_marketing_terms = {
+        "great option",
+        "comfortable lifestyle",
+        "convenient lifestyle",
+        "popular choice",
+        "not hard to see why",
+        "perfect choice",
+        "ideal choice",
+        "excellent facilities",
+    }
+
     for node in article_soup.find_all(["p", "li", "td"]):
         value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
         if len(value) < 45:
             continue
 
-        has_number = bool(re.search(
-            r"(?:AED\s*)?\b\d+(?:[.,]\d+)?(?:\s*[KMB])?\b|\b\d+(?:\.\d+)?%|\b20(?:1\d|2\d)\b",
+        low = value.lower()
+
+        # Skip purely promotional/generic text if it has no strong factual signal.
+        has_strong = any(
+            re.search(pattern, value, flags=re.I)
+            for pattern in strong_patterns
+        )
+
+        if not has_strong:
+            continue
+
+        # If a sentence is dominated by marketing language and has no numeric/date
+        # or specific attribution signal, do not treat it as a factual claim.
+        has_numeric_specificity = bool(re.search(
+            r"\b\d+(?:[.,]\d+)?(?:%|\s*(?:minutes?|km|sqft|sq\.?\s*ft))?\b|AED\s*\d",
             value,
             flags=re.I,
         ))
-        has_fact_signal = any(
-            term in value.lower()
-            for term in [
-                "located", "offers", "includes", "features", "consists",
-                "average", "price", "rent", "roi", "yield", "distance",
-                "minutes", "developer", "completed", "launched",
-                "يقع", "يوفر", "يضم", "يشمل", "متوسط", "سعر", "إيجار",
-                "ايجار", "عائد", "دقيقة", "مطور"
-            ]
-        )
+        has_attribution = bool(re.search(
+            r"\b(?:according to|data experts|developed by|developer|completed|launched|located in|located at)\b",
+            value,
+            flags=re.I,
+        ))
 
-        if not (has_number or has_fact_signal):
+        if any(term in low for term in weak_marketing_terms) and not (has_numeric_specificity or has_attribution):
             continue
 
         sources = []
@@ -2532,9 +2766,10 @@ def factual_claim_examples(article_soup, base_url, limit=6):
                 sources.append(resolved)
 
         claims.append({
-            "claim": value[:320],
+            "claim": value[:360],
             "source_links": unique_http_urls(sources),
         })
+
         if len(claims) >= limit:
             break
 
@@ -2543,38 +2778,116 @@ def factual_claim_examples(article_soup, base_url, limit=6):
 GENERIC_ENTITY_HEADINGS = {
     "faqs", "faq", "introduction", "conclusion", "overview", "summary",
     "popular", "comments", "leave a reply", "find a reliable agent",
-    "frequently asked questions",
+    "frequently asked questions", "find an agent", "read more",
+    "rent apartments", "rent villas", "apartments", "villas",
+    "where to rent", "where can you rent",
 }
+
+def looks_like_entity_phrase(value):
+    value = re.sub(r"\s+", " ", (value or "")).strip(" ,.;:-")
+    if not value:
+        return False
+
+    low = value.casefold()
+
+    if low in GENERIC_ENTITY_HEADINGS:
+        return False
+
+    if any(term in low for term in [
+        "find an agent",
+        "leave a reply",
+        "frequently asked",
+        "faq",
+        "rent apartment",
+        "rent apartments",
+        "rent villa",
+        "rent villas",
+        "where can you",
+        "where to rent",
+        "click here",
+        "read more",
+        "want to",
+    ]):
+        return False
+
+    words = tokenize(value)
+    if not (1 <= len(words) <= 7):
+        return False
+
+    # Reject sentence fragments and calls to action.
+    if value.endswith(("?", "!", ".")):
+        return False
+
+    # Reject phrases that are mostly generic SEO/action terms.
+    generic_tokens = {
+        "rent", "rental", "renting", "apartment", "apartments", "villa", "villas",
+        "property", "properties", "find", "agent", "faq", "faqs", "want",
+        "best", "popular", "places", "where", "can", "you",
+    }
+    meaningful = [w.lower() for w in words if w.lower() not in generic_tokens]
+    if len(meaningful) == 0:
+        return False
+
+    # Prefer proper noun style or known entity suffixes.
+    title_case_words = sum(
+        1 for token in value.split()
+        if token[:1].isupper() or token.isupper()
+    )
+
+    entity_suffixes = {
+        "residence", "residences", "tower", "towers", "villas", "villa",
+        "heights", "gardens", "estate", "estates", "city", "community",
+        "school", "academy", "hospital", "clinic", "mall", "hotel",
+        "park", "course", "stadium", "centre", "center",
+    }
+
+    has_entity_suffix = any(w.lower().strip(".,") in entity_suffixes for w in value.split())
+
+    return title_case_words >= max(1, len(value.split()) // 2) or has_entity_suffix
 
 def entity_candidates(article_soup, limit=12):
     values = []
 
+    # 1. Headings are strong entity candidates when they look like proper nouns.
     for heading in article_soup.find_all(re.compile(r"^h[2-4]$")):
         value = re.sub(r"\s+", " ", heading.get_text(" ", strip=True)).strip()
-        if not value or value.lower() in GENERIC_ENTITY_HEADINGS:
-            continue
-        if 1 <= len(tokenize(value)) <= 8:
+        if looks_like_entity_phrase(value):
             values.append(value)
 
+    # 2. Anchor text inside the article is often a cleaner signal for named places/projects.
+    for anchor in article_soup.find_all("a", href=True):
+        value = re.sub(r"\s+", " ", anchor.get_text(" ", strip=True)).strip()
+        if looks_like_entity_phrase(value):
+            values.append(value)
+
+    # 3. Conservative proper noun phrase extraction from prose.
     text_value = clean_text(article_soup)
     for match in re.findall(
         r"\b(?:[A-Z][A-Za-z0-9'&.-]+(?:\s+|$)){2,5}",
         text_value,
     ):
         value = re.sub(r"\s+", " ", match).strip(" ,.;:")
-        if 2 <= len(tokenize(value)) <= 7:
+        if looks_like_entity_phrase(value):
             values.append(value)
 
     clean_values = []
     seen = set()
+
     for value in values:
+        value = re.sub(r"\s+", " ", value).strip()
         key = value.casefold()
+
         if key in seen:
             continue
         seen.add(key)
 
-        if key in GENERIC_ENTITY_HEADINGS:
+        # Avoid article title / focus keyword style headings being mistaken for entities.
+        if len(tokenize(value)) >= 6 and any(
+            token in key
+            for token in ["rent", "apartments", "villas", "properties"]
+        ):
             continue
+
         clean_values.append(value)
 
         if len(clean_values) >= limit:
@@ -3063,16 +3376,11 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     meta_kw_note = f" | Focus keyword {'found' if focus_in_meta else 'not found'}" if focus_keyword else ""
     rows.append(result("Meta Description", md, f"{ml} characters{': ' + meta[:180] if meta else ' — missing'}{meta_kw_note}", rules["Meta Description"]))
 
-    content_node = main_content_node(soup)
-    h1s = [
-        h.get_text(" ", strip=True)
-        for h in content_node.find_all("h1")
-        if h.get_text(" ", strip=True)
-    ]
+    h1s = page_h1s(soup)
 
     if len(h1s) == 0:
         h1_status = FAIL
-        h1_finding = "No H1 was found in the main content."
+        h1_finding = "No H1 was found on the page."
     else:
         h1_text = h1s[0]
         h1_status = PASS if len(h1s) == 1 else REVIEW
@@ -3152,22 +3460,40 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
             workers=LINK_CHECK_WORKERS,
         )
 
-    external_problems = validation_problem_examples(external_validation)
+    external_classified = classify_link_validation(external_validation)
+    external_problem_items = (
+        external_classified["broken"]
+        + external_classified["server_errors"]
+        + external_classified["restricted"]
+        + external_classified["unreachable"]
+    )
+
     if not external:
         external_status = PASS
         external_finding = "No external HTTP links were found."
-    elif external_problems:
+    elif external_problem_items:
         external_status = REVIEW
+        external_problems = validation_problem_examples(
+            {
+                "broken": external_classified["broken"],
+                "server_errors": external_classified["server_errors"],
+                "restricted": external_classified["restricted"],
+                "unreachable": external_classified["unreachable"],
+            }
+        )
         external_finding = (
-            f"{len(external_validation['checked'])} unique external links were requested. "
-            f"{len(external_validation['working'])} resolved successfully. "
-            f"Problems: " + "; ".join(external_problems) + "."
+            f"{len(external_classified['checked'])} unique external links were requested. "
+            f"{len(external_classified['working'])} resolved successfully. "
+            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected automated access restrictions and were not treated as broken. "
+            f"Problems requiring review: " + "; ".join(external_problems) + "."
         )
     else:
         external_status = PASS
         external_finding = (
-            f"All {len(external_validation['checked'])} unique external HTTP links were requested and resolved successfully. "
-            f"{len(external_validation['redirected'])} redirected to a working final destination."
+            f"{len(external_classified['checked'])} unique external HTTP links were requested. "
+            f"{len(external_classified['working'])} resolved directly. "
+            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected login or anti-bot responses and were not treated as broken. "
+            f"{len(external_classified['redirected'])} redirected to a working final destination."
         )
 
     rows.append(
@@ -3192,7 +3518,7 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     ]
 
     visible_title = title_text(soup)
-    visible_h1 = first_h1(main_content_node(soup))
+    visible_h1 = page_primary_h1(soup)
     headline_scores = [
         max(
             semantic_overlap(headline, visible_title),
@@ -3426,7 +3752,7 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     body_text = clean_text(article_soup)
 
     title = title_text(soup)
-    h1 = first_h1(article_soup)
+    h1 = page_primary_h1(soup)
     wc = word_count(body_text)
     target_topic = focus_keyword or title or h1
 
@@ -3447,6 +3773,12 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     for item in content_sections:
         heading_score = semantic_overlap(target_topic, item["heading"])
         section_score = semantic_overlap(target_topic, item["section"]) if item["section"] else 0.0
+
+        if is_faq_heading(item["heading"]):
+            if not faq_section_relevant(item["section"], target_topic):
+                weak_sections.append(item["heading"])
+            continue
+
         if heading_score < 0.20 and section_score < 0.35:
             weak_sections.append(item["heading"])
 
@@ -3620,8 +3952,13 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             heading_score = semantic_overlap(target_topic, item["heading"])
             section_score = semantic_overlap(target_topic, item["section"]) if item["section"] else 0.0
 
-            # A heading can be an entity name. Its section can establish the connection.
-            is_relevant = heading_score >= 0.20 or section_score >= 0.45
+            # FAQ is a structural heading. Judge the FAQ content rather than the
+            # literal heading word.
+            if is_faq_heading(item["heading"]):
+                is_relevant = faq_section_relevant(item["section"], target_topic)
+            else:
+                # A heading can be an entity name. Its section can establish the connection.
+                is_relevant = heading_score >= 0.20 or section_score >= 0.45
             if is_relevant:
                 relevant += 1
                 if heading_score < 0.20 and section_score >= 0.45:
