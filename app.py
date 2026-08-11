@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17 FINAL"
-ENGINE_BUILD = "2026.08.11.2"
+APP_VERSION = "V17.1 FINAL"
+ENGINE_BUILD = "2026.08.11.3"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -3235,13 +3235,15 @@ def factual_claim_examples(article_soup, base_url, limit=6):
             value,
             flags=re.I,
         ))
-        has_attribution = bool(re.search(
+        has_claim_attribution_signal = bool(re.search(
             r"\b(?:according to|data experts|developed by|developer|completed|launched|located in|located at)\b",
             value,
             flags=re.I,
         ))
 
-        if any(term in low for term in weak_marketing_terms) and not (has_numeric_specificity or has_attribution):
+        if any(term in low for term in weak_marketing_terms) and not (
+            has_numeric_specificity or has_claim_attribution_signal
+        ):
             continue
 
         sources = []
@@ -5717,7 +5719,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_final.json",
+            file_name="url_audit_v17_1_final.json",
             mime="application/json",
         )
 
