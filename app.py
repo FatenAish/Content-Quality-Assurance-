@@ -32,101 +32,353 @@ st.set_page_config(
     page_title="Bayut URL Quality Auditor",
     page_icon="🔎",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown(
     f"""
     <style>
+    :root {{
+        --bayut-green: #00A66A;
+        --bayut-green-dark: #008B59;
+        --bayut-mint: #F2FBF7;
+        --bayut-mint-2: #EAF7F1;
+        --ink: #121926;
+        --muted: #667085;
+        --line: #E4E9E7;
+        --panel: #FFFFFF;
+        --soft: #F8FAF9;
+        --warn: #B7791F;
+        --danger: #C53030;
+    }}
+
+    html, body, [class*="css"] {{
+        font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
     .stApp {{
         background: #ffffff;
-        color: {BAYUT_DARK};
+        color: var(--ink);
+    }}
+    header[data-testid="stHeader"] {{
+        display:none;
+    }}
+    #MainMenu, footer {{
+        visibility:hidden;
     }}
     .block-container {{
-        padding-top: 1.4rem;
-        padding-bottom: 3rem;
-        max-width: 1380px;
+        max-width: 1460px;
+        padding: 22px 30px 42px 30px;
     }}
-    .bayut-header {{
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {{
+        width: 286px !important;
+        min-width: 286px !important;
+        max-width: 286px !important;
+        background: #ffffff;
+        border-right: 1px solid #E8ECEA;
+    }}
+    section[data-testid="stSidebar"] > div {{
+        width: 286px !important;
+        padding-top: 0 !important;
+    }}
+    section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+        padding: 24px 18px 22px 18px;
+    }}
+    .side-brand {{
+        display:flex;
+        align-items:center;
+        gap:9px;
+        padding: 2px 3px 30px 3px;
+        color:var(--bayut-green);
+        font-size:28px;
+        font-weight:800;
+        letter-spacing:-1px;
+    }}
+    .side-brand svg {{width:31px;height:31px;}}
+    .side-title {{
+        font-size:12px;
+        line-height:1;
+        color:#667085;
+        font-weight:800;
+        letter-spacing:.7px;
+        text-transform:uppercase;
+        padding: 5px 6px 14px 6px;
+    }}
+    .nav-card {{
+        display:flex;
+        align-items:center;
+        gap:13px;
+        padding:14px 12px;
+        border-radius:12px;
+        margin-bottom:9px;
+        border-left:4px solid transparent;
+    }}
+    .nav-card.active {{
+        background:linear-gradient(90deg, #F0FAF5 0%, #F6FBF8 100%);
+        border-left-color:var(--bayut-green);
+    }}
+    .nav-icon {{
+        width:43px;
+        height:43px;
+        border-radius:50%;
+        border:1px solid #E6EEE9;
+        background:#fff;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        flex:0 0 43px;
+    }}
+    .nav-icon svg {{width:23px;height:23px;stroke:var(--bayut-green);}}
+    .nav-name {{font-size:14px;font-weight:800;color:#172026;margin-bottom:4px;}}
+    .nav-desc {{font-size:11px;line-height:1.55;color:#667085;}}
+    .side-divider {{height:1px;background:#ECEFED;margin:22px 4px;}}
+    .side-note {{
+        padding:13px 12px;
+        border:1px solid #E5EAE7;
+        border-radius:10px;
+        background:#FAFBFA;
+        color:#69736F;
+        font-size:10.5px;
+        line-height:1.55;
+    }}
+    .side-note strong {{color:var(--bayut-green);}}
+    section[data-testid="stSidebar"] .stCheckbox {{
+        margin-top:28px;
+        padding: 8px 4px 0 4px;
+    }}
+    section[data-testid="stSidebar"] .stCheckbox label p {{
+        font-size:12px;
+        font-weight:700;
+        color:#29312F;
+    }}
+
+    /* Utility row */
+    .utility-row {{
+        display:flex;
+        justify-content:flex-end;
+        gap:10px;
+        margin: 0 2px 12px 0;
+    }}
+    .utility-btn {{
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        gap:7px;
+        min-width:38px;
+        height:38px;
+        padding:0 12px;
+        border:1px solid #E6EAE8;
+        border-radius:999px;
+        background:#fff;
+        color:#111827;
+        font-size:12px;
+        box-shadow:0 2px 8px rgba(16,24,40,.03);
+    }}
+    .utility-btn.icon-only {{padding:0;width:38px;}}
+    .utility-btn svg {{width:17px;height:17px;stroke:#202723;}}
+
+    /* Hero */
+    .hero-card {{
+        position:relative;
+        overflow:hidden;
         display:flex;
         align-items:center;
         justify-content:space-between;
-        padding: 18px 22px;
-        border: 1px solid {BORDER};
-        border-radius: 16px;
-        background: linear-gradient(135deg, #ffffff 0%, {BAYUT_LIGHT} 100%);
-        margin-bottom: 18px;
+        min-height:142px;
+        padding:25px 30px;
+        border:1px solid #D7E9E0;
+        border-radius:15px;
+        background:
+            radial-gradient(circle at 17% 50%, rgba(0,166,106,.10), transparent 18%),
+            radial-gradient(circle at 90% 22%, rgba(0,166,106,.06), transparent 24%),
+            linear-gradient(115deg, #FFFFFF 0%, #F7FCF9 55%, #F0FAF5 100%);
+        box-shadow:0 4px 18px rgba(16,24,40,.03);
+        margin-bottom:10px;
     }}
-    .brand {{
-        font-size: 31px;
-        font-weight: 800;
-        letter-spacing: -0.8px;
-        color: {BAYUT_GREEN};
+    .hero-card:after {{
+        content:"";
+        position:absolute;
+        right:-80px; top:18px;
+        width:420px; height:160px;
+        border-radius:55% 0 0 55%;
+        background:linear-gradient(120deg, rgba(0,166,106,.025), rgba(0,166,106,.055));
+        transform:rotate(-7deg);
+        pointer-events:none;
     }}
-    .subtitle {{
-        font-size: 14px;
-        color: {TEXT_MUTED};
-        margin-top: 2px;
+    .hero-left {{display:flex;align-items:center;gap:22px;position:relative;z-index:2;}}
+    .hero-icon {{
+        width:76px;height:76px;border-radius:50%;
+        background:rgba(0,166,106,.075);
+        border:1px solid rgba(0,166,106,.08);
+        display:flex;align-items:center;justify-content:center;
+        box-shadow:0 0 0 12px rgba(0,166,106,.035);
     }}
-    .pill {{
-        border: 1px solid {BORDER};
-        border-radius: 999px;
-        padding: 8px 12px;
-        font-size: 12px;
-        font-weight: 700;
+    .hero-icon svg {{width:43px;height:43px;stroke:var(--bayut-green);stroke-width:2;}}
+    .hero-title {{
+        font-size:28px;line-height:1.12;font-weight:800;color:#101828;letter-spacing:-.8px;
+    }}
+    .hero-title .bayut-word {{color:var(--bayut-green);}}
+    .hero-sub {{font-size:13px;color:#667085;margin-top:11px;}}
+    .audit-pill {{
+        position:relative;z-index:2;
+        padding:12px 18px;
+        border-radius:999px;
         background:#fff;
+        border:1px solid #DDE8E2;
+        color:var(--bayut-green-dark);
+        font-size:12px;font-weight:800;
+        box-shadow:0 6px 16px rgba(16,24,40,.08);
     }}
+
+    /* URL input panel */
+    .url-shell {{
+        border:1px solid #E4E8E6;
+        background:#fff;
+        border-radius:14px;
+        padding:16px 18px 17px;
+        box-shadow:0 7px 18px rgba(16,24,40,.05);
+        margin: 8px 0 22px 0;
+    }}
+    .url-label {{font-size:12px;font-weight:800;color:#27302D;margin-bottom:8px;}}
+    div[data-testid="stTextInput"] {{margin-top:0;}}
+    div[data-testid="stTextInput"] input {{
+        height:48px;
+        border:1px solid #CFE8DC !important;
+        border-radius:10px !important;
+        padding-left:15px !important;
+        background:#fff !important;
+        color:#344054 !important;
+        box-shadow:none !important;
+        font-size:12px !important;
+    }}
+    div[data-testid="stTextInput"] > div > div {{
+        border:none !important;
+        box-shadow:none !important;
+        background:transparent !important;
+    }}
+    div[data-testid="stButton"] button {{
+        height:48px;
+        border:0 !important;
+        border-radius:9px !important;
+        background:linear-gradient(180deg, #00AF70 0%, #009960 100%) !important;
+        color:#fff !important;
+        font-size:13px !important;
+        font-weight:800 !important;
+        box-shadow:0 7px 14px rgba(0,166,106,.22) !important;
+        transition:.16s ease;
+    }}
+    div[data-testid="stButton"] button:hover {{
+        transform:translateY(-1px);
+        background:linear-gradient(180deg, #00A86B 0%, #008B59 100%) !important;
+    }}
+
+    /* Section title */
+    .section-heading {{
+        font-size:20px;
+        font-weight:800;
+        color:#172026;
+        letter-spacing:-.35px;
+        margin:20px 2px 14px 2px;
+    }}
+
+    /* Feature cards */
+    .feature-card {{
+        position:relative;
+        min-height:150px;
+        padding:20px 20px 20px 20px;
+        border:1px solid #E2E7E5;
+        border-radius:13px;
+        background:#fff;
+        box-shadow:0 7px 18px rgba(16,24,40,.05);
+        overflow:hidden;
+    }}
+    .feature-card:after {{
+        content:"";
+        position:absolute;bottom:0;left:0;width:58px;height:3px;background:var(--bayut-green);
+        border-radius:0 3px 0 0;
+    }}
+    .feature-row {{display:flex;gap:15px;align-items:flex-start;}}
+    .feature-icon {{
+        width:48px;height:48px;border-radius:50%;flex:0 0 48px;
+        display:flex;align-items:center;justify-content:center;
+        border:1px solid #DDECE5;background:#F2FAF6;
+    }}
+    .feature-icon svg {{width:25px;height:25px;stroke:#008B59;}}
+    .feature-title {{font-size:15px;font-weight:800;color:#202725;margin-top:2px;}}
+    .feature-title span {{color:var(--bayut-green-dark);}}
+    .feature-desc {{font-size:11px;line-height:1.55;color:#667085;margin-top:10px;}}
+
+    /* How it works */
+    .how-card {{
+        border:1px solid #E2E7E5;
+        border-radius:13px;
+        background:#fff;
+        padding:20px 22px 22px;
+        box-shadow:0 7px 18px rgba(16,24,40,.045);
+        margin-top:8px;
+    }}
+    .steps {{display:grid;grid-template-columns:1fr 32px 1fr 32px 1fr 32px 1fr;gap:8px;align-items:center;}}
+    .step {{display:flex;gap:13px;align-items:flex-start;min-width:0;}}
+    .step-icon {{
+        width:52px;height:52px;border-radius:50%;background:#F1FAF5;border:1px solid #DCECE4;
+        display:flex;align-items:center;justify-content:center;flex:0 0 52px;position:relative;
+    }}
+    .step-icon svg {{width:25px;height:25px;stroke:var(--bayut-green);}}
+    .step-num {{
+        position:absolute;bottom:-12px;left:50%;transform:translateX(-50%);
+        width:19px;height:19px;border-radius:50%;background:var(--bayut-green);color:#fff;
+        font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;
+        border:2px solid #fff;
+    }}
+    .step-title {{font-size:12px;font-weight:800;color:#202725;margin-top:3px;}}
+    .step-desc {{font-size:10.5px;line-height:1.5;color:#667085;margin-top:6px;}}
+    .arrow {{text-align:center;color:#C3CCC7;font-size:25px;font-weight:300;}}
+
+    /* Results */
     .metric-card {{
-        border: 1px solid {BORDER};
-        border-radius: 14px;
-        padding: 15px 16px;
+        border:1px solid #E2E7E5;
+        border-radius:13px;
+        padding:17px 18px;
         background:#fff;
-        min-height: 105px;
+        min-height:112px;
+        box-shadow:0 5px 14px rgba(16,24,40,.04);
     }}
     .metric-label {{
-        color:{TEXT_MUTED};
-        font-size:12px;
-        font-weight:700;
-        text-transform:uppercase;
-        letter-spacing:.4px;
+        color:#667085;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.55px;
     }}
-    .metric-value {{
-        font-size:25px;
-        font-weight:800;
-        margin-top:5px;
+    .metric-value {{font-size:23px;font-weight:850;margin-top:7px;}}
+    .metric-note {{color:#667085;font-size:10px;margin-top:6px;line-height:1.4;}}
+    .status-pass {{ color: var(--bayut-green); font-weight:800; }}
+    .status-review {{ color: var(--warn); font-weight:800; }}
+    .status-fail {{ color: var(--danger); font-weight:800; }}
+
+    /* Tabs / dataframe / expanders */
+    button[data-baseweb="tab"] {{font-weight:800 !important;font-size:12px !important;}}
+    div[data-testid="stDataFrame"] {{
+        border:1px solid #E4E8E6;
+        border-radius:12px;
+        overflow:hidden;
     }}
-    .metric-note {{
-        color:{TEXT_MUTED};
-        font-size:12px;
-        margin-top:5px;
+    div[data-testid="stExpander"] {{
+        border:1px solid #E5EAE7 !important;
+        border-radius:10px !important;
+        background:#fff !important;
     }}
-    .status-pass {{ color: {BAYUT_GREEN}; font-weight:800; }}
-    .status-review {{ color: #B7791F; font-weight:800; }}
-    .status-fail {{ color: #C53030; font-weight:800; }}
-    div.stButton > button {{
-        background:{BAYUT_GREEN};
-        color:white;
-        border:0;
-        border-radius:10px;
-        font-weight:750;
-        padding:.65rem 1.2rem;
+    .stDownloadButton button {{
+        background:#fff !important;
+        color:var(--bayut-green-dark) !important;
+        border:1px solid #CFE8DC !important;
+        box-shadow:none !important;
     }}
-    div.stButton > button:hover {{
-        background:#21965D;
-        color:white;
-        border:0;
-    }}
-    div[data-baseweb="input"] > div {{
-        border-radius:10px;
-    }}
-    .section-title {{
-        font-size:21px;
-        font-weight:800;
-        margin-top:6px;
-        margin-bottom:2px;
-    }}
-    .small-note {{
-        color:{TEXT_MUTED};
-        font-size:12px;
+
+    @media (max-width: 1100px) {{
+        section[data-testid="stSidebar"] {{width:240px !important;min-width:240px !important;max-width:240px !important;}}
+        section[data-testid="stSidebar"] > div {{width:240px !important;}}
+        .steps {{grid-template-columns:1fr;}}
+        .arrow {{display:none;}}
+        .hero-card {{padding:22px;}}
+        .hero-title {{font-size:24px;}}
     }}
     </style>
     """,
@@ -889,37 +1141,134 @@ def audit_content(url, soup, body_text):
 # UI
 # -----------------------------
 
+ICON_SEARCH_CHECK = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="10.8" cy="10.8" r="6.7" stroke="currentColor" stroke-width="1.8"/>
+  <path d="M15.6 15.6L20.1 20.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M7.8 10.7L10 12.8L14.2 8.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+ICON_SHIELD = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 3L19 5.8V11.2C19 15.5 16.1 19.1 12 21C7.9 19.1 5 15.5 5 11.2V5.8L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M9 11.8L11.1 13.9L15.3 9.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+ICON_SEARCH = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="10.8" cy="10.8" r="6.4" stroke="currentColor" stroke-width="1.8"/>
+  <path d="M15.6 15.6L20.1 20.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+</svg>
+"""
+ICON_DOC = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M6 3.8H14L18 7.8V20.2H6V3.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  <path d="M14 3.8V8H18" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  <path d="M9 12H15M9 15.5H15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+</svg>
+"""
+ICON_LINK = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M9.6 14.4L14.4 9.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M7.7 16.3L6.2 17.8C4.5 19.5 1.8 19.5.2 17.8C-1.5 16.2-1.5 13.5.2 11.8L3.4 8.6C5.1 6.9 7.8 6.9 9.5 8.6" transform="translate(4 0)" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M16.3 7.7L17.8 6.2C19.5 4.5 22.2 4.5 23.8 6.2C25.5 7.8 25.5 10.5 23.8 12.2L20.6 15.4C18.9 17.1 16.2 17.1 14.5 15.4" transform="translate(-4 0)" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+</svg>
+"""
+ICON_LIST = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M6 7H18M6 12H15M6 17H13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="17.2" cy="16.6" r="2.3" stroke="currentColor" stroke-width="1.6"/>
+  <path d="M18.9 18.3L20.4 19.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+</svg>
+"""
+ICON_CHART = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M5 19V12M10 19V8M15 19V14M20 19V5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+</svg>
+"""
+ICON_BADGE = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 3L14.2 5.1L17.2 4.8L18.2 7.7L21 9L19.9 11.9L21 14.8L18.2 16.1L17.2 19L14.2 18.7L12 21L9.8 18.7L6.8 19L5.8 16.1L3 14.8L4.1 11.9L3 9L5.8 7.7L6.8 4.8L9.8 5.1L12 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M8.8 12L11 14.2L15.5 9.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+ICON_HOME = """
+<svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="14" cy="14" r="11.5" stroke="currentColor" stroke-width="2.2"/>
+  <path d="M8.5 13.2L14 8.6L19.5 13.2V19H9V13.2" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>
+  <path d="M12 19V15H16V19" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>
+</svg>
+"""
+
+with st.sidebar:
+    st.markdown(
+        f"""
+        <div class="side-brand">{ICON_HOME}<span>bayut</span></div>
+        <div class="side-title">Audit Structure</div>
+        <div class="nav-card active">
+          <div class="nav-icon">{ICON_SHIELD}</div>
+          <div><div class="nav-name">Spam Check</div><div class="nav-desc">Google spam-risk patterns</div></div>
+        </div>
+        <div class="nav-card">
+          <div class="nav-icon">{ICON_SEARCH}</div>
+          <div><div class="nav-name">SEO Check</div><div class="nav-desc">Crawling, indexing and<br>on-page signals</div></div>
+        </div>
+        <div class="nav-card">
+          <div class="nav-icon">{ICON_DOC}</div>
+          <div><div class="nav-name">Content Check</div><div class="nav-desc">Usefulness, relevance,<br>accuracy and quality</div></div>
+        </div>
+        <div class="side-divider"></div>
+        <div class="side-note"><strong>ⓘ</strong>&nbsp;&nbsp;Rule thresholds in this app are internal auditing heuristics unless the rule explicitly describes a Google spam-policy condition.</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    show_rules = st.checkbox("Show rule library", value=False)
+
 st.markdown(
     """
-    <div class="bayut-header">
-      <div>
-        <div class="brand">bayut URL Quality Auditor</div>
-        <div class="subtitle">Single-URL checks for Spam, SEO and Content quality</div>
+    <div class="utility-row">
+      <div class="utility-btn">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 16V4M8 8L12 4L16 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 13V19H19V13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Share
       </div>
-      <div class="pill">URL-by-URL audit</div>
+      <div class="utility-btn icon-only"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3.8L14.4 8.7L19.8 9.5L15.9 13.3L16.8 18.7L12 16.2L7.2 18.7L8.1 13.3L4.2 9.5L9.6 8.7L12 3.8Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+      <div class="utility-btn icon-only"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.6"/><path d="M8.3 15.3C9 16.1 9.7 16.3 10.6 16.4V14.9C9.2 14.5 8.7 13.4 8.7 12.2C8.7 11.4 9 10.6 9.7 10C9.5 9.4 9.6 8.8 9.8 8.3C10.4 8.3 11 8.6 11.4 8.9C11.8 8.8 12.2 8.8 12.6 8.9C13 8.6 13.6 8.3 14.2 8.3C14.4 8.8 14.5 9.4 14.3 10C15 10.6 15.3 11.4 15.3 12.2C15.3 13.4 14.8 14.5 13.4 14.9V16.4C14.3 16.3 15 16.1 15.7 15.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+      <div class="utility-btn icon-only"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5.5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="18.5" r="1.5"/></svg></div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.markdown("### Audit structure")
-    st.markdown("**Spam Check**  \nGoogle spam-risk patterns")
-    st.markdown("**SEO Check**  \nCrawling, indexing and on-page signals")
-    st.markdown("**Content Check**  \nUsefulness, relevance, accuracy and quality")
-    st.divider()
-    st.caption("Rule thresholds in this app are internal auditing heuristics unless the rule explicitly describes a Google spam-policy condition.")
-    show_rules = st.checkbox("Show rule library", value=False)
-
-url_input = st.text_input(
-    "Article URL",
-    placeholder="https://www.bayut.com/mybayut/example-article/",
+st.markdown(
+    f"""
+    <div class="hero-card">
+      <div class="hero-left">
+        <div class="hero-icon">{ICON_SEARCH_CHECK}</div>
+        <div>
+          <div class="hero-title"><span class="bayut-word">bayut</span> URL Quality Auditor</div>
+          <div class="hero-sub">Single-URL checks for Spam, SEO and Content quality</div>
+        </div>
+      </div>
+      <div class="audit-pill">URL-by-URL audit</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-run = st.button("Run URL Audit", type="primary")
+st.markdown('<div class="url-shell"><div class="url-label">Article URL</div>', unsafe_allow_html=True)
+url_col, btn_col = st.columns([5.25, 1.35], gap="medium")
+with url_col:
+    url_input = st.text_input(
+        "Article URL",
+        placeholder="https://www.bayut.com/area-guides/damac-hills-akoya-damac/",
+        label_visibility="collapsed",
+    )
+with btn_col:
+    run = st.button("▶  Run URL Audit", type="primary", use_container_width=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 if show_rules:
-    st.markdown('<div class="section-title">Rule Library</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-heading">Rule Library</div>', unsafe_allow_html=True)
     for label, rules in [("Spam", SPAM_RULES), ("SEO", SEO_RULES), ("Content", CONTENT_RULES)]:
         with st.expander(f"{label} rules ({len(rules)})"):
             for i, (name, rule) in enumerate(rules, 1):
@@ -950,6 +1299,7 @@ if run:
         all_statuses = [spam_status, seo_status, content_status]
         overall = FAIL if FAIL in all_statuses else REVIEW if REVIEW in all_statuses else PASS
 
+        st.markdown('<div class="section-heading">Audit Results</div>', unsafe_allow_html=True)
         cols = st.columns(4)
         cards = [
             ("Overall", overall, f"Final URL: {desktop_r.url}"),
@@ -1030,14 +1380,56 @@ if run:
         st.exception(e)
 
 else:
-    st.markdown("### What this version checks")
-    a, b, c = st.columns(3)
-    with a:
-        st.markdown("**Spam — 16 rules**")
-        st.caption("Cloaking, redirects, hidden content, stuffing, links, hacked content, scripts, UGC, malware and related spam risks.")
-    with b:
-        st.markdown("**SEO — 20 rules**")
-        st.caption("Status, indexability, canonical, titles, headings, links, images, schema, dates, sitemap, mobile, HTTPS and more.")
-    with c:
-        st.markdown("**Content — 20 rules**")
-        st.caption("Intent, relevance, thinness, originality, freshness, repetition, FAQs, sourcing, accuracy and readability.")
+    st.markdown('<div class="section-heading">What this version checks</div>', unsafe_allow_html=True)
+    a, b, c = st.columns(3, gap="medium")
+    cards = [
+        (a, ICON_SHIELD, '<span>Spam</span> — 16 rules', 'Cloaking, redirects, hidden content, stuffing, links, hacked content, scripts, UGC, malware and related spam risks.'),
+        (b, ICON_SEARCH, '<span>SEO</span> — 20 rules', 'Status, indexability, canonical, titles, headings, links, images, schema, dates, sitemap, mobile, HTTPS and more.'),
+        (c, ICON_DOC, '<span>Content</span> — 20 rules', 'Intent, relevance, thinness, originality, freshness, repetition, FAQs, sourcing, accuracy and readability.'),
+    ]
+    for col, icon, title, desc in cards:
+        with col:
+            st.markdown(
+                f"""
+                <div class="feature-card">
+                  <div class="feature-row">
+                    <div class="feature-icon">{icon}</div>
+                    <div>
+                      <div class="feature-title">{title}</div>
+                      <div class="feature-desc">{desc}</div>
+                    </div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown(
+        f"""
+        <div class="how-card">
+          <div class="section-heading" style="margin:0 0 17px 0;">How it works</div>
+          <div class="steps">
+            <div class="step">
+              <div class="step-icon">{ICON_LINK}<div class="step-num">1</div></div>
+              <div><div class="step-title">Enter URL</div><div class="step-desc">Provide the article URL you want to audit.</div></div>
+            </div>
+            <div class="arrow">···›</div>
+            <div class="step">
+              <div class="step-icon">{ICON_LIST}<div class="step-num">2</div></div>
+              <div><div class="step-title">Run Audit</div><div class="step-desc">We check the URL against Spam, SEO and Content quality rules.</div></div>
+            </div>
+            <div class="arrow">···›</div>
+            <div class="step">
+              <div class="step-icon">{ICON_CHART}<div class="step-num">3</div></div>
+              <div><div class="step-title">Review Results</div><div class="step-desc">Browse findings, issues and recommendations across all categories.</div></div>
+            </div>
+            <div class="arrow">···›</div>
+            <div class="step">
+              <div class="step-icon">{ICON_BADGE}<div class="step-num">4</div></div>
+              <div><div class="step-title">Take Action</div><div class="step-desc">Fix issues, improve quality and re-run to validate improvements.</div></div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
