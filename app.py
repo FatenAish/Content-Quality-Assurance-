@@ -423,7 +423,7 @@ SEO_RULES = [
     ("Indexability", "FAIL when an intended indexable article contains noindex."),
     ("Robots", "FAIL when Googlebot is unintentionally blocked by page level robots directives."),
     ("Canonical", "PASS when a valid canonical points to the correct preferred URL."),
-    ("Title Tag", "PASS when a relevant, non empty title exists and is not excessively long or stuffed."),
+    ("Title Tag", "Google does not define a fixed character limit. PASS when the title exists, clearly describes the page, represents the Focus Keyword or its meaning, and is not repetitive or stuffed. Length is an internal quality signal only. Titles from 30 to 70 characters are generally concise. Titles from 71 to 80 characters do not receive REVIEW from length alone. Titles above 80 characters receive REVIEW for possible verbosity. Very short titles receive REVIEW only when they are too vague or weakly related to the page."),
     ("Meta Description", "PASS when a useful, relevant meta description exists."),
     ("H1", "PASS when a clear relevant H1 exists."),
     ("Heading Structure", "REVIEW when headings are empty, highly repetitive, or structurally confusing."),
@@ -489,7 +489,7 @@ SYSTEM_USES = {
     "Indexability": "Meta robots directive, Googlebot meta directive, noindex detection",
     "Robots": "Meta robots directive, Googlebot meta directive, index and follow restrictions",
     "Canonical": "Canonical link element, canonical destination, current final URL, URL path comparison",
-    "Title Tag": "HTML title element, title length, Focus Keyword presence and topic relevance",
+    "Title Tag": "HTML title element, character count as an advisory signal, Focus Keyword exact or semantic term overlap, title to article topic overlap, repeated title terms",
     "Meta Description": "Meta description element, description length, Focus Keyword presence",
     "H1": "H1 elements, H1 count, H1 text, Focus Keyword presence",
     "Heading Structure": "H1 through H6 elements, empty heading count, repeated heading count, heading order",
@@ -1805,17 +1805,109 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
 
     title = title_text(soup)
     title_len = len(title)
+
+    # Google does not publish a fixed Title Tag character limit.
+    # Length is treated only as an internal quality signal.
     if not title:
         ts = FAIL
-    elif title_len > 70 or title_len < 20:
-        ts = REVIEW
+        title_reason = "Title is missing."
     else:
         ts = PASS
-    focus_in_title = keyword_in_text(focus_keyword, title) if focus_keyword else True
-    if focus_keyword and not focus_in_title and ts == PASS:
-        ts = REVIEW
-    title_kw_note = f" | Focus keyword {'found' if focus_in_title else 'not found'}: {focus_keyword}" if focus_keyword else ""
-    rows.append(result("Title Tag", ts, f"{title_len} characters — {title or 'missing'}{title_kw_note}", rules["Title Tag"]))
+        title_reason_parts = []
+
+        # Topic relevance between the title and the actual article body.
+        title_body_overlap = keyword_overlap(title, body_text)
+
+        # Focus Keyword representation.
+        focus_exact = keyword_in_text(focus_keyword, title) if focus_keyword else True
+        focus_overlap = keyword_overlap(focus_keyword, title) if focus_keyword else 1.0
+        focus_represented = focus_exact or focus_overlap >= 0.60
+
+        # Detect obvious repetition inside the Title Tag.
+        title_words = [
+            w for w in tokenize(title)
+            if len(w) > 2 and w not in {
+                "the", "and", "for", "with", "from", "this", "that", "your", "you",
+                "are", "our", "in", "on", "of", "to", "a", "an", "is",
+                "في", "من", "على", "إلى", "الى", "عن", "هذا", "هذه", "مع", "و", "أو", "او"
+            }
+        ]
+        title_word_counts = Counter(title_words)
+        repeated_title_terms = [
+            word for word, count in title_word_counts.items()
+            if count >= 3
+        ]
+
+        # Length logic.
+        if title_len > 80:
+            ts = REVIEW
+            title_reason_parts.append(
+                f"The title contains {title_len} characters and may be more verbose than necessary."
+            )
+        elif title_len < 30:
+            # A short title is only reviewed if it also has weak topic coverage.
+            if title_body_overlap < 0.55:
+                ts = REVIEW
+                title_reason_parts.append(
+                    f"The title contains {title_len} characters and has weak topic coverage."
+                )
+            else:
+                title_reason_parts.append(
+                    f"The title contains {title_len} characters but still represents the page topic clearly."
+                )
+        elif 71 <= title_len <= 80:
+            title_reason_parts.append(
+                f"The title contains {title_len} characters. Length alone does not trigger REVIEW."
+            )
+        else:
+            title_reason_parts.append(
+                f"The title contains {title_len} characters and is within the system's concise internal range."
+            )
+
+        # Relevance logic.
+        if title_body_overlap < 0.35:
+            ts = REVIEW
+            title_reason_parts.append(
+                f"Title to article topic overlap is only {title_body_overlap:.0%}."
+            )
+        else:
+            title_reason_parts.append(
+                f"Title to article topic overlap is {title_body_overlap:.0%}."
+            )
+
+        # Focus Keyword logic uses exact or semantic term overlap.
+        if focus_keyword:
+            if not focus_represented:
+                ts = REVIEW
+                title_reason_parts.append(
+                    f"The Focus Keyword meaning is weakly represented in the title. Term overlap is {focus_overlap:.0%}."
+                )
+            elif focus_exact:
+                title_reason_parts.append(
+                    f"The Focus Keyword is directly represented in the title."
+                )
+            else:
+                title_reason_parts.append(
+                    f"The Focus Keyword is represented semantically. Term overlap is {focus_overlap:.0%}."
+                )
+
+        # Obvious repetition inside the title.
+        if repeated_title_terms:
+            ts = REVIEW
+            title_reason_parts.append(
+                "Repeated title terms detected: " + ", ".join(repeated_title_terms[:6]) + "."
+            )
+
+        title_reason = " ".join(title_reason_parts)
+
+    rows.append(
+        result(
+            "Title Tag",
+            ts,
+            f"Title: {title or 'missing'}. {title_reason}",
+            rules["Title Tag"]
+        )
+    )
 
     meta = meta_content(soup, name="description")
     ml = len(meta)
