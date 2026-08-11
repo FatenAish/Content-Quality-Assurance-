@@ -394,20 +394,20 @@ st.markdown(
 # -----------------------------
 
 SPAM_RULES = [
-    ("Cloaking", "Compare normal-user and Googlebot responses. FAIL when materially different content is served specifically to search crawlers."),
+    ("Cloaking", "Compare normal user and Googlebot responses. FAIL when materially different content is served specifically to search crawlers."),
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
-    ("Device Spam Redirect", "FAIL when mobile/device users are redirected to unrelated or spam destinations while other visitors are not."),
-    ("Hidden Text", "FAIL when substantial SEO-oriented text is intentionally hidden from users. Legitimate UI/accessibility hiding is not spam."),
-    ("Hidden Links", "FAIL when links are deliberately invisible, tiny, off-screen or otherwise concealed for ranking manipulation."),
+    ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
+    ("Hidden Text", "FAIL when substantial SEO focused text is intentionally hidden from users. Legitimate UI and accessibility hiding is not spam."),
+    ("Hidden Links", "FAIL when links are deliberately invisible, tiny, outside the visible screen or otherwise concealed for ranking manipulation."),
     ("Keyword Stuffing", "FAIL when keywords, locations or query phrases are repeated unnaturally for rankings."),
     ("Scraped Content", "FAIL when substantial external content is copied or lightly transformed with little original value. Requires external comparison."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
-    ("Paid Links", "FAIL when identifiable paid/sponsored links pass ranking credit without appropriate sponsored/nofollow qualification."),
+    ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
-    ("Spam Iframes", "FAIL when unauthorized/suspicious iframes introduce deceptive or spam content."),
-    ("Site Reputation Abuse", "FAIL when unrelated third-party content primarily exploits the host site's ranking signals. Often needs manual context."),
-    ("User-Generated Spam", "FAIL when comments/profiles/UGC contain mass spam or manipulative links."),
+    ("Spam Iframes", "FAIL when unauthorized or suspicious iframes introduce deceptive or spam content."),
+    ("Site Reputation Abuse", "FAIL when unrelated third party content primarily exploits the host site's ranking signals. Often needs manual context."),
+    ("User Generated Spam", "FAIL when comments/profiles/UGC contain mass spam or manipulative links."),
     ("Back Button Hijacking", "FAIL when scripts manipulate browser history to prevent users from returning to the previous page."),
     ("Malware / Scam Behaviour", "FAIL when malicious downloads, harmful scripts, impersonation or deliberately deceptive functionality is detected."),
 ]
@@ -415,9 +415,9 @@ SPAM_RULES = [
 SEO_RULES = [
     ("HTTP Status", "PASS when the canonical live article returns HTTP 200."),
     ("Indexability", "FAIL when an intended indexable article contains noindex."),
-    ("Robots", "FAIL when Googlebot is unintentionally blocked by page-level robots directives."),
+    ("Robots", "FAIL when Googlebot is unintentionally blocked by page level robots directives."),
     ("Canonical", "PASS when a valid canonical points to the correct preferred URL."),
-    ("Title Tag", "PASS when a relevant, non-empty title exists and is not excessively long or stuffed."),
+    ("Title Tag", "PASS when a relevant, non empty title exists and is not excessively long or stuffed."),
     ("Meta Description", "PASS when a useful, relevant meta description exists."),
     ("H1", "PASS when a clear relevant H1 exists."),
     ("Heading Structure", "REVIEW when headings are empty, highly repetitive, or structurally confusing."),
@@ -425,7 +425,7 @@ SEO_RULES = [
     ("Internal Links", "REVIEW/FAIL when important crawlable internal links are broken."),
     ("External Links", "REVIEW when external links are broken or clearly irrelevant."),
     ("Images", "REVIEW when meaningful images are broken or lack useful alt text."),
-    ("Structured Data", "PASS when JSON-LD is parseable and represents visible page content; REVIEW invalid/missing data where expected."),
+    ("Structured Data", "PASS when JSON LD is parseable and represents visible page content; REVIEW invalid/missing data where expected."),
     ("datePublished", "PASS when a valid publication date is present where the article schema provides it."),
     ("dateModified", "REVIEW when the modification date is missing, malformed, or inconsistent with visible metadata."),
     ("Sitemap", "PASS when the preferred URL is present in an accessible sitemap where expected."),
@@ -438,13 +438,13 @@ SEO_RULES = [
 CONTENT_RULES = [
     ("Search Intent", "PASS when the main content directly addresses the topic promised by the title/H1."),
     ("Content Relevance", "REVIEW/FAIL when substantial sections are unrelated to the page topic."),
-    ("Thin Content", "System heuristic: PASS at 600+ meaningful words, REVIEW at 300–599, FAIL below 300. This is not a Google word-count rule."),
-    ("Original Value", "PASS when the page adds useful data, examples, analysis or first-hand value. External/site comparison may be required."),
+    ("Thin Content", "System heuristic: PASS at 600+ meaningful words, REVIEW at 300–599, FAIL below 300. This is not a Google word count rule."),
+    ("Original Value", "PASS when the page adds useful data, examples, analysis or first hand value. External/site comparison may be required."),
     ("Factual Accuracy", "FAIL confirmed false claims; REVIEW claims that require source verification."),
-    ("Outdated Information", "REVIEW when time-sensitive claims appear stale or reference old years without context."),
+    ("Outdated Information", "REVIEW when time sensitive claims appear stale or reference old years without context."),
     ("Keyword Use", "PASS when important terms are used naturally; FAIL obvious unnatural repetition."),
     ("Repetition", "REVIEW/FAIL when sentences or paragraphs are unnecessarily repeated."),
-    ("Generic / Filler Content", "REVIEW when a high share of text adds little topic-specific information."),
+    ("Generic / Filler Content", "REVIEW when a high share of text adds little topic specific information."),
     ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
     ("Heading Relevance", "REVIEW when multiple headings have weak topical relation to the title/H1."),
@@ -457,6 +457,71 @@ CONTENT_RULES = [
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
     ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
 ]
+
+
+SYSTEM_USES = {
+    # Spam
+    "Cloaking": "Desktop User Agent, Googlebot User Agent, final URL comparison, main content extraction, text similarity",
+    "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
+    "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
+    "Hidden Text": "HTML DOM, CSS style attributes, hidden attribute, aria hidden attribute, visible text length",
+    "Hidden Links": "HTML anchor elements, hidden parent elements, CSS visibility rules, link destination extraction",
+    "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase count, N gram frequency, repetition density",
+    "Scraped Content": "Current URL content plus external comparison requirement. The current version marks this for review when outside comparison is needed",
+    "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
+    "Paid Links": "External links, surrounding text, sponsored and affiliate terms, rel sponsored attribute, rel nofollow attribute",
+    "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
+    "Spam JavaScript": "Inline JavaScript, redirect patterns, obfuscation patterns, location functions, encoded script indicators",
+    "Spam Iframes": "Iframe elements, iframe visibility, CSS hiding rules, iframe source information",
+    "Site Reputation Abuse": "Page topic and editorial context. The current version marks this for review when ownership and publishing purpose cannot be confirmed from one URL",
+    "User Generated Spam": "Comment and user content containers, DOM class and ID patterns, links inside user content areas",
+    "Back Button Hijacking": "JavaScript history functions, popstate, pushState, replaceState, redirect and location logic",
+    "Malware / Scam Behaviour": "JavaScript source, script obfuscation patterns, script injection patterns, suspicious redirect behaviour",
+
+    # SEO
+    "HTTP Status": "HTTP request and returned response status code",
+    "Indexability": "Meta robots directive, Googlebot meta directive, noindex detection",
+    "Robots": "Meta robots directive, Googlebot meta directive, index and follow restrictions",
+    "Canonical": "Canonical link element, canonical destination, current final URL, URL path comparison",
+    "Title Tag": "HTML title element, title length, Focus Keyword presence and topic relevance",
+    "Meta Description": "Meta description element, description length, Focus Keyword presence",
+    "H1": "H1 elements, H1 count, H1 text, Focus Keyword presence",
+    "Heading Structure": "H1 through H6 elements, empty heading count, repeated heading count, heading order",
+    "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
+    "Internal Links": "Anchor elements, resolved link URLs, current domain, internal domain comparison",
+    "External Links": "Anchor elements, resolved link URLs, external domain comparison",
+    "Images": "Image elements, image count, alt attribute presence",
+    "Structured Data": "JSON LD script elements, JSON parser, schema object extraction, parsing errors",
+    "datePublished": "Parsed JSON LD, datePublished property",
+    "dateModified": "Parsed JSON LD, dateModified property",
+    "Sitemap": "Common sitemap locations, HTTP requests, sitemap response, audited URL lookup",
+    "Mobile Content": "Desktop User Agent, Mobile User Agent, extracted main content, text similarity",
+    "JavaScript Rendering": "Extracted article word count, script count, initial HTML content availability",
+    "HTTPS": "Final URL scheme and HTTPS detection",
+    "Broken Resources": "Script source URLs, stylesheet URLs, image source URLs, resource extraction",
+
+    # Content
+    "Search Intent": "Focus Keyword when provided, otherwise title and H1, article body, topic keyword overlap",
+    "Content Relevance": "Focus Keyword or main topic, H2 through H4 headings, heading topic overlap",
+    "Thin Content": "Main content extraction and meaningful article word count",
+    "Original Value": "Main content word count, tables, lists, numeric references, useful information signals",
+    "Factual Accuracy": "Claims found in the article plus external verification requirement. The current version marks unverified facts for review",
+    "Outdated Information": "Years in the article, time sensitive terms, prices, rent, ROI, fees, laws, projects and other freshness signals",
+    "Keyword Use": "Focus Keyword, Secondary Keywords, exact phrase count, N gram frequency, keyword frequency in the article",
+    "Repetition": "Normalised sentences, normalised paragraphs, duplicate counts, repetition ratio",
+    "Generic / Filler Content": "Substantial paragraphs, Focus Keyword or main topic, paragraph topic overlap",
+    "Title vs Content": "HTML title text, main article body, topic keyword overlap",
+    "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
+    "Heading Relevance": "Focus Keyword or main topic, H2 through H4 headings, topic similarity",
+    "Introduction Quality": "First section of the article, approximately the first 140 words, Focus Keyword or main topic, topic overlap",
+    "FAQ Quality": "FAQ like headings, question marks, question text length, repeated or weak question patterns",
+    "Unsupported Superlatives": "Superlative terms such as best, cheapest and most popular, external source link presence",
+    "Source Quality": "Numeric claims, data like statements, external source link count, visible attribution signals",
+    "Data Accuracy": "Numbers and percentages extracted from the page, repeated values, internal consistency signals",
+    "Entity Accuracy": "Names and entities found in the content plus external verification requirement. The current version marks unverified entities for review",
+    "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
+    "Broken Content": "Placeholder terms, unfinished content indicators, empty headings, repeated paragraphs"
+}
 
 # -----------------------------
 # Helpers
@@ -596,7 +661,7 @@ def status_class(s):
     return {"PASS":"status-pass","REVIEW":"status-review","FAIL":"status-fail"}.get(s, "")
 
 def result(name, status, finding, rule):
-    return {"Check": name, "Status": status, "Finding": finding, "Rule": rule}
+    return {"Check": name, "Status": status, "What the System Uses": SYSTEM_USES.get(name, "Rule based page analysis"), "Finding": finding, "Rule": rule}
 
 def robots_directives(soup):
     values = []
@@ -744,7 +809,7 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         rows.append(result("Hidden Text", PASS, f"No clear spam-scale hidden text pattern found ({len(hidden_nodes)} substantial hidden blocks).", rules["Hidden Text"]))
 
     if hidden_links:
-        rows.append(result("Hidden Links", REVIEW, f"Found {len(set(hidden_links))} link(s) inside hidden elements. Review whether they are legitimate UI/accessibility elements.", rules["Hidden Links"]))
+        rows.append(result("Hidden Links", REVIEW, f"Found {len(set(hidden_links))} link(s) inside hidden elements. Review whether they are legitimate UI and accessibility elements.", rules["Hidden Links"]))
     else:
         rows.append(result("Hidden Links", PASS, "No links found inside obvious hidden elements.", rules["Hidden Links"]))
 
@@ -796,13 +861,13 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
                 paid_bad += 1
     if paid_bad:
         ps = FAIL
-        pf = f"{paid_bad} identifiable paid/sponsored link(s) lack sponsored/nofollow qualification."
+        pf = f"{paid_bad} identifiable paid or sponsored link(s) lack sponsored or nofollow qualification."
     elif paid_candidates:
         ps = PASS
-        pf = f"{paid_candidates} paid/sponsored candidate link(s) found and qualified."
+        pf = f"{paid_candidates} paid or sponsored candidate link(s) found and qualified."
     else:
         ps = PASS
-        pf = "No clearly identifiable paid/sponsored links detected from visible context."
+        pf = "No clearly identifiable paid or sponsored links detected from visible context."
     rows.append(result("Paid Links", ps, pf, rules["Paid Links"]))
 
     hacked_terms = ["viagra","cialis","casino","slot gacor","online casino","betting bonus","levitra","payday loan"]
@@ -834,14 +899,14 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         iframe_find = f"{len(iframes)} iframe(s) found; none obviously hidden."
     rows.append(result("Spam Iframes", iframe_status, iframe_find, rules["Spam Iframes"]))
 
-    rows.append(result("Site Reputation Abuse", REVIEW, "URL-only analysis can flag unrelated third-party content, but confirming reputation abuse requires editorial/ownership context.", rules["Site Reputation Abuse"]))
+    rows.append(result("Site Reputation Abuse", REVIEW, "URL-only analysis can flag unrelated third party content, but confirming reputation abuse requires editorial/ownership context.", rules["Site Reputation Abuse"]))
 
     comment_nodes = soup.select(".comment, .comments, [id*='comment'], [class*='comment']")
     ugc_links = 0
     for n in comment_nodes:
         ugc_links += len(n.find_all("a", href=True))
     ugc_status = REVIEW if ugc_links >= 10 else PASS
-    rows.append(result("User-Generated Spam", ugc_status, f"Detected {ugc_links} links in comment/UGC-like containers.", rules["User-Generated Spam"]))
+    rows.append(result("User Generated Spam", ugc_status, f"Detected {ugc_links} links in comment/UGC-like containers.", rules["User Generated Spam"]))
 
     lower_js = script_text.lower()
     hijack = ("popstate" in lower_js and ("pushstate" in lower_js or "replacestate" in lower_js) and ("location" in lower_js or "redirect" in lower_js))
@@ -874,13 +939,13 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     if "noindex" in robots:
         rows.append(result("Indexability", FAIL, f"Page-level robots directive contains noindex: {robots}", rules["Indexability"]))
     else:
-        rows.append(result("Indexability", PASS, f"No page-level noindex detected{': ' + robots if robots else ''}.", rules["Indexability"]))
+        rows.append(result("Indexability", PASS, f"No page level noindex detected{': ' + robots if robots else ''}.", rules["Indexability"]))
 
     if "none" in robots or "noindex" in robots or "nofollow" in robots:
         rs = REVIEW if "noindex" not in robots else FAIL
     else:
         rs = PASS
-    rows.append(result("Robots", rs, robots or "No restrictive page-level robots meta detected.", rules["Robots"]))
+    rows.append(result("Robots", rs, robots or "No restrictive page level robots meta detected.", rules["Robots"]))
 
     canonical = canonical_href(soup)
     if not canonical:
@@ -980,7 +1045,7 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
         sd = PASS
     else:
         sd = REVIEW
-    rows.append(result("Structured Data", sd, f"{len(jsonld)} valid JSON-LD block(s); {json_errors} parse error(s).", rules["Structured Data"]))
+    rows.append(result("Structured Data", sd, f"{len(jsonld)} valid JSON LD block(s); {json_errors} parse error(s).", rules["Structured Data"]))
 
     published = get_schema_values(jsonld, "datePublished")
     modified = get_schema_values(jsonld, "dateModified")
@@ -1284,11 +1349,11 @@ with st.sidebar:
         <div class="side-title">Audit Structure</div>
         <div class="nav-card active">
           <div class="nav-icon">{ICON_SHIELD}</div>
-          <div><div class="nav-name">Spam Check</div><div class="nav-desc">Google spam-risk patterns</div></div>
+          <div><div class="nav-name">Spam Check</div><div class="nav-desc">Google spam risk patterns</div></div>
         </div>
         <div class="nav-card">
           <div class="nav-icon">{ICON_SEARCH}</div>
-          <div><div class="nav-name">SEO Check</div><div class="nav-desc">Crawling, indexing and<br>on-page signals</div></div>
+          <div><div class="nav-name">SEO Check</div><div class="nav-desc">Crawling, indexing and<br>on page signals</div></div>
         </div>
         <div class="nav-card">
           <div class="nav-icon">{ICON_DOC}</div>
@@ -1323,10 +1388,10 @@ st.markdown(
         <div class="hero-icon">{ICON_SEARCH_CHECK}</div>
         <div>
           <div class="hero-title"><span class="bayut-word">bayut</span> URL Quality Auditor</div>
-          <div class="hero-sub">Single-URL checks for Spam, SEO and Content quality</div>
+          <div class="hero-sub">Single URL checks for Spam, SEO and Content quality</div>
         </div>
       </div>
-      <div class="audit-pill">URL-by-URL audit</div>
+      <div class="audit-pill">URL by URL audit</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1370,7 +1435,8 @@ if show_rules:
     for label, rules in [("Spam", SPAM_RULES), ("SEO", SEO_RULES), ("Content", CONTENT_RULES)]:
         with st.expander(f"{label} rules ({len(rules)})"):
             for i, (name, rule) in enumerate(rules, 1):
-                st.markdown(f"**{i}. {name}**  \n{rule}")
+                method = SYSTEM_USES.get(name, "Rule based page analysis")
+                st.markdown(f"**{i}. {name}**  \n**What the System Uses:** {method}  \n**Rule:** {rule}")
 
 if run:
     url = normalize_url(url_input)
@@ -1451,6 +1517,7 @@ if run:
                     column_config={
                         "Check": st.column_config.TextColumn(width="medium"),
                         "Status": st.column_config.TextColumn(width="small"),
+                        "What the System Uses": st.column_config.TextColumn(width="large"),
                         "Finding": st.column_config.TextColumn(width="large"),
                         "Rule": st.column_config.TextColumn(width="large"),
                     },
@@ -1478,9 +1545,9 @@ if run:
                 """
                 - A **FAIL** means the rule engine found a strong condition that should be investigated immediately.
                 - A **REVIEW** is not a Google penalty or proof of spam. It means the URL needs human or external-source verification.
-                - The Googlebot check uses a Googlebot **User-Agent comparison**. It does not reproduce Google's full rendering/indexing infrastructure.
-                - External plagiarism/scraping, factual accuracy, entity accuracy and site-reputation abuse cannot be conclusively proven from one static URL alone.
-                - Content word-count and repetition thresholds are internal QA heuristics, not Google thresholds.
+                - The Googlebot check uses a Googlebot **User Agent comparison**. It does not reproduce Google's full rendering and indexing infrastructure.
+                - External plagiarism and scraping, factual accuracy, entity accuracy and site reputation abuse cannot be conclusively proven from one static URL alone.
+                - Content word count and repetition thresholds are internal QA heuristics, not Google thresholds.
                 """
             )
 
@@ -1493,9 +1560,9 @@ else:
     st.markdown('<div class="section-heading">What this version checks</div>', unsafe_allow_html=True)
     a, b, c = st.columns(3, gap="medium")
     cards = [
-        (a, ICON_SHIELD, '<span>Spam</span> — 16 rules', 'Cloaking, redirects, hidden content, stuffing, links, hacked content, scripts, UGC, malware and related spam risks.'),
-        (b, ICON_SEARCH, '<span>SEO</span> — 20 rules', 'Status, indexability, canonical, titles, headings, links, images, schema, dates, sitemap, mobile, HTTPS and more.'),
-        (c, ICON_DOC, '<span>Content</span> — 20 rules', 'Intent, relevance, thinness, originality, freshness, repetition, FAQs, sourcing, accuracy and readability.'),
+        (a, ICON_SHIELD, '<span>Spam</span> 16 rules', 'Cloaking, redirects, hidden content, stuffing, links, hacked content, scripts, UGC, malware and related spam risks.'),
+        (b, ICON_SEARCH, '<span>SEO</span> 20 rules', 'Status, indexability, canonical, titles, headings, links, images, schema, dates, sitemap, mobile, HTTPS and more.'),
+        (c, ICON_DOC, '<span>Content</span> 20 rules', 'Intent, relevance, thinness, originality, freshness, repetition, FAQs, sourcing, accuracy and readability.'),
     ]
     for col, icon, title, desc in cards:
         with col:
@@ -1521,7 +1588,7 @@ else:
           <div class="steps">
             <div class="step">
               <div class="step-icon">{ICON_LINK}<div class="step-num">1</div></div>
-              <div><div class="step-title">Enter URL + Keywords</div><div class="step-desc">Provide the article URL, Focus Keyword and optional Secondary Keywords.</div></div>
+              <div><div class="step-title">Enter URL and Keywords</div><div class="step-desc">Provide the article URL, Focus Keyword and optional Secondary Keywords.</div></div>
             </div>
             <div class="arrow">···›</div>
             <div class="step">
@@ -1536,7 +1603,7 @@ else:
             <div class="arrow">···›</div>
             <div class="step">
               <div class="step-icon">{ICON_BADGE}<div class="step-num">4</div></div>
-              <div><div class="step-title">Take Action</div><div class="step-desc">Fix issues, improve quality and re-run to validate improvements.</div></div>
+              <div><div class="step-title">Take Action</div><div class="step-desc">Fix issues, improve quality and run again to validate improvements.</div></div>
             </div>
           </div>
         </div>
