@@ -241,6 +241,10 @@ st.markdown(
         margin: 8px 0 22px 0;
     }}
     .url-label {{font-size:12px;font-weight:800;color:#27302D;margin-bottom:8px;}}
+    .field-label {{font-size:11.5px;font-weight:800;color:#344054;margin:10px 0 6px;}}
+    .field-help {{font-size:10.5px;color:#98A2B3;margin-top:4px;line-height:1.4;}}
+    .keyword-context {{margin:8px 0 16px;padding:10px 12px;border:1px solid #E1ECE6;border-radius:10px;background:#F8FCFA;color:#475467;font-size:11.5px;}}
+    .keyword-context strong {{color:var(--bayut-green-dark);}}
     div[data-testid="stTextInput"] {{margin-top:0;}}
     div[data-testid="stTextInput"] input {{
         height:48px;
@@ -553,6 +557,41 @@ def keyword_overlap(a, b):
         return 0.0
     return len(aa & bb) / len(aa)
 
+def parse_keywords(raw):
+    """Parse comma/semicolon/newline/pipe-separated secondary keywords and de-duplicate them."""
+    if not raw:
+        return []
+    parts = re.split(r"[,;\n|]+", raw)
+    out = []
+    seen = set()
+    for part in parts:
+        kw = re.sub(r"\s+", " ", part).strip()
+        key = kw.casefold()
+        if kw and key not in seen:
+            seen.add(key)
+            out.append(kw)
+    return out
+
+def phrase_count(text, phrase):
+    """Count exact keyword-phrase occurrences on normalized token text."""
+    phrase_tokens = tokenize(phrase)
+    if not phrase_tokens:
+        return 0
+    hay = " ".join(tokenize(text))
+    needle = " ".join(phrase_tokens)
+    return len(re.findall(r"(?<!\w)" + re.escape(needle) + r"(?!\w)", hay, flags=re.I))
+
+def keyword_in_text(keyword, text, min_overlap=0.8):
+    if not keyword:
+        return True
+    if phrase_count(text, keyword) > 0:
+        return True
+    return keyword_overlap(keyword, text) >= min_overlap
+
+def keyword_summary(body_text, focus_keyword, secondary_keywords):
+    kws = ([focus_keyword] if focus_keyword else []) + list(secondary_keywords or [])
+    return [(kw, phrase_count(body_text, kw)) for kw in kws]
+
 def status_class(s):
     return {"PASS":"status-pass","REVIEW":"status-review","FAIL":"status-fail"}.get(s, "")
 
@@ -654,9 +693,10 @@ def classify_counts(rows):
 # Spam audit
 # -----------------------------
 
-def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text):
+def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="", secondary_keywords=None):
     rows = []
     rules = dict(SPAM_RULES)
+    secondary_keywords = secondary_keywords or []
 
     desktop_text = body_text
     bot_text = main_content_text(soup_of(bot_r.text))
@@ -715,7 +755,11 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text):
         kstatus = REVIEW
     else:
         kstatus = PASS
-    rows.append(result("Keyword Stuffing", kstatus, f"Most repeated 2-word phrase: “{gram}” — {count} uses ({density:.1%} of bigrams).", rules["Keyword Stuffing"]))
+    target_counts = keyword_summary(body_text, focus_keyword, secondary_keywords)
+    target_note = ""
+    if target_counts:
+        target_note = " Target keywords — " + "; ".join(f"{kw}: {n}" for kw, n in target_counts[:12]) + "."
+    rows.append(result("Keyword Stuffing", kstatus, f"Most repeated 2-word phrase: “{gram}” — {count} uses ({density:.1%} of bigrams).{target_note}", rules["Keyword Stuffing"]))
 
     rows.append(result("Scraped Content", REVIEW, "A single fetched URL cannot prove external copying. Run an external similarity/search comparison before marking PASS/FAIL.", rules["Scraped Content"]))
 
@@ -818,9 +862,10 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text):
 # SEO audit
 # -----------------------------
 
-def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text):
+def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_keyword="", secondary_keywords=None):
     rows = []
     rules = dict(SEO_RULES)
+    secondary_keywords = secondary_keywords or []
 
     code = desktop_r.status_code
     rows.append(result("HTTP Status", PASS if code == 200 else FAIL, f"HTTP {code}.", rules["HTTP Status"]))
@@ -856,7 +901,11 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text):
         ts = REVIEW
     else:
         ts = PASS
-    rows.append(result("Title Tag", ts, f"{title_len} characters — {title or 'missing'}", rules["Title Tag"]))
+    focus_in_title = keyword_in_text(focus_keyword, title) if focus_keyword else True
+    if focus_keyword and not focus_in_title and ts == PASS:
+        ts = REVIEW
+    title_kw_note = f" | Focus keyword {'found' if focus_in_title else 'not found'}: {focus_keyword}" if focus_keyword else ""
+    rows.append(result("Title Tag", ts, f"{title_len} characters — {title or 'missing'}{title_kw_note}", rules["Title Tag"]))
 
     meta = meta_content(soup, name="description")
     ml = len(meta)
@@ -866,7 +915,11 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text):
         md = REVIEW
     else:
         md = PASS
-    rows.append(result("Meta Description", md, f"{ml} characters{': ' + meta[:180] if meta else ' — missing'}", rules["Meta Description"]))
+    focus_in_meta = keyword_in_text(focus_keyword, meta) if focus_keyword else True
+    if focus_keyword and not focus_in_meta and md == PASS:
+        md = REVIEW
+    meta_kw_note = f" | Focus keyword {'found' if focus_in_meta else 'not found'}" if focus_keyword else ""
+    rows.append(result("Meta Description", md, f"{ml} characters{': ' + meta[:180] if meta else ' — missing'}{meta_kw_note}", rules["Meta Description"]))
 
     h1s = [h.get_text(" ", strip=True) for h in soup.find_all("h1") if h.get_text(" ", strip=True)]
     if len(h1s) == 1:
@@ -875,7 +928,11 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text):
         h1_status = FAIL
     else:
         h1_status = REVIEW
-    rows.append(result("H1", h1_status, f"{len(h1s)} H1(s) found" + (f": {h1s[0]}" if h1s else ""), rules["H1"]))
+    focus_in_h1 = keyword_in_text(focus_keyword, h1s[0]) if focus_keyword and h1s else (not focus_keyword)
+    if focus_keyword and h1s and not focus_in_h1 and h1_status == PASS:
+        h1_status = REVIEW
+    h1_kw_note = f" | Focus keyword {'found' if focus_in_h1 else 'not found'}" if focus_keyword else ""
+    rows.append(result("H1", h1_status, f"{len(h1s)} H1(s) found" + (f": {h1s[0]}" if h1s else "") + h1_kw_note, rules["H1"]))
 
     headings = []
     empty_headings = 0
@@ -988,24 +1045,27 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text):
 # Content audit
 # -----------------------------
 
-def audit_content(url, soup, body_text):
+def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=None):
     rows = []
     rules = dict(CONTENT_RULES)
+    secondary_keywords = secondary_keywords or []
     title = title_text(soup)
     h1 = first_h1(soup)
     wc = word_count(body_text)
+    target_topic = focus_keyword or title or h1
 
-    title_overlap = keyword_overlap(title, body_text)
-    if title_overlap >= .65:
+    intent_overlap = keyword_overlap(target_topic, body_text)
+    if intent_overlap >= .65:
         s = PASS
-    elif title_overlap >= .35:
+    elif intent_overlap >= .35:
         s = REVIEW
     else:
         s = FAIL
-    rows.append(result("Search Intent", s, f"{title_overlap:.0%} of meaningful title terms are represented in the page text.", rules["Search Intent"]))
+    intent_label = f"focus keyword ‘{focus_keyword}’" if focus_keyword else "title topic"
+    rows.append(result("Search Intent", s, f"{intent_overlap:.0%} of meaningful {intent_label} terms are represented in the page text.", rules["Search Intent"]))
 
     headings = [h.get_text(" ", strip=True) for h in soup.find_all(re.compile(r"^h[2-4]$")) if h.get_text(" ", strip=True)]
-    weak = [h for h in headings if keyword_overlap(title or h1, h) < .10 and len(tokenize(h)) >= 3]
+    weak = [h for h in headings if keyword_overlap(target_topic, h) < .10 and len(tokenize(h)) >= 3]
     rel_status = REVIEW if headings and len(weak)/len(headings) > .45 else PASS
     rows.append(result("Content Relevance", rel_status, f"{len(weak)} of {len(headings)} H2-H4 headings have very weak lexical overlap with the main topic.", rules["Content Relevance"]))
 
@@ -1043,7 +1103,24 @@ def audit_content(url, soup, body_text):
         ku = REVIEW
     else:
         ku = PASS
-    rows.append(result("Keyword Use", ku, f"Top repeated phrase: “{gram}” — {count} uses ({density:.1%}).", rules["Keyword Use"]))
+    kw_notes = []
+    if focus_keyword:
+        fc = phrase_count(body_text, focus_keyword)
+        per_1000 = (fc * 1000 / max(1, wc))
+        kw_notes.append(f"Focus ‘{focus_keyword}’: {fc} exact use(s), {per_1000:.1f}/1,000 words")
+        if fc == 0 and ku == PASS:
+            ku = REVIEW
+        # Internal heuristic only; multi-word exact repetition is more meaningful than one-word frequency.
+        if len(tokenize(focus_keyword)) >= 2:
+            if per_1000 >= 40:
+                ku = FAIL
+            elif per_1000 >= 25 and ku == PASS:
+                ku = REVIEW
+    if secondary_keywords:
+        sec_counts = [(kw, phrase_count(body_text, kw)) for kw in secondary_keywords]
+        kw_notes.append("Secondary — " + "; ".join(f"{kw}: {n}" for kw, n in sec_counts[:12]))
+    extra_kw = " | " + " | ".join(kw_notes) if kw_notes else ""
+    rows.append(result("Keyword Use", ku, f"Top repeated phrase: “{gram}” — {count} uses ({density:.1%}).{extra_kw}", rules["Keyword Use"]))
 
     sent_ratio, repeated_sents = repeated_sentence_ratio(body_text)
     para_ratio, repeated_paras = repeated_paragraph_ratio(soup)
@@ -1058,7 +1135,7 @@ def audit_content(url, soup, body_text):
 
     paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p") if len(p.get_text(" ", strip=True)) >= 60]
     if paragraphs:
-        topic = title or h1
+        topic = target_topic
         low_specific = sum(1 for p in paragraphs if keyword_overlap(topic, p) < .05)
         filler_share = low_specific / len(paragraphs)
     else:
@@ -1073,7 +1150,7 @@ def audit_content(url, soup, body_text):
     rows.append(result("H1 vs Content", PASS if h1 and hc >= .55 else REVIEW if h1 else FAIL, f"H1-to-body topic overlap: {hc:.0%}." if h1 else "H1 missing.", rules["H1 vs Content"]))
 
     if headings:
-        relevant = sum(1 for h in headings if keyword_overlap(title or h1, h) >= .10)
+        relevant = sum(1 for h in headings if keyword_overlap(target_topic, h) >= .10)
         hr = relevant / len(headings)
         hstatus = PASS if hr >= .55 else REVIEW
         hfind = f"{relevant}/{len(headings)} H2-H4 headings show direct lexical relation to the main topic."
@@ -1083,7 +1160,7 @@ def audit_content(url, soup, body_text):
     rows.append(result("Heading Relevance", hstatus, hfind, rules["Heading Relevance"]))
 
     intro_words = " ".join(tokenize(body_text)[:140])
-    intro_overlap = keyword_overlap(title or h1, intro_words)
+    intro_overlap = keyword_overlap(target_topic, intro_words)
     iq = PASS if intro_overlap >= .45 else REVIEW
     rows.append(result("Introduction Quality", iq, f"Opening 140-word topic overlap: {intro_overlap:.0%}.", rules["Introduction Quality"]))
 
@@ -1262,9 +1339,30 @@ with url_col:
         "Article URL",
         placeholder="https://www.bayut.com/area-guides/damac-hills-akoya-damac/",
         label_visibility="collapsed",
+        key="article_url",
     )
 with btn_col:
     run = st.button("▶  Run URL Audit", type="primary", use_container_width=True)
+
+kw_col, secondary_col = st.columns([1, 1], gap="medium")
+with kw_col:
+    st.markdown('<div class="field-label">Focus Keyword</div>', unsafe_allow_html=True)
+    focus_keyword_input = st.text_input(
+        "Focus Keyword",
+        placeholder="e.g. DAMAC Hills",
+        label_visibility="collapsed",
+        key="focus_keyword",
+    )
+    st.markdown('<div class="field-help">Primary keyword the page should target.</div>', unsafe_allow_html=True)
+with secondary_col:
+    st.markdown('<div class="field-label">Secondary Keywords</div>', unsafe_allow_html=True)
+    secondary_keywords_input = st.text_input(
+        "Secondary Keywords",
+        placeholder="e.g. DAMAC Hills villas, living in DAMAC Hills, Akoya by DAMAC",
+        label_visibility="collapsed",
+        key="secondary_keywords",
+    )
+    st.markdown('<div class="field-help">Separate multiple keywords with commas.</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 if show_rules:
@@ -1276,6 +1374,8 @@ if show_rules:
 
 if run:
     url = normalize_url(url_input)
+    focus_keyword = re.sub(r"\s+", " ", (focus_keyword_input or "")).strip()
+    secondary_keywords = parse_keywords(secondary_keywords_input)
     if not url:
         st.error("Enter a URL first.")
         st.stop()
@@ -1288,9 +1388,9 @@ if run:
             soup = soup_of(desktop_r.text)
             body_text = main_content_text(soup)
 
-        spam_rows = audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text)
-        seo_rows = audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text)
-        content_rows = audit_content(url, soup, body_text)
+        spam_rows = audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword, secondary_keywords)
+        seo_rows = audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_keyword, secondary_keywords)
+        content_rows = audit_content(url, soup, body_text, focus_keyword, secondary_keywords)
 
         spam_status, spam_counts = classify_counts(spam_rows)
         seo_status, seo_counts = classify_counts(seo_rows)
@@ -1325,6 +1425,14 @@ if run:
             f"{desktop_elapsed:.2f}s server response · {len(desktop_r.history)} redirect(s)"
         )
 
+        if focus_keyword or secondary_keywords:
+            focus_html = html_lib.escape(focus_keyword) if focus_keyword else "Not provided"
+            secondary_html = ", ".join(html_lib.escape(x) for x in secondary_keywords) if secondary_keywords else "None"
+            st.markdown(
+                f'<div class="keyword-context"><strong>Focus Keyword:</strong> {focus_html} &nbsp;&nbsp; <strong>Secondary Keywords:</strong> {secondary_html}</div>',
+                unsafe_allow_html=True,
+            )
+
         tabs = st.tabs([
             f"Spam Check ({len(spam_rows)})",
             f"SEO Check ({len(seo_rows)})",
@@ -1351,6 +1459,8 @@ if run:
         export = {
             "url_requested": url,
             "url_final": desktop_r.url,
+            "focus_keyword": focus_keyword,
+            "secondary_keywords": secondary_keywords,
             "overall": overall,
             "spam": spam_rows,
             "seo": seo_rows,
@@ -1411,7 +1521,7 @@ else:
           <div class="steps">
             <div class="step">
               <div class="step-icon">{ICON_LINK}<div class="step-num">1</div></div>
-              <div><div class="step-title">Enter URL</div><div class="step-desc">Provide the article URL you want to audit.</div></div>
+              <div><div class="step-title">Enter URL + Keywords</div><div class="step-desc">Provide the article URL, Focus Keyword and optional Secondary Keywords.</div></div>
             </div>
             <div class="arrow">···›</div>
             <div class="step">
