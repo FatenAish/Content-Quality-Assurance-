@@ -464,7 +464,7 @@ SEO_RULES = [
 
 CONTENT_RULES = [
     ("Search Intent", "PASS when the main content directly addresses the topic promised by the title/H1."),
-    ("Content Relevance", "REVIEW/FAIL when substantial sections are unrelated to the page topic."),
+    ("Content Relevance", "Evaluate the isolated article by heading hierarchy and section context. FAQ sections are judged by their answers, and named project or place headings are judged by the content beneath them. REVIEW or FAIL only when substantial article sections remain unrelated after contextual analysis."),
     ("Thin Content", "System heuristic: PASS at 600+ meaningful words, REVIEW at 300–599, FAIL below 300. This is not a Google word count rule."),
     ("Original Value", "PASS when the page adds useful data, examples, analysis or first hand value. External/site comparison may be required."),
     ("Factual Accuracy", "Extract factual and numeric claims from the isolated article body and show claim examples and visible source signals. REVIEW claims that still require external or first party data verification. FAIL only when a claim is confirmed false by a connected verification source."),
@@ -474,13 +474,13 @@ CONTENT_RULES = [
     ("Generic / Filler Content", "REVIEW when a high share of text adds little topic specific information."),
     ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
-    ("Heading Relevance", "Evaluate each heading together with the section it introduces. Project, building, place and entity headings can be relevant without repeating the Focus Keyword. FAQ headings are structural and are judged by their questions and answers rather than the word FAQ itself. PASS when headings or their section content are contextually related to the main topic."),
+    ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
     ("Introduction Quality", "PASS when the opening quickly establishes the promised topic."),
     ("FAQ Quality", "REVIEW when FAQ answers are empty, extremely short, repetitive or unrelated."),
     ("Unsupported Superlatives", "REVIEW claims such as best, cheapest, highest, most popular when no evidence/source is apparent."),
     ("Source Quality", "REVIEW important quantitative/regulatory claims with no visible source where sourcing is reasonably expected."),
     ("Data Accuracy", "REVIEW inconsistent prices, percentages, dates or repeated figures inside the page."),
-    ("Entity Accuracy", "Extract conservative entity candidates from proper noun headings, article links and proper noun phrases. Exclude CTA, FAQ, keyword phrases and sentence fragments. REVIEW only the remaining named entities that require external or first party verification. FAIL only when a connected verification source confirms an entity is incorrect."),
+    ("Entity Accuracy", "Clean generic property wording around entity names, extract conservative named entities, and compare entity spellings for suspicious near duplicates. REVIEW remaining entities that need external verification and possible inconsistent spellings. FAIL only when a connected verification source confirms an entity is incorrect."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
     ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
 ]
@@ -529,7 +529,7 @@ SYSTEM_USES = {
 
     # Content
     "Search Intent": "Focus Keyword when provided, otherwise title and H1, article body, topic keyword overlap",
-    "Content Relevance": "Focus Keyword or main topic, H2 through H4 headings, semantic heading overlap and the section text introduced by each heading",
+    "Content Relevance": "Focus Keyword or main topic, hierarchical H2 through H4 sections, FAQ parent and child content, entity heading recognition, semantic heading overlap and section context",
     "Thin Content": "Main content extraction and meaningful article word count",
     "Original Value": "Main content word count, tables, lists, numeric references, useful information signals",
     "Factual Accuracy": "Isolated article sentences, numeric and date claims, visible external source links and claim examples that require verification",
@@ -539,13 +539,13 @@ SYSTEM_USES = {
     "Generic / Filler Content": "Substantial paragraphs, Focus Keyword or main topic, paragraph topic overlap",
     "Title vs Content": "HTML title text, main article body, topic keyword overlap",
     "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
-    "Heading Relevance": "Focus Keyword or main topic, H2 through H4 headings, semantic concept overlap, section text following each heading and contextual topic relevance",
+    "Heading Relevance": "Hierarchical H2 through H4 relationships, Focus Keyword or main topic, FAQ child content, entity heading recognition, semantic concept overlap and section context",
     "Introduction Quality": "First section of the article, approximately the first 140 words, Focus Keyword or main topic, topic overlap",
     "FAQ Quality": "FAQ like headings, question marks, question text length, repeated or weak question patterns",
     "Unsupported Superlatives": "Superlative terms such as best, cheapest and most popular, external source link presence",
     "Source Quality": "Numeric claims, data like statements, external source link count, visible attribution signals",
     "Data Accuracy": "Numbers and percentages extracted from the page, repeated values, internal consistency signals",
-    "Entity Accuracy": "Conservative entity candidates from proper noun headings, anchor text and proper noun phrases, with CTA, FAQ and keyword phrase filtering before external or first party verification",
+    "Entity Accuracy": "Cleaned entity candidates from proper noun headings, anchor text and proper noun phrases, generic property prefix removal, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
     "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
     "Broken Content": "Placeholder terms, unfinished content indicators, empty headings, repeated paragraphs"
 }
@@ -993,47 +993,83 @@ def is_faq_heading(text):
 
 def faq_section_relevant(section_text, target_topic):
     """
-    FAQ is structural. Judge it by its questions/answers, not by the literal
-    heading word 'FAQs'.
+    FAQ is structural. Judge the answers inside the FAQ section rather than
+    comparing the literal word FAQ with the Focus Keyword.
     """
-    if not section_text:
+    if not section_text or len(section_text.strip()) < 40:
         return False
 
     semantic = semantic_overlap(target_topic, section_text)
     lexical = keyword_overlap(target_topic, section_text)
 
-    return semantic >= 0.30 or lexical >= 0.15
+    target_concepts = set(semantic_tokens(target_topic))
+    section_concepts = set(semantic_tokens(section_text))
+    shared_concepts = target_concepts & section_concepts
+
+    # FAQ answers do not have to repeat the full Focus Keyword.
+    return (
+        semantic >= 0.20
+        or lexical >= 0.10
+        or len(shared_concepts) >= 2
+    )
+
+def heading_level(node):
+    if not getattr(node, "name", None):
+        return None
+    match = re.match(r"^h([1-6])$", node.name)
+    return int(match.group(1)) if match else None
 
 def heading_sections(soup):
     """
-    Return H2 to H4 headings with the text that follows each heading until the next H2 to H4.
-    This lets a heading such as a building name be judged by the section it introduces.
+    Return H2 to H4 headings with hierarchical section content.
+
+    H2 includes its child H3 and H4 content until the next H2.
+    H3 includes its child H4 content until the next H2 or H3.
+    H4 stops at the next H2, H3 or H4.
+
+    This is important for FAQ sections where the FAQ label is an H2 and
+    individual questions are H3 headings.
     """
     container = main_content_node(soup)
     headings = container.find_all(re.compile(r"^h[2-4]$"))
     output = []
 
     for heading in headings:
-        heading_text = heading.get_text(" ", strip=True)
+        heading_text = re.sub(
+            r"\s+",
+            " ",
+            heading.get_text(" ", strip=True),
+        ).strip()
         if not heading_text:
             continue
 
+        current_level = heading_level(heading) or 4
         parts = []
+
         for node in heading.find_all_next():
             if node is heading:
                 continue
-            if node.name and re.match(r"^h[2-4]$", node.name):
+
+            node_level = heading_level(node)
+            if node_level is not None and 2 <= node_level <= current_level:
                 break
+
             if node.name in {"p", "li", "td", "th", "figcaption"}:
-                value = node.get_text(" ", strip=True)
+                value = re.sub(
+                    r"\s+",
+                    " ",
+                    node.get_text(" ", strip=True),
+                ).strip()
                 if value:
                     parts.append(value)
-            if sum(len(x) for x in parts) >= 1200:
+
+            if sum(len(x) for x in parts) >= 1800:
                 break
 
         output.append({
             "heading": heading_text,
-            "section": " ".join(parts)[:1600],
+            "level": current_level,
+            "section": " ".join(parts)[:2200],
         })
 
     return output
@@ -2783,8 +2819,124 @@ GENERIC_ENTITY_HEADINGS = {
     "where to rent", "where can you rent",
 }
 
-def looks_like_entity_phrase(value):
+
+ENTITY_GENERIC_PREFIX_PATTERNS = [
+    r"^(?:studio|studios)\s+(?:in|at|from)\s+",
+    r"^(?:apartment|apartments|flat|flats)\s+(?:in|at|from)\s+",
+    r"^(?:villa|villas|townhouse|townhouses)\s+(?:in|at|from)\s+",
+    r"^(?:unit|units|property|properties)\s+(?:in|at|from)\s+",
+    r"^(?:rent|rental|renting)\s+(?:in|at|from)\s+",
+]
+
+def clean_entity_candidate(value):
+    """
+    Remove generic property wording around a proper noun.
+
+    Example:
+    studio in Elite Sports Residents
+    becomes:
+    Elite Sports Residents
+    """
     value = re.sub(r"\s+", " ", (value or "")).strip(" ,.;:-")
+
+    changed = True
+    while changed and value:
+        changed = False
+        for pattern in ENTITY_GENERIC_PREFIX_PATTERNS:
+            cleaned = re.sub(
+                pattern,
+                "",
+                value,
+                flags=re.I,
+            ).strip(" ,.;:-")
+            if cleaned != value:
+                value = cleaned
+                changed = True
+
+    return value
+
+def entity_similarity_key(value):
+    value = clean_entity_candidate(value).casefold()
+    value = re.sub(r"[^a-z0-9\u0600-\u06ff ]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+def roman_variant_pair(a, b):
+    """
+    Do not flag legitimate numbered project variants such as
+    Global Golf Residence and Global Golf Residence II.
+    """
+    roman = {"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"}
+    aa = entity_similarity_key(a).split()
+    bb = entity_similarity_key(b).split()
+
+    if len(aa) + 1 == len(bb) and bb[-1] in roman and aa == bb[:-1]:
+        return True
+    if len(bb) + 1 == len(aa) and aa[-1] in roman and bb == aa[:-1]:
+        return True
+    return False
+
+def near_duplicate_entities(entities, threshold=0.88):
+    """
+    Find suspiciously similar entity spellings.
+
+    This is a consistency signal, not automatic proof of an error.
+    """
+    pairs = []
+
+    for i, left in enumerate(entities):
+        left_key = entity_similarity_key(left)
+        if not left_key:
+            continue
+
+        for right in entities[i + 1:]:
+            right_key = entity_similarity_key(right)
+            if not right_key or left_key == right_key:
+                continue
+
+            if roman_variant_pair(left, right):
+                continue
+
+            left_tokens = set(left_key.split())
+            right_tokens = set(right_key.split())
+            token_overlap = (
+                len(left_tokens & right_tokens)
+                / max(1, min(len(left_tokens), len(right_tokens)))
+            )
+            ratio = SequenceMatcher(
+                None,
+                left_key,
+                right_key,
+            ).ratio()
+
+            if ratio >= threshold and token_overlap >= 0.60:
+                pairs.append({
+                    "left": left,
+                    "right": right,
+                    "similarity": ratio,
+                })
+
+    # Remove mirrored or duplicate pair representations.
+    unique = []
+    seen = set()
+    for item in sorted(
+        pairs,
+        key=lambda x: x["similarity"],
+        reverse=True,
+    ):
+        key = tuple(sorted([
+            item["left"].casefold(),
+            item["right"].casefold(),
+        ]))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    return unique
+
+def looks_like_entity_phrase(value):
+    value = clean_entity_candidate(value)
     if not value:
         return False
 
@@ -2845,18 +2997,61 @@ def looks_like_entity_phrase(value):
 
     return title_case_words >= max(1, len(value.split()) // 2) or has_entity_suffix
 
-def entity_candidates(article_soup, limit=12):
+
+def entity_heading_context_relevant(heading_text, section_text, target_topic):
+    """
+    Named projects, buildings and places can be valid headings without
+    repeating the Focus Keyword.
+
+    Accept an entity heading when the section beneath it has a meaningful
+    relationship to the page topic.
+    """
+    if not looks_like_entity_phrase(heading_text):
+        return False
+
+    if not section_text:
+        return False
+
+    section_score = semantic_overlap(target_topic, section_text)
+    lexical_score = keyword_overlap(target_topic, section_text)
+
+    target_concepts = set(semantic_tokens(target_topic))
+    section_concepts = set(semantic_tokens(section_text))
+
+    important_topic_concepts = {
+        "rent", "sale", "property", "price", "location"
+    }
+    shared_important = (
+        target_concepts
+        & section_concepts
+        & important_topic_concepts
+    )
+
+    return (
+        section_score >= 0.30
+        or lexical_score >= 0.12
+        or (
+            bool(shared_important)
+            and section_score >= 0.20
+        )
+    )
+
+def entity_candidates(article_soup, limit=20):
     values = []
 
     # 1. Headings are strong entity candidates when they look like proper nouns.
     for heading in article_soup.find_all(re.compile(r"^h[2-4]$")):
-        value = re.sub(r"\s+", " ", heading.get_text(" ", strip=True)).strip()
+        value = clean_entity_candidate(
+            heading.get_text(" ", strip=True)
+        )
         if looks_like_entity_phrase(value):
             values.append(value)
 
     # 2. Anchor text inside the article is often a cleaner signal for named places/projects.
     for anchor in article_soup.find_all("a", href=True):
-        value = re.sub(r"\s+", " ", anchor.get_text(" ", strip=True)).strip()
+        value = clean_entity_candidate(
+            anchor.get_text(" ", strip=True)
+        )
         if looks_like_entity_phrase(value):
             values.append(value)
 
@@ -2866,7 +3061,7 @@ def entity_candidates(article_soup, limit=12):
         r"\b(?:[A-Z][A-Za-z0-9'&.-]+(?:\s+|$)){2,5}",
         text_value,
     ):
-        value = re.sub(r"\s+", " ", match).strip(" ,.;:")
+        value = clean_entity_candidate(match)
         if looks_like_entity_phrase(value):
             values.append(value)
 
@@ -2874,7 +3069,7 @@ def entity_candidates(article_soup, limit=12):
     seen = set()
 
     for value in values:
-        value = re.sub(r"\s+", " ", value).strip()
+        value = clean_entity_candidate(value)
         key = value.casefold()
 
         if key in seen:
@@ -3779,6 +3974,13 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
                 weak_sections.append(item["heading"])
             continue
 
+        if entity_heading_context_relevant(
+            item["heading"],
+            item["section"],
+            target_topic,
+        ):
+            continue
+
         if heading_score < 0.20 and section_score < 0.35:
             weak_sections.append(item["heading"])
 
@@ -3955,17 +4157,33 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             # FAQ is a structural heading. Judge the FAQ content rather than the
             # literal heading word.
             if is_faq_heading(item["heading"]):
-                is_relevant = faq_section_relevant(item["section"], target_topic)
+                is_relevant = faq_section_relevant(
+                    item["section"],
+                    target_topic,
+                )
+                relevance_reason = "FAQ section context"
+            elif entity_heading_context_relevant(
+                item["heading"],
+                item["section"],
+                target_topic,
+            ):
+                is_relevant = True
+                relevance_reason = "entity heading with related section context"
             else:
-                # A heading can be an entity name. Its section can establish the connection.
-                is_relevant = heading_score >= 0.20 or section_score >= 0.45
+                is_relevant = (
+                    heading_score >= 0.20
+                    or section_score >= 0.45
+                )
+                relevance_reason = "semantic heading or section overlap"
+
             if is_relevant:
                 relevant += 1
-                if heading_score < 0.20 and section_score >= 0.45:
+                if heading_score < 0.20:
                     contextual += 1
-                    if len(detail_examples) < 4:
+                    if len(detail_examples) < 5:
                         detail_examples.append(
-                            f"'{item['heading']}' has low direct heading overlap but its section is contextually related at {section_score:.0%}."
+                            f"'{item['heading']}' accepted through {relevance_reason}; "
+                            f"section topic overlap {section_score:.0%}."
                         )
             elif len(weak_examples) < 5:
                 weak_examples.append(
@@ -4026,15 +4244,35 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     rows.append(result("Data Accuracy", data_status, f"{len(percents)} percentage references ({len(set(percents))} unique). External/source-level validation may still be required.", rules["Data Accuracy"]))
 
     entities = entity_candidates(article_soup)
+    near_duplicates = near_duplicate_entities(entities)
+
     if entities:
         entity_status = REVIEW
         entity_finding = (
-            f"{len(entities)} entity candidate(s) were extracted from the isolated article body and require external or first party verification. "
+            f"{len(entities)} cleaned entity candidate(s) were extracted from the isolated article body and require external or first party verification. "
             f"Examples: {', '.join(entities[:10])}."
         )
+
+        if near_duplicates:
+            duplicate_text = " | ".join(
+                f"{item['left']} vs {item['right']} "
+                f"({item['similarity']:.0%} spelling similarity)"
+                for item in near_duplicates[:5]
+            )
+            entity_finding += (
+                " Possible near duplicate entity spellings were detected and should be checked for a typo or legitimate naming variation: "
+                + duplicate_text
+                + "."
+            )
+        else:
+            entity_finding += (
+                " No suspicious near duplicate entity spelling was detected inside the article."
+            )
     else:
         entity_status = PASS
-        entity_finding = "No clear named entity candidates requiring separate verification were extracted."
+        entity_finding = (
+            "No clear named entity candidates requiring separate verification were extracted."
+        )
 
     rows.append(
         result(
