@@ -664,6 +664,7 @@ def result(name, status, finding, rule):
     method = SYSTEM_USES.get(name, "Rule based page analysis")
     return {
         "Check": name,
+        "Status": status,
         "Result": finding,
         "Why": f"The system used {method}. The fixed rule applied is: {rule}",
         "_internal_status": status,
@@ -1477,7 +1478,7 @@ if run:
             <div style="margin-top:18px;margin-bottom:8px;">
               <div style="font-size:22px;font-weight:800;">Audit Results</div>
               <div style="font-size:13px;color:#66736F;margin-top:4px;">
-                Each rule shows only what the system found and why it reached that result.
+                Each rule shows its status, the result found and why the system reached that result.
               </div>
             </div>
             """,
@@ -1489,9 +1490,9 @@ if run:
             st.markdown(
                 f"""
                 <div class="metric-card">
-                  <div class="metric-label">Spam Rules Checked</div>
-                  <div class="metric-value">{len(spam_rows)}</div>
-                  <div class="metric-note">Every Spam rule was applied to this URL</div>
+                  <div class="metric-label">Spam Check</div>
+                  <div class="metric-value {status_class(spam_status)}">{spam_status}</div>
+                  <div class="metric-note">{spam_counts[PASS]} PASS · {spam_counts[REVIEW]} REVIEW · {spam_counts[FAIL]} FAIL</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1500,9 +1501,9 @@ if run:
             st.markdown(
                 f"""
                 <div class="metric-card">
-                  <div class="metric-label">SEO Rules Checked</div>
-                  <div class="metric-value">{len(seo_rows)}</div>
-                  <div class="metric-note">Every SEO rule was applied to this URL</div>
+                  <div class="metric-label">SEO Check</div>
+                  <div class="metric-value {status_class(seo_status)}">{seo_status}</div>
+                  <div class="metric-note">{seo_counts[PASS]} PASS · {seo_counts[REVIEW]} REVIEW · {seo_counts[FAIL]} FAIL</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1511,9 +1512,9 @@ if run:
             st.markdown(
                 f"""
                 <div class="metric-card">
-                  <div class="metric-label">Content Rules Checked</div>
-                  <div class="metric-value">{len(content_rows)}</div>
-                  <div class="metric-note">Every Content rule was applied to this URL</div>
+                  <div class="metric-label">Content Check</div>
+                  <div class="metric-value {status_class(content_status)}">{content_status}</div>
+                  <div class="metric-note">{content_counts[PASS]} PASS · {content_counts[REVIEW]} REVIEW · {content_counts[FAIL]} FAIL</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1535,18 +1536,32 @@ if run:
                 public_rows = [
                     {
                         "Check": row["Check"],
+                        "Status": row["Status"],
                         "Result": row["Result"],
                         "Why": row["Why"],
                     }
                     for row in rows
                 ]
                 df = pd.DataFrame(public_rows)
+
+                def status_style(value):
+                    if value == "PASS":
+                        return "color: #28B16D; font-weight: 800;"
+                    if value == "REVIEW":
+                        return "color: #B7791F; font-weight: 800;"
+                    if value == "FAIL":
+                        return "color: #C53030; font-weight: 800;"
+                    return ""
+
+                styled_df = df.style.map(status_style, subset=["Status"])
+
                 st.dataframe(
-                    df,
+                    styled_df,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
                         "Check": st.column_config.TextColumn(width="medium"),
+                        "Status": st.column_config.TextColumn(width="small"),
                         "Result": st.column_config.TextColumn(width="large"),
                         "Why": st.column_config.TextColumn(width="large"),
                     },
@@ -1558,15 +1573,15 @@ if run:
             "focus_keyword": focus_keyword,
             "secondary_keywords": secondary_keywords,
             "spam": [
-                {"Check": r["Check"], "Result": r["Result"], "Why": r["Why"]}
+                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
                 for r in spam_rows
             ],
             "seo": [
-                {"Check": r["Check"], "Result": r["Result"], "Why": r["Why"]}
+                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
                 for r in seo_rows
             ],
             "content": [
-                {"Check": r["Check"], "Result": r["Result"], "Why": r["Why"]}
+                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
                 for r in content_rows
             ],
         }
@@ -1581,11 +1596,13 @@ if run:
         with st.expander("Important interpretation notes"):
             st.markdown(
                 """
-                The results show what the system found and why.
+                Every rule receives one of three statuses: PASS, REVIEW or FAIL.
 
-                The system does not display status labels.
+                Result shows exactly what the system found.
 
-                When a rule cannot be fully verified from one URL, the Result explains that additional verification is required.
+                Why explains the data and rule used to reach that status and result.
+
+                When a rule cannot be fully verified from one URL, it can receive REVIEW and the Result explains what additional verification is required.
 
                 The Googlebot check uses a Googlebot User Agent comparison. It does not reproduce Google's full rendering and indexing infrastructure.
 
