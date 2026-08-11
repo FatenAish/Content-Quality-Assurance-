@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17.3 ACTIONABLE"
-ENGINE_BUILD = "2026.08.11.5"
+APP_VERSION = "V17.4 INTERNAL CONTENT"
+ENGINE_BUILD = "2026.08.11.6"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -460,13 +460,11 @@ SPAM_RULES = [
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
     ("Hidden Links", "Inspect the exact link and the reason it is hidden. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Deliberately concealed links intended to manipulate rankings should FAIL."),
     ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
-    ("Scraped Content", "FAIL when substantial external content is copied or lightly transformed with little original value. Requires external comparison."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
     ("Spam Iframes", "FAIL when unauthorized or suspicious iframes introduce deceptive or spam content."),
-    ("Site Reputation Abuse", "FAIL when unrelated third party content primarily exploits the host site's ranking signals. Often needs manual context."),
     ("User Generated Spam", "FAIL when comments/profiles/UGC contain mass spam or manipulative links."),
     ("Back Button Hijacking", "FAIL when scripts manipulate browser history to prevent users from returning to the previous page."),
     ("Malware / Scam Behaviour", "FAIL when malicious downloads, harmful scripts, impersonation or deliberately deceptive functionality is detected."),
@@ -482,7 +480,7 @@ SEO_RULES = [
     ("H1", "PASS when one clear H1 exists and it represents the Focus Keyword meaning or the page topic. Exact phrase matching is not required. REVIEW multiple H1 elements or a weak semantic relationship. FAIL when the H1 is missing or clearly unrelated."),
     ("Heading Structure", "Evaluate the editorial heading hierarchy rather than navigation or sidebar headings. REVIEW empty headings, heavy duplication or clear heading level jumps."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
-    ("Internal Links", "Request discovered internal HTTP links rather than counting them only. PASS when checked links resolve. REVIEW broken, restricted, server error or unreachable internal destinations."),
+    ("Internal Links", "Inspect only internal hyperlinks inside the isolated article content. Exclude header, footer, sidebar, navigation and external links. PASS when internal destinations resolve, anchors contain useful text and no obvious spammy anchor pattern is detected. REVIEW broken destinations, empty or generic anchors, over optimised anchors or anchors that appear poorly matched to the linked page."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
     ("Images", "Separate meaningful article images from decorative images. Decorative images do not require descriptive alt text. REVIEW meaningful images with missing or empty alt treatment or broken image resources."),
     ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
@@ -527,13 +525,11 @@ SYSTEM_USES = {
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
     "Hidden Links": "Rendered DOM when available, computed CSS, desktop and mobile visibility, link URL, anchor text, element and parent context, interface controls, accessibility attributes and hiding reason classification",
     "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
-    "Scraped Content": "Current URL content plus external comparison requirement. The current version marks this for review when outside comparison is needed",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Paid Links": "External links, surrounding text, sponsored and affiliate terms, rel sponsored attribute, rel nofollow attribute",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
     "Spam JavaScript": "Inline JavaScript, redirect patterns, obfuscation patterns, location functions, encoded script indicators",
     "Spam Iframes": "Iframe elements, iframe visibility, CSS hiding rules, iframe source information",
-    "Site Reputation Abuse": "Page topic and editorial context. The current version marks this for review when ownership and publishing purpose cannot be confirmed from one URL",
     "User Generated Spam": "Comment and user content containers, DOM class and ID patterns, links inside user content areas",
     "Back Button Hijacking": "JavaScript history functions, popstate, pushState, replaceState, redirect and location logic",
     "Malware / Scam Behaviour": "JavaScript source, script obfuscation patterns, script injection patterns, suspicious redirect behaviour",
@@ -548,7 +544,7 @@ SYSTEM_USES = {
     "H1": "Full page H1 elements including article header H1, H1 count, Focus Keyword exact match, semantic concept overlap and article topic relationship",
     "Heading Structure": "Primary page H1 plus isolated editorial H2 through H6 headings, empty headings, duplicate headings and hierarchy level jumps",
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
-    "Internal Links": "Resolved internal anchor URLs, fragment normalization, HTTP response code, final destination, request errors and article body link count",
+    "Internal Links": "Only hyperlinks inside the isolated article content, same domain validation, resolved destination URL, HTTP response code, anchor text presence, generic or spammy anchor detection and anchor to destination slug relevance",
     "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
     "Images": "Isolated article images, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
     "Structured Data": "JSON LD parsing, Article BlogPosting or NewsArticle type detection, schema headline, schema URL and mainEntityOfPage comparison with the visible preferred page",
@@ -1603,13 +1599,11 @@ DEFAULT_ACTIONS = {
     "Hidden Text": "Make editorial text visible unless it is legitimately hidden for interface, responsive or accessibility reasons.",
     "Hidden Links": "Remove deliberately concealed links. Keep hidden interface links only when their UI or accessibility purpose is clear.",
     "Keyword Stuffing": "Reduce repeated query phrases that read unnaturally. Keep necessary location and entity names when editorially justified.",
-    "Scraped Content": "Run an external similarity check. If substantial text is copied or lightly rewritten, rewrite it and add original Bayut value, data or analysis.",
     "Link Spam": "Remove or rewrite manipulative keyword rich links and repeated commercial anchor patterns. Keep editorial links relevant and natural.",
     "Paid Links": "Mark identifiable paid or sponsored links with rel=sponsored or rel=nofollow, or remove the paid link.",
     "Hacked Content": "Remove injected spam content, secure the CMS and plugins, rotate credentials and verify the clean page after remediation.",
     "Spam JavaScript": "Review suspicious redirect or obfuscation scripts. Remove scripts that inject spam, links or deceptive redirects.",
     "Spam Iframes": "Remove unauthorized or unexplained hidden iframes. Keep only legitimate embeds with a clear visible purpose.",
-    "Site Reputation Abuse": "Confirm the content is controlled and produced for Bayut users rather than third party content published mainly to exploit Bayut ranking signals. If ownership and purpose are legitimate, document that manual verification.",
     "User Generated Spam": "Remove spam comments or profile links, strengthen moderation and apply appropriate UGC or nofollow treatment where needed.",
     "Back Button Hijacking": "Remove browser history logic that traps users or forces redirects when they try to return to the previous page.",
     "Malware / Scam Behaviour": "Remove malicious or deceptive scripts and downloads, secure the site and run a security review before republishing.",
@@ -1623,7 +1617,7 @@ DEFAULT_ACTIONS = {
     "H1": "Add one clear editorial H1 that accurately represents the page topic. Exact Focus Keyword matching is not required.",
     "Heading Structure": "Fix empty, duplicated or skipped heading levels in the editorial article structure.",
     "URL Structure": "Use a clean readable preferred URL and remove unnecessary or misleading parameters.",
-    "Internal Links": "Fix or replace each internal URL reported as broken, unreachable, restricted or server error.",
+    "Internal Links": "Fix only the internal hyperlinks reported inside the article content. Correct broken destinations, replace empty or generic anchors with descriptive text and rewrite spammy or misleading anchor text.",
     "External Links": "Fix, replace or remove each confirmed problematic external destination. Social platform anti bot responses do not need fixing by themselves.",
     "Images": "For each meaningful image reported, add useful alt text or fix the broken image resource. Decorative images can use empty alt treatment.",
     "Structured Data": "Fix JSON LD parsing or add a valid Article or BlogPosting object. Align schema headline and page identity with the visible article.",
@@ -2618,6 +2612,153 @@ def normalized_link_url(value, base_url=""):
     # Fragments do not change the fetched document and should not create
     # duplicate link validation requests.
     return parsed._replace(fragment="").geturl()
+
+
+SPAMMY_ANCHOR_TERMS = {
+    "click here", "read more", "learn more", "more", "here",
+    "buy now", "cheap", "best price", "free money",
+    "casino", "betting", "viagra", "cialis", "loan",
+    "اضغط هنا", "اقرأ المزيد", "المزيد",
+}
+
+def content_internal_link_inventory(article_soup, base_url):
+    """
+    Inspect only hyperlinks inside the isolated article body.
+
+    Each candidate is evaluated for:
+    1. Internal destination on the same host.
+    2. Non-empty, useful anchor text.
+    3. Anchor text that is not obviously spammy or manipulative.
+    4. Anchor-to-URL slug relationship as a relevance signal.
+    5. HTTP availability of the destination.
+    """
+    base_host = urlparse(base_url).netloc.lower().replace("www.", "")
+    inventory = []
+
+    for anchor in article_soup.find_all("a", href=True):
+        href = normalized_link_url(anchor.get("href"), base_url)
+        if not href:
+            continue
+
+        parsed = urlparse(href)
+        host = parsed.netloc.lower().replace("www.", "")
+        if host != base_host:
+            # External links are not part of Internal Links.
+            continue
+
+        anchor_text = re.sub(
+            r"\s+",
+            " ",
+            anchor.get_text(" ", strip=True),
+        ).strip()
+
+        low_anchor = anchor_text.casefold()
+        anchor_words = tokenize(anchor_text)
+
+        empty_anchor = not anchor_text
+        generic_anchor = low_anchor in SPAMMY_ANCHOR_TERMS
+
+        suspicious_anchor = (
+            generic_anchor
+            or len(anchor_text) > 180
+            or (
+                len(anchor_words) >= 7
+                and repeated_phrase_signal(anchor_text)
+            )
+        )
+
+        slug_text = " ".join(
+            token
+            for token in re.findall(r"[a-zA-Z0-9]+", parsed.path.replace("-", " "))
+            if len(token) > 2
+        )
+
+        if anchor_text and slug_text:
+            anchor_slug_overlap = max(
+                keyword_overlap(anchor_text, slug_text),
+                semantic_overlap(anchor_text, slug_text),
+            )
+        else:
+            anchor_slug_overlap = 0.0
+
+        inventory.append({
+            "url": href,
+            "anchor_text": anchor_text,
+            "empty_anchor": empty_anchor,
+            "generic_anchor": generic_anchor,
+            "suspicious_anchor": suspicious_anchor,
+            "anchor_slug_overlap": anchor_slug_overlap,
+        })
+
+    # Remove exact duplicate URL + anchor pairs.
+    unique = []
+    seen = set()
+    for item in inventory:
+        key = (item["url"], item["anchor_text"].casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    return unique
+
+def repeated_phrase_signal(text):
+    tokens = [t for t in tokenize(text) if len(t) > 2]
+    if len(tokens) < 6:
+        return False
+    counts = Counter(tokens)
+    return max(counts.values(), default=0) >= 3
+
+def content_internal_link_urls(article_soup, base_url):
+    return unique_http_urls([
+        item["url"]
+        for item in content_internal_link_inventory(article_soup, base_url)
+    ])
+
+def internal_link_action_text(inventory, validation):
+    validation_by_url = {
+        item.get("url"): item
+        for item in validation.get("checked", [])
+    }
+
+    actions = []
+
+    for item in inventory:
+        problems = []
+
+        if item["empty_anchor"]:
+            problems.append("add descriptive anchor text")
+        elif item["generic_anchor"]:
+            problems.append("replace generic anchor text with descriptive text")
+        elif item["suspicious_anchor"]:
+            problems.append("rewrite spammy or over-optimised anchor text")
+
+        checked = validation_by_url.get(item["url"])
+        if checked:
+            status = checked.get("status")
+            if status is None:
+                problems.append("fix unreachable destination")
+            elif status >= 500:
+                problems.append(f"fix server error HTTP {status}")
+            elif status >= 400:
+                problems.append(f"fix broken or restricted destination HTTP {status}")
+
+        # Low anchor/slug overlap is only a review signal when the anchor has
+        # enough words to be meaningfully assessed.
+        if (
+            item["anchor_text"]
+            and len(tokenize(item["anchor_text"])) >= 2
+            and item["anchor_slug_overlap"] < 0.12
+        ):
+            problems.append("check that the anchor text accurately describes the linked page")
+
+        if problems:
+            actions.append(
+                f'Anchor "{item["anchor_text"] or "(empty)"}" → {item["url"]}: '
+                + "; ".join(problems)
+            )
+
+    return actions
 
 def extract_page_links(soup, base_url):
     parsed = urlparse(base_url)
@@ -3956,13 +4097,6 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         rules["Keyword Stuffing"],
     ))
 
-    rows.append(result(
-        "Scraped Content",
-        REVIEW,
-        "The page itself does not prove whether the article is copied from another website. This check needs an external similarity or indexed source comparison.",
-        rules["Scraped Content"],
-        "Run an external plagiarism or search comparison using several distinctive article sentences. If substantial matching text predates this page, rewrite the copied sections and add original Bayut data, analysis or guidance. If no substantial external match exists, this can be manually cleared.",
-    ))
 
     article_soup = main_content_node(soup)
     page_internal, page_external = extract_page_links(soup, url)
@@ -4103,13 +4237,6 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         iframe_find = f"{len(iframes)} iframe(s) found; none obviously hidden."
     rows.append(result("Spam Iframes", iframe_status, iframe_find, rules["Spam Iframes"]))
 
-    rows.append(result(
-        "Site Reputation Abuse",
-        REVIEW,
-        "The URL alone cannot prove who created or controls the content or whether a third party is using Bayut ranking signals.",
-        rules["Site Reputation Abuse"],
-        "Confirm internally that Bayut editorial controls the article, the topic serves Bayut users, and it is not third party content published mainly to benefit from Bayut search authority. If those conditions are confirmed, record the check as manually cleared.",
-    ))
 
     comment_nodes = soup.select(".comment, .comments, [id*='comment'], [class*='comment']")
     ugc_links = []
@@ -4508,45 +4635,87 @@ def audit_seo(
     ))
 
     internal, external = extract_page_links(soup, desktop_r.url)
-    article_internal, _ = extract_page_links(article_soup, desktop_r.url)
+
+    content_link_inventory = content_internal_link_inventory(
+        article_soup,
+        desktop_r.url,
+    )
+    content_internal_urls = unique_http_urls([
+        item["url"]
+        for item in content_link_inventory
+    ])
 
     if internal_validation is None:
         internal_validation = validate_url_set(
-            internal,
+            content_internal_urls,
             timeout=INTERNAL_LINK_CHECK_TIMEOUT,
             workers=INTERNAL_LINK_CHECK_WORKERS,
         )
 
-    internal_problems = (
-        internal_validation.get("broken", [])
-        + internal_validation.get("server_errors", [])
-        + internal_validation.get("restricted", [])
-        + internal_validation.get("unreachable", [])
+    link_actions = internal_link_action_text(
+        content_link_inventory,
+        internal_validation,
     )
-    if not internal:
+
+    broken_count = len(internal_validation.get("broken", []))
+    server_error_count = len(internal_validation.get("server_errors", []))
+    restricted_count = len(internal_validation.get("restricted", []))
+    unreachable_count = len(internal_validation.get("unreachable", []))
+
+    empty_anchor_count = sum(
+        1 for item in content_link_inventory if item["empty_anchor"]
+    )
+    spam_anchor_count = sum(
+        1 for item in content_link_inventory if item["suspicious_anchor"]
+    )
+    weak_anchor_count = sum(
+        1
+        for item in content_link_inventory
+        if item["anchor_text"]
+        and len(tokenize(item["anchor_text"])) >= 2
+        and item["anchor_slug_overlap"] < 0.12
+    )
+
+    if not content_link_inventory:
         internal_status = REVIEW
-        internal_finding = "No crawlable internal HTTP links were found."
-    elif internal_problems:
-        internal_status = REVIEW
-        examples = validation_problem_examples({
-            "broken": internal_validation.get("broken", []),
-            "server_errors": internal_validation.get("server_errors", []),
-            "restricted": internal_validation.get("restricted", []),
-            "unreachable": internal_validation.get("unreachable", []),
-        })
         internal_finding = (
-            f"{len(internal_validation.get('checked', []))} unique internal links were requested; "
-            f"{len(article_internal)} appear inside the isolated article body. "
-            f"{len(internal_validation.get('working', []))} resolved successfully. "
-            "Problems requiring review: " + "; ".join(examples) + "."
+            "No internal hyperlink was found inside the isolated article content. "
+            "Header, footer, sidebar, navigation and external links are excluded from this check."
         )
+        internal_action = (
+            "Review whether the article should contain useful contextual internal links to relevant Bayut content. "
+            "If internal links are intentionally not needed, this can be manually cleared."
+        )
+    elif link_actions:
+        internal_status = REVIEW
+        internal_finding = (
+            f"{len(content_link_inventory)} internal hyperlink instance(s) were found inside the article content, "
+            f"covering {len(content_internal_urls)} unique internal destination(s). "
+            f"{len(internal_validation.get('working', []))} destination(s) resolved successfully. "
+            f"Issues: {broken_count} broken, {server_error_count} server error, "
+            f"{restricted_count} restricted, {unreachable_count} unreachable, "
+            f"{empty_anchor_count} empty anchor, {spam_anchor_count} spammy or generic anchor, "
+            f"{weak_anchor_count} anchor(s) with weak relationship to the destination slug."
+        )
+        internal_action = " || ".join(link_actions[:12])
     else:
         internal_status = PASS
         internal_finding = (
-            f"All {len(internal_validation.get('checked', []))} unique internal HTTP links were requested successfully; "
-            f"{len(article_internal)} appear inside the isolated article body."
+            f"{len(content_link_inventory)} internal hyperlink instance(s) were checked inside the isolated article content, "
+            f"covering {len(content_internal_urls)} unique internal destination(s). "
+            "All checked destinations resolved without a confirmed broken response, "
+            "all anchors contain usable text, and no obvious spammy anchor pattern was detected. "
+            "Header, footer, sidebar, navigation and external links are excluded."
         )
-    rows.append(result("Internal Links", internal_status, internal_finding, rules["Internal Links"]))
+        internal_action = ""
+
+    rows.append(result(
+        "Internal Links",
+        internal_status,
+        internal_finding,
+        rules["Internal Links"],
+        internal_action,
+    ))
 
     if external_validation is None:
         external_validation = validate_url_set(
@@ -5744,7 +5913,12 @@ if run:
             f"Desktop {desktop_elapsed:.2f}s, Mobile {mobile_elapsed:.2f}s, Googlebot {bot_elapsed:.2f}s"
         )
 
-        internal_urls, external_urls = extract_page_links(soup, desktop_r.url)
+        page_internal_urls, external_urls = extract_page_links(soup, desktop_r.url)
+        article_soup_for_links = main_content_node(soup)
+        internal_urls = content_internal_link_urls(
+            article_soup_for_links,
+            desktop_r.url,
+        )
         resource_urls = extract_resource_urls(soup, desktop_r.url)
 
         audit_status.write(
@@ -5993,7 +6167,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_3_actionable.json",
+            file_name="url_audit_v17_4_internal_content.json",
             mime="application/json",
         )
 
