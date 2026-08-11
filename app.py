@@ -465,7 +465,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "HTML DOM, CSS style attributes, hidden attribute, aria hidden attribute, visible text length",
-    "Hidden Links": "HTML anchor elements, hidden parent elements, CSS visibility rules, link destination extraction",
+    "Hidden Links": "HTML anchor elements, resolved link URL, anchor text, hidden parent element, hidden attribute, aria hidden attribute, inline CSS visibility rules",
     "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase count, N gram frequency, repetition density",
     "Scraped Content": "Current URL content plus external comparison requirement. The current version marks this for review when outside comparison is needed",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
@@ -719,6 +719,86 @@ def obvious_hidden(node):
     ])
     return hidden_attr or bad_style or aria_hidden
 
+def hidden_reasons(node):
+    reasons = []
+    raw_style = (node.get("style") or "")
+    style = raw_style.replace(" ", "").lower()
+
+    if node.has_attr("hidden"):
+        reasons.append("hidden attribute")
+
+    if (node.get("aria-hidden") or "").lower() == "true":
+        reasons.append('aria hidden equals true')
+
+    style_checks = [
+        ("display:none", "display none"),
+        ("visibility:hidden", "visibility hidden"),
+        ("opacity:0", "opacity zero"),
+        ("font-size:0", "font size zero"),
+        ("height:0", "height zero"),
+        ("width:0", "width zero"),
+        ("left:-9999", "positioned outside the visible screen"),
+        ("text-indent:-9999", "text indented outside the visible screen"),
+    ]
+
+    for pattern, label in style_checks:
+        if pattern in style:
+            reasons.append(label)
+
+    return reasons
+
+def element_label(node):
+    if node is None:
+        return "Unknown element"
+
+    parts = [node.name or "element"]
+
+    node_id = node.get("id")
+    if node_id:
+        parts.append(f"id {node_id}")
+
+    classes = node.get("class") or []
+    if classes:
+        parts.append("class " + " ".join(str(c) for c in classes[:5]))
+
+    return ", ".join(parts)
+
+def hidden_link_details(soup, base_url):
+    details = []
+    seen = set()
+
+    for anchor in soup.find_all("a", href=True):
+        hidden_element = None
+        node = anchor
+
+        # Check the link itself and then its ancestors.
+        while node is not None and getattr(node, "name", None):
+            if obvious_hidden(node):
+                hidden_element = node
+                break
+            node = node.parent
+
+        if hidden_element is None:
+            continue
+
+        href = urljoin(base_url, anchor.get("href"))
+        anchor_text = anchor.get_text(" ", strip=True) or "(no visible anchor text)"
+        reasons = hidden_reasons(hidden_element)
+
+        key = (href, anchor_text, element_label(hidden_element), tuple(reasons))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        details.append({
+            "url": href,
+            "anchor_text": anchor_text,
+            "hidden_element": element_label(hidden_element),
+            "hidden_because": ", ".join(reasons) if reasons else "hidden element rule matched",
+        })
+
+    return details
+
 def repeated_sentence_ratio(text):
     sents = [re.sub(r"\s+", " ", s.strip().lower()) for s in re.split(r"[.!?؟]+", text) if len(s.strip()) >= 35]
     if not sents:
@@ -801,26 +881,60 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         rows.append(result("Device Spam Redirect", PASS if sm >= 0.80 else REVIEW, f"Desktop/mobile final URL matches; content similarity {sm:.0%}.", rules["Device Spam Redirect"]))
 
     hidden_nodes = []
-    hidden_links = []
     for node in soup.find_all(True):
         if obvious_hidden(node):
             t = node.get_text(" ", strip=True)
             if len(t) >= 40:
                 hidden_nodes.append(t[:180])
-            if node.name == "a" and node.get("href"):
-                hidden_links.append(node.get("href"))
-            for a in node.find_all("a", href=True):
-                hidden_links.append(a.get("href"))
 
     if len(hidden_nodes) >= 3:
-        rows.append(result("Hidden Text", REVIEW, f"Found {len(hidden_nodes)} substantial hidden text blocks. Manual intent review required.", rules["Hidden Text"]))
+        rows.append(result(
+            "Hidden Text",
+            REVIEW,
+            f"Found {len(hidden_nodes)} substantial hidden text blocks. Manual intent review is required.",
+            rules["Hidden Text"]
+        ))
     else:
-        rows.append(result("Hidden Text", PASS, f"No clear spam-scale hidden text pattern found ({len(hidden_nodes)} substantial hidden blocks).", rules["Hidden Text"]))
+        rows.append(result(
+            "Hidden Text",
+            PASS,
+            f"No clear spam scale hidden text pattern found. Substantial hidden text blocks found: {len(hidden_nodes)}.",
+            rules["Hidden Text"]
+        ))
+
+    hidden_links = hidden_link_details(soup, desktop_r.url)
 
     if hidden_links:
-        rows.append(result("Hidden Links", REVIEW, f"Found {len(set(hidden_links))} link(s) inside hidden elements. Review whether they are legitimate UI and accessibility elements.", rules["Hidden Links"]))
+        detail_lines = []
+        for index, item in enumerate(hidden_links[:10], 1):
+            detail_lines.append(
+                f"Link {index}. "
+                f"URL: {item['url']}. "
+                f"Anchor Text: {item['anchor_text']}. "
+                f"Hidden Element: {item['hidden_element']}. "
+                f"Hidden Because: {item['hidden_because']}."
+            )
+
+        extra = ""
+        if len(hidden_links) > 10:
+            extra = f" Additional hidden links not shown: {len(hidden_links) - 10}."
+
+        rows.append(result(
+            "Hidden Links",
+            REVIEW,
+            f"Found {len(hidden_links)} hidden link{'s' if len(hidden_links) != 1 else ''}. "
+            + " ".join(detail_lines)
+            + extra
+            + " Review whether each hidden link is a legitimate interface or accessibility element or an intentionally concealed SEO link.",
+            rules["Hidden Links"]
+        ))
     else:
-        rows.append(result("Hidden Links", PASS, "No links found inside obvious hidden elements.", rules["Hidden Links"]))
+        rows.append(result(
+            "Hidden Links",
+            PASS,
+            "No links were found inside elements hidden by the rules checked by the system.",
+            rules["Hidden Links"]
+        ))
 
     gram, density, count = top_ngram_density(body_text, 2)
     if count >= 20 and density >= 0.035:
