@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17.1 FINAL"
-ENGINE_BUILD = "2026.08.11.3"
+APP_VERSION = "V17.2 FINAL"
+ENGINE_BUILD = "2026.08.11.4"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -2599,9 +2599,29 @@ def extract_resource_urls(soup, base_url):
 
     return filtered
 
+
+SOCIAL_DOMAINS = {
+    "facebook.com", "m.facebook.com",
+    "instagram.com",
+    "linkedin.com",
+    "twitter.com",
+    "x.com",
+    "tiktok.com",
+    "pinterest.com",
+    "youtube.com",
+    "whatsapp.com", "wa.me",
+    "threads.net",
+}
+
 def is_social_domain(url):
-    host = urlparse(url or "").netloc.lower()
-    return host in SOCIAL_DOMAINS or any(host.endswith("." + d) for d in SOCIAL_DOMAINS)
+    host = urlparse(url or "").netloc.lower().split("@")[-1].split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+
+    return (
+        host in SOCIAL_DOMAINS
+        or any(host.endswith("." + domain) for domain in SOCIAL_DOMAINS)
+    )
 
 def social_platform_expected_block(item):
     """
@@ -5719,7 +5739,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_1_final.json",
+            file_name="url_audit_v17_2_final.json",
             mime="application/json",
         )
 
