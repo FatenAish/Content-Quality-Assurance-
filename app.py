@@ -6,6 +6,8 @@ import html as html_lib
 import gzip
 import xml.etree.ElementTree as ET
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse
 
@@ -35,6 +37,16 @@ REVIEW = "REVIEW"
 PASS = "PASS"
 
 CURRENT_YEAR = 2026
+
+# Performance controls
+PAGE_FETCH_TIMEOUT = 9
+SITEMAP_REQUEST_TIMEOUT = 4
+SITEMAP_MAX_FILES = 28
+SITEMAP_MAX_DEPTH = 3
+SITEMAP_WORKERS = 8
+SITEMAP_TIME_BUDGET = 12
+PLAYWRIGHT_NAV_TIMEOUT = 12000
+PLAYWRIGHT_SETTLE_MS = 450
 
 st.set_page_config(
     page_title="Bayut URL Quality Auditor",
@@ -553,11 +565,46 @@ def normalize_url(url):
         url = "https://" + url
     return url
 
-def fetch(url, headers, timeout=16):
+def fetch(url, headers, timeout=PAGE_FETCH_TIMEOUT):
     start = time.time()
-    r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+    r = requests.get(
+        url,
+        headers=headers,
+        timeout=timeout,
+        allow_redirects=True,
+    )
     elapsed = time.time() - start
     return r, elapsed
+
+def fetch_page_variants(url):
+    """
+    Fetch desktop, mobile and Googlebot variants in parallel.
+    This replaces three sequential network waits with one parallel stage.
+    """
+    jobs = {
+        "desktop": UA_DESKTOP,
+        "mobile": UA_MOBILE,
+        "googlebot": UA_GOOGLEBOT,
+    }
+    output = {}
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(fetch, url, headers, PAGE_FETCH_TIMEOUT): label
+            for label, headers in jobs.items()
+        }
+        for future in as_completed(futures):
+            label = futures[future]
+            output[label] = future.result()
+
+    return (
+        output["desktop"][0],
+        output["desktop"][1],
+        output["mobile"][0],
+        output["mobile"][1],
+        output["googlebot"][0],
+        output["googlebot"][1],
+    )
 
 def soup_of(html):
     return BeautifulSoup(html or "", "html.parser")
@@ -913,10 +960,18 @@ def parse_sitemap_document(response):
 
     return None, []
 
-def robots_sitemaps(origin):
+def cache_bucket(seconds=600):
+    return int(time.time() // seconds)
+
+@lru_cache(maxsize=128)
+def _robots_sitemaps_cached(origin, _bucket):
     found = []
     try:
-        rr = requests.get(urljoin(origin, "/robots.txt"), headers=UA_DESKTOP, timeout=8)
+        rr = requests.get(
+            urljoin(origin, "/robots.txt"),
+            headers=UA_DESKTOP,
+            timeout=SITEMAP_REQUEST_TIMEOUT,
+        )
         if rr.status_code == 200:
             for line in rr.text.splitlines():
                 if line.lower().strip().startswith("sitemap:"):
@@ -925,78 +980,217 @@ def robots_sitemaps(origin):
                         found.append(value)
     except Exception:
         pass
-    return found
 
-def find_url_in_sitemaps(page_url, max_sitemaps=80, max_depth=3):
+    return tuple(dict.fromkeys(found))
+
+def robots_sitemaps(origin):
+    # Refresh robots sitemap declarations every 10 minutes.
+    return _robots_sitemaps_cached(origin, cache_bucket(600))
+
+@lru_cache(maxsize=1024)
+def _fetch_sitemap_document_cached(sitemap_url, _bucket):
     """
-    Follow sitemap indexes recursively and search child sitemaps.
-    Returns details that can be shown directly in the audit.
+    Cached sitemap request.
+    Returns parsed data rather than a requests.Response so repeated URL audits
+    on the same host do not download the same sitemap again.
     """
+    record = {
+        "url": sitemap_url,
+        "status": None,
+        "type": "",
+        "entries": (),
+        "error": "",
+    }
+
+    try:
+        rr = requests.get(
+            sitemap_url,
+            headers=UA_DESKTOP,
+            timeout=SITEMAP_REQUEST_TIMEOUT,
+        )
+        record["status"] = rr.status_code
+
+        if rr.status_code != 200:
+            return record
+
+        doc_type, entries = parse_sitemap_document(rr)
+        if not doc_type:
+            return record
+
+        record["type"] = doc_type
+        record["entries"] = tuple(
+            (entry.get("loc", ""), entry.get("lastmod", ""))
+            for entry in entries
+            if entry.get("loc")
+        )
+        return record
+
+    except Exception as exc:
+        record["error"] = str(exc)
+        return record
+
+def fetch_sitemap_document(sitemap_url):
+    # Refresh parsed sitemap documents every 10 minutes.
+    return _fetch_sitemap_document_cached(sitemap_url, cache_bucket(600))
+
+def sitemap_priority(sitemap_url, page_url):
+    """
+    Rank likely child sitemaps first without pretending that ranking is proof.
+    If the configured file limit is reached, the result is marked incomplete.
+    """
+    sm = (sitemap_url or "").lower()
+    path = urlparse(page_url).path.lower()
+    score = 0
+
+    target_tokens = [
+        t for t in re.findall(r"[a-z0-9]+", path)
+        if len(t) >= 4
+    ]
+
+    for token in target_tokens:
+        if token in sm:
+            score += 5
+
+    for useful in ("mybayut", "post", "posts", "article", "articles", "blog", "page"):
+        if useful in sm:
+            score += 3
+
+    if sm.endswith(".xml.gz"):
+        score += 1
+
+    return score
+
+@lru_cache(maxsize=512)
+def _find_url_in_sitemaps_cached(
+    page_url,
+    max_sitemaps,
+    max_depth,
+    _bucket,
+):
+    """
+    Fast recursive sitemap inspection.
+
+    Improvements:
+    1. robots.txt and sitemap documents are cached
+    2. child sitemap files are fetched in parallel
+    3. likely sitemap files are checked first
+    4. a strict wall clock budget prevents long UI freezes
+    5. incomplete traversal is reported as incomplete rather than pretending
+       the URL is absent
+    """
+    started = time.time()
+
     parsed = urlparse(page_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     target = normalise_url_for_sitemap(page_url)
 
-    seeds = robots_sitemaps(origin)
+    seeds = list(robots_sitemaps(origin))
     seeds += [
         urljoin(origin, "/sitemap.xml"),
         urljoin(origin, "/sitemap_index.xml"),
     ]
+    seeds = list(dict.fromkeys(seed for seed in seeds if seed))
 
-    queue = []
-    seen_seed = set()
-    for seed in seeds:
-        if seed and seed not in seen_seed:
-            seen_seed.add(seed)
-            queue.append((seed, 0))
-
+    frontier = [(seed, 0) for seed in seeds]
+    seen = set()
     checked = []
     accessible = 0
     child_count = 0
+    stopped_by_budget = False
+    stopped_by_limit = False
 
-    while queue and len(checked) < max_sitemaps:
-        sitemap_url, depth = queue.pop(0)
-        if any(x["url"] == sitemap_url for x in checked):
-            continue
+    while frontier:
+        if time.time() - started >= SITEMAP_TIME_BUDGET:
+            stopped_by_budget = True
+            break
 
-        record = {"url": sitemap_url, "status": None, "type": "", "entries": 0}
-        checked.append(record)
+        remaining_capacity = max_sitemaps - len(checked)
+        if remaining_capacity <= 0:
+            stopped_by_limit = True
+            break
 
-        try:
-            rr = requests.get(sitemap_url, headers=UA_DESKTOP, timeout=10)
-            record["status"] = rr.status_code
-            if rr.status_code != 200:
+        # Rank the current level and only submit as many files as the configured
+        # audit limit allows.
+        frontier = sorted(
+            frontier,
+            key=lambda item: sitemap_priority(item[0], page_url),
+            reverse=True,
+        )
+
+        current_batch = []
+        next_frontier = []
+
+        while frontier and len(current_batch) < min(SITEMAP_WORKERS, remaining_capacity):
+            sitemap_url, depth = frontier.pop(0)
+            if sitemap_url in seen:
                 continue
+            seen.add(sitemap_url)
+            current_batch.append((sitemap_url, depth))
 
-            doc_type, entries = parse_sitemap_document(rr)
-            if not doc_type:
+        if not current_batch:
+            # Continue with any unprocessed items if duplicates consumed the batch.
+            if frontier:
                 continue
+            break
 
-            accessible += 1
-            record["type"] = doc_type
-            record["entries"] = len(entries)
+        with ThreadPoolExecutor(max_workers=min(SITEMAP_WORKERS, len(current_batch))) as executor:
+            future_map = {
+                executor.submit(fetch_sitemap_document, sitemap_url): (sitemap_url, depth)
+                for sitemap_url, depth in current_batch
+            }
 
-            if doc_type == "urlset":
-                for entry in entries:
-                    if normalise_url_for_sitemap(entry["loc"]) == target:
-                        return {
-                            "found": True,
-                            "accessible": accessible,
-                            "checked": checked,
-                            "found_in": sitemap_url,
-                            "lastmod": entry.get("lastmod") or "",
-                            "child_count": child_count,
-                            "complete": True,
-                        }
+            for future in as_completed(future_map):
+                sitemap_url, depth = future_map[future]
+                record = future.result()
 
-            elif doc_type == "index" and depth < max_depth:
-                for entry in entries:
-                    child = entry.get("loc")
-                    if child and not any(x["url"] == child for x in checked):
-                        queue.append((child, depth + 1))
-                        child_count += 1
+                checked.append({
+                    "url": sitemap_url,
+                    "status": record.get("status"),
+                    "type": record.get("type", ""),
+                    "entries": len(record.get("entries") or ()),
+                    "error": record.get("error", ""),
+                })
 
-        except Exception as exc:
-            record["error"] = str(exc)
+                if record.get("status") != 200 or not record.get("type"):
+                    continue
+
+                accessible += 1
+                entries = record.get("entries") or ()
+
+                if record["type"] == "urlset":
+                    for loc, lastmod in entries:
+                        if normalise_url_for_sitemap(loc) == target:
+                            return {
+                                "found": True,
+                                "accessible": accessible,
+                                "checked": checked,
+                                "found_in": sitemap_url,
+                                "lastmod": lastmod or "",
+                                "child_count": child_count,
+                                "complete": True,
+                                "stopped_by_budget": False,
+                                "stopped_by_limit": False,
+                                "elapsed": time.time() - started,
+                            }
+
+                elif record["type"] == "index" and depth < max_depth:
+                    children = []
+                    for loc, _lastmod in entries:
+                        if loc and loc not in seen:
+                            children.append((loc, depth + 1))
+
+                    children.sort(
+                        key=lambda item: sitemap_priority(item[0], page_url),
+                        reverse=True,
+                    )
+                    next_frontier.extend(children)
+                    child_count += len(children)
+
+        # Keep unprocessed items from this level, then append newly discovered
+        # children. This avoids losing files while still checking likely ones first.
+        frontier = frontier + next_frontier
+
+    complete = not frontier and not stopped_by_budget and not stopped_by_limit
 
     return {
         "found": False,
@@ -1005,8 +1199,24 @@ def find_url_in_sitemaps(page_url, max_sitemaps=80, max_depth=3):
         "found_in": "",
         "lastmod": "",
         "child_count": child_count,
-        "complete": not queue,
+        "complete": complete,
+        "stopped_by_budget": stopped_by_budget,
+        "stopped_by_limit": stopped_by_limit,
+        "elapsed": time.time() - started,
     }
+
+def find_url_in_sitemaps(
+    page_url,
+    max_sitemaps=SITEMAP_MAX_FILES,
+    max_depth=SITEMAP_MAX_DEPTH,
+):
+    # Cache the completed sitemap result for 10 minutes.
+    return _find_url_in_sitemaps_cached(
+        page_url,
+        max_sitemaps,
+        max_depth,
+        cache_bucket(600),
+    )
 
 def parse_keywords(raw):
     """Parse comma/semicolon/newline/pipe-separated secondary keywords and de-duplicate them."""
@@ -1316,7 +1526,8 @@ def static_hidden_link_details(soup, base_url):
 
     return details
 
-def rendered_hidden_inventory(url):
+@lru_cache(maxsize=128)
+def _rendered_hidden_inventory_cached(url, _bucket):
     """
     Uses a real browser when Playwright and Chromium are available.
     It checks computed visibility on desktop and mobile. It also records
@@ -1582,8 +1793,8 @@ def rendered_hidden_inventory(url):
                     ignore_https_errors=True,
                 )
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(1200)
+                page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAV_TIMEOUT)
+                page.wait_for_timeout(PLAYWRIGHT_SETTLE_MS)
                 result[label] = page.evaluate(js)
                 context.close()
 
@@ -1596,6 +1807,10 @@ def rendered_hidden_inventory(url):
         result["mobile"] = []
 
     return result
+
+def rendered_hidden_inventory(url):
+    # Rendered visibility can change as the page changes, so cache only 5 minutes.
+    return _rendered_hidden_inventory_cached(url, cache_bucket(300))
 
 def _rendered_key(item):
     if item.get("id"):
@@ -2166,7 +2381,7 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
 # SEO audit
 # -----------------------------
 
-def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_keyword="", secondary_keywords=None):
+def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_keyword="", secondary_keywords=None, sitemap_result=None):
     rows = []
     rules = dict(SEO_RULES)
     secondary_keywords = secondary_keywords or []
@@ -2419,14 +2634,16 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     rows.append(result("datePublished", PASS if published else REVIEW, f"Schema datePublished: {published[:3] if published else 'not found'}", rules["datePublished"]))
     rows.append(result("dateModified", PASS if modified else REVIEW, f"Schema dateModified: {modified[:3] if modified else 'not found'}", rules["dateModified"]))
 
-    sitemap_result = find_url_in_sitemaps(desktop_r.url)
+    if sitemap_result is None:
+        sitemap_result = find_url_in_sitemaps(desktop_r.url)
 
     if sitemap_result["found"]:
         ss = PASS
         sf = (
             f"Preferred URL found in sitemap: {sitemap_result['found_in']}. "
             f"Sitemap files checked: {len(sitemap_result['checked'])}. "
-            f"Child sitemap references discovered: {sitemap_result['child_count']}."
+            f"Child sitemap references discovered: {sitemap_result['child_count']}. "
+            f"Sitemap stage time: {sitemap_result.get('elapsed', 0):.1f} seconds."
         )
         if sitemap_result.get("lastmod"):
             sf += f" Sitemap lastmod: {sitemap_result['lastmod']}."
@@ -2439,10 +2656,18 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
         )
     elif sitemap_result["accessible"] > 0:
         ss = REVIEW
+        if sitemap_result.get("stopped_by_budget"):
+            stop_reason = f"the {SITEMAP_TIME_BUDGET} second sitemap time budget was reached"
+        elif sitemap_result.get("stopped_by_limit"):
+            stop_reason = f"the {SITEMAP_MAX_FILES} sitemap file audit limit was reached"
+        else:
+            stop_reason = "the sitemap inspection could not process every discovered file"
+
         sf = (
-            f"Sitemap inspection reached the configured crawl limit before all sitemap files were processed. "
+            f"Sitemap inspection was incomplete because {stop_reason}. "
             f"Sitemap files checked: {len(sitemap_result['checked'])}. "
-            f"Child sitemap references discovered: {sitemap_result['child_count']}."
+            f"Child sitemap references discovered: {sitemap_result['child_count']}. "
+            f"Sitemap stage time: {sitemap_result.get('elapsed', 0):.1f} seconds."
         )
     else:
         ss = REVIEW
@@ -2862,6 +3087,10 @@ with secondary_col:
     st.markdown('<div class="field-help">Separate multiple keywords with commas.</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
+# This placeholder is intentionally above the Rule Library so long audits
+# always show visible progress instead of making the page appear frozen.
+audit_status_slot = st.empty()
+
 if show_rules:
     st.markdown('<div class="section-heading">Rule Library</div>', unsafe_allow_html=True)
     for label, rules in [("Spam", SPAM_RULES), ("SEO", SEO_RULES), ("Content", CONTENT_RULES)]:
@@ -2879,16 +3108,103 @@ if run:
         st.stop()
 
     try:
-        with st.spinner("Fetching the URL as desktop, mobile and crawler..."):
-            desktop_r, desktop_elapsed = fetch(url, UA_DESKTOP)
-            mobile_r, _ = fetch(url, UA_MOBILE)
-            bot_r, _ = fetch(url, UA_GOOGLEBOT)
-            soup = soup_of(desktop_r.text)
-            body_text = main_content_text(soup)
+        audit_started = time.time()
+        audit_status = audit_status_slot.status(
+            "Running URL audit",
+            expanded=True,
+        )
 
-        spam_rows = audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword, secondary_keywords)
-        seo_rows = audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_keyword, secondary_keywords)
-        content_rows = audit_content(url, soup, body_text, focus_keyword, secondary_keywords)
+        audit_status.write("1 of 4  Fetching Desktop, Mobile and Googlebot versions in parallel")
+        (
+            desktop_r,
+            desktop_elapsed,
+            mobile_r,
+            mobile_elapsed,
+            bot_r,
+            bot_elapsed,
+        ) = fetch_page_variants(url)
+
+        soup = soup_of(desktop_r.text)
+        body_text = main_content_text(soup)
+
+        # Separate read trees for parallel workers.
+        spam_soup = soup_of(desktop_r.text)
+        content_soup = soup_of(desktop_r.text)
+
+        audit_status.write(
+            f"Page variants fetched in parallel. "
+            f"Desktop {desktop_elapsed:.2f}s, Mobile {mobile_elapsed:.2f}s, Googlebot {bot_elapsed:.2f}s"
+        )
+
+        audit_status.write("2 of 4  Running Spam, Content and Sitemap checks in parallel")
+
+        parallel_results = {}
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(
+                    audit_spam,
+                    url,
+                    desktop_r,
+                    mobile_r,
+                    bot_r,
+                    spam_soup,
+                    body_text,
+                    focus_keyword,
+                    secondary_keywords,
+                ): "Spam",
+                executor.submit(
+                    audit_content,
+                    url,
+                    content_soup,
+                    body_text,
+                    focus_keyword,
+                    secondary_keywords,
+                ): "Content",
+                executor.submit(
+                    find_url_in_sitemaps,
+                    desktop_r.url,
+                    SITEMAP_MAX_FILES,
+                    SITEMAP_MAX_DEPTH,
+                ): "Sitemap",
+            }
+
+            for future in as_completed(futures):
+                label = futures[future]
+                parallel_results[label] = future.result()
+
+                if label == "Sitemap":
+                    sitemap_stage = parallel_results[label]
+                    audit_status.write(
+                        f"Sitemap check completed in {sitemap_stage.get('elapsed', 0):.1f}s "
+                        f"after checking {len(sitemap_stage.get('checked', []))} sitemap file(s)"
+                    )
+                else:
+                    audit_status.write(f"{label} checks completed")
+
+        spam_rows = parallel_results["Spam"]
+        content_rows = parallel_results["Content"]
+        sitemap_result = parallel_results["Sitemap"]
+
+        audit_status.write("3 of 4  Finalising SEO checks")
+        seo_rows = audit_seo(
+            url,
+            desktop_r,
+            desktop_elapsed,
+            mobile_r,
+            soup,
+            body_text,
+            focus_keyword,
+            secondary_keywords,
+            sitemap_result=sitemap_result,
+        )
+
+        total_audit_time = time.time() - audit_started
+        audit_status.write("4 of 4  Preparing results")
+        audit_status.update(
+            label=f"Audit completed in {total_audit_time:.1f} seconds",
+            state="complete",
+            expanded=False,
+        )
 
         # Internal rule outcomes are retained only for engine logic.
         # They are never shown to the user.
@@ -2945,7 +3261,8 @@ if run:
 
         st.caption(
             f"HTTP {desktop_r.status_code} · {word_count(body_text):,} extracted words · "
-            f"{desktop_elapsed:.2f}s server response · {len(desktop_r.history)} redirects"
+            f"{desktop_elapsed:.2f}s desktop response · {len(desktop_r.history)} redirects · "
+            f"{total_audit_time:.1f}s total audit time"
         )
 
         tabs = st.tabs([
@@ -3034,12 +3351,26 @@ if run:
                 Content word count and repetition thresholds are internal QA heuristics and are not Google thresholds.
 
                 Hidden content inspection uses a rendered Chromium browser when Playwright and Chromium are available. If Chromium is unavailable, the system falls back to static HTML inspection.
+
+                Network heavy checks are parallelised and cached. Sitemap inspection has a strict time and file budget so it cannot hold the interface indefinitely.
                 """
             )
 
     except requests.exceptions.RequestException as e:
+        if "audit_status" in locals():
+            audit_status.update(
+                label="Audit stopped because the URL request failed",
+                state="error",
+                expanded=True,
+            )
         st.error(f"Could not fetch the URL: {e}")
     except Exception as e:
+        if "audit_status" in locals():
+            audit_status.update(
+                label="Audit stopped because a check returned an error",
+                state="error",
+                expanded=True,
+            )
         st.exception(e)
 
 else:
