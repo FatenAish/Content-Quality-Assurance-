@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17.2 FINAL"
-ENGINE_BUILD = "2026.08.11.4"
+APP_VERSION = "V17.3 ACTIONABLE"
+ENGINE_BUILD = "2026.08.11.5"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -1595,12 +1595,127 @@ def keyword_summary(body_text, focus_keyword, secondary_keywords):
 def status_class(s):
     return {"PASS":"status-pass","REVIEW":"status-review","FAIL":"status-fail"}.get(s, "")
 
-def result(name, status, finding, rule):
+
+DEFAULT_ACTIONS = {
+    "Cloaking": "Serve the same primary editorial content and destination to normal users and Googlebot. Remove crawler specific SEO content or redirects.",
+    "Sneaky Redirect": "Remove deceptive or crawler specific redirects. Keep legitimate redirects consistent for users and crawlers.",
+    "Device Spam Redirect": "Use the same relevant destination and primary content for desktop and mobile users.",
+    "Hidden Text": "Make editorial text visible unless it is legitimately hidden for interface, responsive or accessibility reasons.",
+    "Hidden Links": "Remove deliberately concealed links. Keep hidden interface links only when their UI or accessibility purpose is clear.",
+    "Keyword Stuffing": "Reduce repeated query phrases that read unnaturally. Keep necessary location and entity names when editorially justified.",
+    "Scraped Content": "Run an external similarity check. If substantial text is copied or lightly rewritten, rewrite it and add original Bayut value, data or analysis.",
+    "Link Spam": "Remove or rewrite manipulative keyword rich links and repeated commercial anchor patterns. Keep editorial links relevant and natural.",
+    "Paid Links": "Mark identifiable paid or sponsored links with rel=sponsored or rel=nofollow, or remove the paid link.",
+    "Hacked Content": "Remove injected spam content, secure the CMS and plugins, rotate credentials and verify the clean page after remediation.",
+    "Spam JavaScript": "Review suspicious redirect or obfuscation scripts. Remove scripts that inject spam, links or deceptive redirects.",
+    "Spam Iframes": "Remove unauthorized or unexplained hidden iframes. Keep only legitimate embeds with a clear visible purpose.",
+    "Site Reputation Abuse": "Confirm the content is controlled and produced for Bayut users rather than third party content published mainly to exploit Bayut ranking signals. If ownership and purpose are legitimate, document that manual verification.",
+    "User Generated Spam": "Remove spam comments or profile links, strengthen moderation and apply appropriate UGC or nofollow treatment where needed.",
+    "Back Button Hijacking": "Remove browser history logic that traps users or forces redirects when they try to return to the previous page.",
+    "Malware / Scam Behaviour": "Remove malicious or deceptive scripts and downloads, secure the site and run a security review before republishing.",
+
+    "HTTP Status": "Make the preferred live article return HTTP 200. Fix 404 or 5xx responses and unnecessary redirect chains.",
+    "Indexability": "Remove unintended noindex from an article that should appear in search. Keep noindex only when it is intentional.",
+    "Robots": "Allow Googlebot to fetch the intended article in robots.txt and remove unintended restrictive page level robots directives.",
+    "Canonical": "Point the canonical to the correct preferred live URL and ensure that canonical target returns a successful response.",
+    "Title Tag": "Rewrite the title so it clearly represents the page topic without unnecessary repetition or verbosity.",
+    "Meta Description": "Add or rewrite a useful description that accurately represents the page. Exact Focus Keyword wording is not required.",
+    "H1": "Add one clear editorial H1 that accurately represents the page topic. Exact Focus Keyword matching is not required.",
+    "Heading Structure": "Fix empty, duplicated or skipped heading levels in the editorial article structure.",
+    "URL Structure": "Use a clean readable preferred URL and remove unnecessary or misleading parameters.",
+    "Internal Links": "Fix or replace each internal URL reported as broken, unreachable, restricted or server error.",
+    "External Links": "Fix, replace or remove each confirmed problematic external destination. Social platform anti bot responses do not need fixing by themselves.",
+    "Images": "For each meaningful image reported, add useful alt text or fix the broken image resource. Decorative images can use empty alt treatment.",
+    "Structured Data": "Fix JSON LD parsing or add a valid Article or BlogPosting object. Align schema headline and page identity with the visible article.",
+    "datePublished": "Add or correct the editorial publication date so schema and visible metadata agree.",
+    "dateModified": "Align editorial modification signals. Fix the backend HTTP Last Modified source if it changes without a real editorial update. Do not change schema dates only to match a server cache date.",
+    "Sitemap": "Ensure the preferred canonical URL is included in an accessible editorial sitemap and that the sitemap can be completed within the audit.",
+    "Mobile Content": "Restore any primary article content missing from mobile so desktop and mobile present materially equivalent information.",
+    "JavaScript Rendering": "Ensure important article content is present in initial HTML or reliably server rendered, not dependent on client JavaScript alone.",
+    "HTTPS": "Serve the preferred page and render resources over HTTPS and remove mixed HTTP resources.",
+    "Broken Resources": "Fix, replace or remove every reported broken image, CSS, font preload or JavaScript resource.",
+
+    "Search Intent": "Rewrite the article so it directly answers the search topic promised by the title, H1 and Focus Keyword meaning.",
+    "Content Relevance": "Remove unrelated sections or rewrite them so each H2 to H4 section clearly serves the page topic.",
+    "Thin Content": "Add useful information, data, examples, comparisons or guidance. Do not add filler simply to increase word count.",
+    "Original Value": "Add original Bayut value such as first party data, useful analysis, comparisons, tables, examples or practical guidance.",
+    "Factual Accuracy": "Verify the exact factual statements reported by the system against first party or authoritative sources and correct any value or statement that cannot be confirmed.",
+    "Outdated Information": "Refresh time sensitive prices, rents, ROI, fees, laws, routes or project status, then update the editorial modification date only after the content is actually updated.",
+    "Keyword Use": "Reduce unnatural repeated target phrases while keeping necessary topic and entity wording.",
+    "Repetition": "Remove or consolidate repeated sentences and paragraphs.",
+    "Generic / Filler Content": "Replace weak generic paragraphs with topic specific information, data, examples or useful guidance.",
+    "Title vs Content": "Align the title with what the article actually covers, or update the article so it fulfils the title.",
+    "H1 vs Content": "Align the H1 with the actual article body.",
+    "Heading Relevance": "Rename, remove or rewrite weak headings and their sections so they clearly belong to the main topic.",
+    "Introduction Quality": "Rewrite the opening so it establishes the main topic and user need quickly.",
+    "FAQ Quality": "Add complete useful answers, remove duplicate answers and keep FAQ questions relevant to the article topic.",
+    "Unsupported Superlatives": "For every objective ranking claim reported, add nearby attribution or a supporting source. Otherwise soften or remove the claim.",
+    "Source Quality": "Add an authoritative or first party source beside each important unsupported quantitative, ranking, regulatory or fee claim reported by the system.",
+    "Data Accuracy": "Correct the specific conflicting numeric statements reported so the same fact does not appear with different values.",
+    "Entity Accuracy": "Verify the exact entity names reported. Standardize possible typo variants to the official project, company, place or building name.",
+    "Grammar / Readability": "Rewrite the reported difficult or malformed sentences for clarity and readability.",
+    "Broken Content": "Remove placeholders, fill empty headings and remove duplicated unfinished content blocks.",
+}
+
+def suggested_source_for_claim(claim):
+    low = (claim or "").lower()
+
+    if any(term in low for term in [
+        "rent", "rental", "price", "aed", "roi", "yield",
+        "average rent", "average price",
+        "إيجار", "ايجار", "سعر", "أسعار", "اسعار", "عائد",
+    ]):
+        return "Bayut first party data or the approved internal property data source used for this article"
+
+    if any(term in low for term in [
+        "most popular", "most searched", "draws the most interest",
+        "ranked", "top spot", "الأكثر بحث", "الاكثر بحث",
+    ]):
+        return "Bayut first party search, views or demand data that supports the ranking"
+
+    if any(term in low for term in [
+        "developed by", "developer", "completed", "launched", "opened",
+        "المطور", "طورته", "اكتمل", "افتتح",
+    ]):
+        return "the developer official website or another authoritative first party project source"
+
+    if any(term in low for term in [
+        "minute", "minutes", "km", "kilomet", "distance",
+        "metro", "bus", "route", "دقيقة", "دقائق", "كيلومتر", "مترو", "حافلة",
+    ]):
+        return "an authoritative transport, map or official location source"
+
+    if any(term in low for term in [
+        "law", "regulation", "fee", "fees", "visa", "rule",
+        "قانون", "قوانين", "رسوم", "تأشيرة", "تاشيرة",
+    ]):
+        return "the relevant government or regulatory authority"
+
+    return "a first party or authoritative source that directly supports this statement"
+
+def compact_claim_action(claim, prefix="Verify"):
+    clean = re.sub(r"\s+", " ", claim or "").strip()
+    if len(clean) > 260:
+        clean = clean[:257].rstrip() + "..."
+    return f'{prefix}: "{clean}" | Needed source: {suggested_source_for_claim(clean)}'
+
+def action_for(name, status, specific_action=""):
+    if status == PASS:
+        return "No action required."
+    if specific_action:
+        return specific_action
+    return DEFAULT_ACTIONS.get(
+        name,
+        "Review the reported issue, correct the affected page element and rerun the audit."
+    )
+
+def result(name, status, finding, rule, action_needed=""):
     method = SYSTEM_USES.get(name, "Rule based page analysis")
     return {
         "Check": name,
         "Status": status,
         "Result": finding,
+        "Action Needed": action_for(name, status, action_needed),
         "Why": f"The system used {method}. The fixed rule applied is: {rule}",
         "_internal_status": status,
         "_rule": rule,
@@ -3844,8 +3959,9 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
     rows.append(result(
         "Scraped Content",
         REVIEW,
-        "A single URL fetch cannot prove external copying. External similarity or indexed-source comparison is required before PASS or FAIL.",
+        "The page itself does not prove whether the article is copied from another website. This check needs an external similarity or indexed source comparison.",
         rules["Scraped Content"],
+        "Run an external plagiarism or search comparison using several distinctive article sentences. If substantial matching text predates this page, rewrite the copied sections and add original Bayut data, analysis or guidance. If no substantial external match exists, this can be manually cleared.",
     ))
 
     article_soup = main_content_node(soup)
@@ -3990,8 +4106,9 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
     rows.append(result(
         "Site Reputation Abuse",
         REVIEW,
-        "A single URL can show topic and publisher signals, but ownership, third party production and ranking exploitation intent require site level editorial context.",
+        "The URL alone cannot prove who created or controls the content or whether a third party is using Bayut ranking signals.",
         rules["Site Reputation Abuse"],
+        "Confirm internally that Bayut editorial controls the article, the topic serves Bayut users, and it is not third party content published mainly to benefit from Bayut search authority. If those conditions are confirmed, record the check as manually cleared.",
     ))
 
     comment_nodes = soup.select(".comment, .comments, [id*='comment'], [class*='comment']")
@@ -4621,7 +4738,21 @@ def audit_seo(
             modified_status = REVIEW
             modified_notes.append("Visible modified date and schema dateModified differ by more than 24 hours.")
 
-    rows.append(result("dateModified", modified_status, " ".join(modified_notes), rules["dateModified"]))
+    if modified_status == REVIEW:
+        modified_action = (
+            "Check what generates the HTTP Last Modified header. If it changes because of cache, deployment, template regeneration or server behaviour rather than an editorial update, "
+            "fix the backend header logic or stop emitting a misleading Last Modified value. Keep schema dateModified and sitemap lastmod tied to real editorial changes."
+        )
+    else:
+        modified_action = ""
+
+    rows.append(result(
+        "dateModified",
+        modified_status,
+        " ".join(modified_notes),
+        rules["dateModified"],
+        modified_action,
+    ))
 
     if sitemap_result is None:
         sitemap_result = find_url_in_sitemaps(desktop_r.url)
@@ -4829,18 +4960,45 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
 
     claim_examples = factual_claim_examples(article_soup, url, limit=20)
     if claim_examples:
-        supported_claims = sum(1 for item in claim_examples if item.get("supported"))
+        supported_items = [item for item in claim_examples if item.get("supported")]
+        unsupported_items = [item for item in claim_examples if not item.get("supported")]
         factual_status = REVIEW
+
         factual_finding = (
-            f"{len(claim_examples)} concrete factual or numeric claim example(s) were extracted. "
-            f"{supported_claims} have nearby visible attribution or a source link. "
-            "External or first party verification is still required to confirm truth. Examples: "
-            + " | ".join(item["claim"] for item in claim_examples[:4])
+            f"{len(claim_examples)} concrete factual or numeric statement(s) were sampled. "
+            f"{len(supported_items)} have nearby visible attribution or a source link; "
+            f"{len(unsupported_items)} do not have nearby visible support. "
         )
+
+        if unsupported_items:
+            factual_finding += (
+                "Unsupported examples: "
+                + " | ".join(item["claim"] for item in unsupported_items[:6])
+                + "."
+            )
+        else:
+            factual_finding += (
+                "All sampled statements have a nearby source or attribution, but the system still requires external or first party verification before confirming factual truth."
+            )
+
+        factual_actions = []
+        targets = unsupported_items if unsupported_items else claim_examples[:6]
+        for item in targets[:8]:
+            factual_actions.append(compact_claim_action(item["claim"]))
+
+        factual_action = " || ".join(factual_actions)
     else:
         factual_status = PASS
-        factual_finding = "No high confidence factual or numeric claim was extracted that requires separate verification."
-    rows.append(result("Factual Accuracy", factual_status, factual_finding, rules["Factual Accuracy"]))
+        factual_finding = "No high confidence factual or numeric statement was extracted that requires separate verification."
+        factual_action = ""
+
+    rows.append(result(
+        "Factual Accuracy",
+        factual_status,
+        factual_finding,
+        rules["Factual Accuracy"],
+        factual_action,
+    ))
 
     year_contexts = contextual_old_years(body_text)
     risky_years = [item for item in year_contexts if item["sensitive"]]
@@ -4906,7 +5064,24 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
                 else ""
             )
         )
-    rows.append(result("Outdated Information", od, odf, rules["Outdated Information"]))
+    if od == REVIEW:
+        if time_sensitive:
+            outdated_action = (
+                "Refresh the current time sensitive data in this article: prices, rents, ROI, fees, routes and project status wherever present. "
+                "Use the current approved Bayut or authoritative source, then update dateModified only after the article content is actually changed."
+            )
+        else:
+            outdated_action = "Review the old year references shown in Result and either update the current claim or make the historical context explicit."
+    else:
+        outdated_action = ""
+
+    rows.append(result(
+        "Outdated Information",
+        od,
+        odf,
+        rules["Outdated Information"],
+        outdated_action,
+    ))
 
     kw_assessment = keyword_repetition_assessment(
         body_text,
@@ -5126,7 +5301,27 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
                 f" {len(unsupported_soft)} editorial soft superlative wording instance(s), such as best, "
                 "were treated as editorial framing rather than automatically unsupported factual claims."
             )
-    rows.append(result("Unsupported Superlatives", ss, sf, rules["Unsupported Superlatives"]))
+    if unsupported_hard:
+        super_actions = []
+        for item in unsupported_hard[:8]:
+            claim_text = item["text"]
+            super_actions.append(
+                compact_claim_action(
+                    claim_text,
+                    prefix="Support or rewrite"
+                )
+            )
+        super_action = " || ".join(super_actions)
+    else:
+        super_action = ""
+
+    rows.append(result(
+        "Unsupported Superlatives",
+        ss,
+        sf,
+        rules["Unsupported Superlatives"],
+        super_action,
+    ))
 
     source_claims = factual_claim_examples(article_soup, url, limit=40)
     supported = [item for item in source_claims if item.get("supported")]
@@ -5145,27 +5340,47 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
 
     if regulatory_unsourced:
         sq = REVIEW
+        source_targets = regulatory_unsourced
         sf = (
-            f"{len(source_claims)} concrete source sensitive claim(s) assessed; "
+            f"{len(source_claims)} concrete source sensitive statement(s) assessed; "
             f"{len(supported)} have nearby attribution or source links. "
-            f"{len(regulatory_unsourced)} regulatory or fee claim(s) lack visible support. "
-            "Examples: " + " | ".join(item["claim"] for item in regulatory_unsourced[:3])
+            f"{len(regulatory_unsourced)} regulatory or fee statement(s) lack visible support. "
+            "Unsupported examples: " + " | ".join(item["claim"] for item in source_targets[:6])
         )
     elif len(source_claims) >= 4 and support_ratio < .35:
         sq = REVIEW
+        source_targets = unsupported
         sf = (
-            f"{len(source_claims)} concrete source sensitive claim(s) assessed; only {len(supported)} "
+            f"{len(source_claims)} concrete source sensitive statement(s) assessed; only {len(supported)} "
             f"({support_ratio:.0%}) have nearby attribution or source links. "
-            "Review sourcing for important quantitative claims."
+            f"{len(unsupported)} statement(s) need stronger local sourcing. "
+            "Unsupported examples: " + " | ".join(item["claim"] for item in source_targets[:6])
         )
     else:
         sq = PASS
+        source_targets = []
         sf = (
-            f"{len(source_claims)} concrete source sensitive claim(s) assessed; {len(supported)} "
-            f"({support_ratio:.0%} if claims exist) have nearby visible attribution or source links. "
-            "Source Quality is based on claim level support, not raw external link count."
+            f"{len(source_claims)} concrete source sensitive statement(s) assessed; {len(supported)} "
+            f"({support_ratio:.0%} if statements exist) have nearby visible attribution or source links. "
+            "Source Quality is based on statement level support, not raw external link count."
         )
-    rows.append(result("Source Quality", sq, sf, rules["Source Quality"]))
+
+    if sq == REVIEW:
+        source_actions = [
+            compact_claim_action(item["claim"], prefix="Add source beside")
+            for item in source_targets[:10]
+        ]
+        source_action = " || ".join(source_actions)
+    else:
+        source_action = ""
+
+    rows.append(result(
+        "Source Quality",
+        sq,
+        sf,
+        rules["Source Quality"],
+        source_action,
+    ))
 
     conflicts = numeric_statement_conflicts(article_soup)
     percents = re.findall(r"\b\d+(?:\.\d+)?%", body_text)
@@ -5174,7 +5389,14 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         data_finding = (
             f"{len(conflicts)} possible internal numeric contradiction(s) were detected where substantially the same statement "
             "appears with different values. Examples: "
-            + " | ".join(item["statement"] for item in conflicts[:4])
+            + " | ".join(
+                f"{item['statement']} | previous values {item['previous_values']} | current values {item['current_values']}"
+                for item in conflicts[:5]
+            )
+        )
+        data_action = " || ".join(
+            f"Check and correct: {item['statement']} | choose the verified value between previous {item['previous_values']} and current {item['current_values']}."
+            for item in conflicts[:8]
         )
     else:
         data_status = PASS
@@ -5183,7 +5405,15 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             f"{len(percents)} percentage reference(s) were found. "
             "This checks internal consistency only; external data verification remains part of Factual Accuracy."
         )
-    rows.append(result("Data Accuracy", data_status, data_finding, rules["Data Accuracy"]))
+        data_action = ""
+
+    rows.append(result(
+        "Data Accuracy",
+        data_status,
+        data_finding,
+        rules["Data Accuracy"],
+        data_action,
+    ))
 
     entities = entity_candidates(article_soup)
     near_duplicates = near_duplicate_entities(entities)
@@ -5219,7 +5449,29 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     else:
         entity_status = PASS
         entity_finding = "No clear named entity candidate requiring separate verification was extracted."
-    rows.append(result("Entity Accuracy", entity_status, entity_finding, rules["Entity Accuracy"]))
+    if entity_status == REVIEW:
+        entity_actions = []
+        if near_duplicates:
+            for item in near_duplicates[:8]:
+                entity_actions.append(
+                    f"Verify official name and standardize this pair: {item['left']} vs {item['right']}."
+                )
+        else:
+            for entity in entities[:10]:
+                entity_actions.append(
+                    f"Verify official first party name: {entity}."
+                )
+        entity_action = " || ".join(entity_actions)
+    else:
+        entity_action = ""
+
+    rows.append(result(
+        "Entity Accuracy",
+        entity_status,
+        entity_finding,
+        rules["Entity Accuracy"],
+        entity_action,
+    ))
 
     sentences = re.split(r"(?<=[.!?؟])\s+", body_text)
     lens = [len(tokenize(s)) for s in sentences if len(tokenize(s)) >= 3]
@@ -5624,7 +5876,7 @@ if run:
             <div style="margin-top:18px;margin-bottom:8px;">
               <div style="font-size:22px;font-weight:800;">Audit Results</div>
               <div style="font-size:13px;color:#66736F;margin-top:4px;">
-                Each rule shows its status, the result found and why the system reached that result.
+                Each rule shows its status, exactly what was found, the action you need to take, and why the system reached that result.
               </div>
             </div>
             """,
@@ -5685,6 +5937,7 @@ if run:
                         "Check": row["Check"],
                         "Status": row["Status"],
                         "Result": row["Result"],
+                        "Action Needed": row["Action Needed"],
                         "Why": row["Why"],
                     }
                     for row in rows
@@ -5710,6 +5963,7 @@ if run:
                         "Check": st.column_config.TextColumn(width="medium"),
                         "Status": st.column_config.TextColumn(width="small"),
                         "Result": st.column_config.TextColumn(width="large"),
+                        "Action Needed": st.column_config.TextColumn(width="large"),
                         "Why": st.column_config.TextColumn(width="large"),
                     },
                 )
@@ -5739,7 +5993,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_2_final.json",
+            file_name="url_audit_v17_3_actionable.json",
             mime="application/json",
         )
 
