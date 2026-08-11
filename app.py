@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17.4 INTERNAL CONTENT"
-ENGINE_BUILD = "2026.08.11.6"
+APP_VERSION = "V17.6 IGNORE TRUBROKER"
+ENGINE_BUILD = "2026.08.11.8"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -480,9 +480,9 @@ SEO_RULES = [
     ("H1", "PASS when one clear H1 exists and it represents the Focus Keyword meaning or the page topic. Exact phrase matching is not required. REVIEW multiple H1 elements or a weak semantic relationship. FAIL when the H1 is missing or clearly unrelated."),
     ("Heading Structure", "Evaluate the editorial heading hierarchy rather than navigation or sidebar headings. REVIEW empty headings, heavy duplication or clear heading level jumps."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
-    ("Internal Links", "Inspect only internal hyperlinks inside the isolated article content. Exclude header, footer, sidebar, navigation and external links. PASS when internal destinations resolve, anchors contain useful text and no obvious spammy anchor pattern is detected. REVIEW broken destinations, empty or generic anchors, over optimised anchors or anchors that appear poorly matched to the linked page."),
+    ("Internal Links", "Inspect hyperlinks only inside the isolated article content. Result shows only the exact link when there is an issue: external instead of internal, confirmed broken destination, empty or generic anchor, spammy or over optimised anchor, or anchor text that appears poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
-    ("Images", "Separate meaningful article images from decorative images. Decorative images do not require descriptive alt text. REVIEW meaningful images with missing or empty alt treatment or broken image resources."),
+    ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
     ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
     ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
     ("dateModified", "Compare schema dateModified with visible update metadata, sitemap lastmod and HTTP Last Modified when available. PASS when signals are consistent. REVIEW missing dates or material freshness inconsistencies. HTTP Last Modified mismatch is treated as a technical inconsistency, not a spam violation."),
@@ -544,9 +544,9 @@ SYSTEM_USES = {
     "H1": "Full page H1 elements including article header H1, H1 count, Focus Keyword exact match, semantic concept overlap and article topic relationship",
     "Heading Structure": "Primary page H1 plus isolated editorial H2 through H6 headings, empty headings, duplicate headings and hierarchy level jumps",
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
-    "Internal Links": "Only hyperlinks inside the isolated article content, same domain validation, resolved destination URL, HTTP response code, anchor text presence, generic or spammy anchor detection and anchor to destination slug relevance",
+    "Internal Links": "Only hyperlinks inside the isolated article content, same domain classification, confirmed broken response detection, anchor text presence, generic or spammy anchor detection and anchor to destination slug relevance. Automated HTTP 401, 403 and 429 responses are ignored as broken-link signals",
     "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
-    "Images": "Isolated article images, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
+    "Images": "Isolated article images, known TruBroker asset exclusion, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
     "Structured Data": "JSON LD parsing, Article BlogPosting or NewsArticle type detection, schema headline, schema URL and mainEntityOfPage comparison with the visible preferred page",
     "datePublished": "Schema datePublished, article published metadata, visible time elements and date consistency comparison",
     "dateModified": "Schema dateModified, article modified metadata, visible time elements, sitemap lastmod, HTTP Last Modified and date consistency comparison",
@@ -2623,14 +2623,11 @@ SPAMMY_ANCHOR_TERMS = {
 
 def content_internal_link_inventory(article_soup, base_url):
     """
-    Inspect only hyperlinks inside the isolated article body.
+    Inspect hyperlinks only inside the isolated article body.
 
-    Each candidate is evaluated for:
-    1. Internal destination on the same host.
-    2. Non-empty, useful anchor text.
-    3. Anchor text that is not obviously spammy or manipulative.
-    4. Anchor-to-URL slug relationship as a relevance signal.
-    5. HTTP availability of the destination.
+    Only actual issues are surfaced:
+    external instead of internal, confirmed broken destination,
+    empty/generic/spammy anchor, or weak anchor-to-destination relevance.
     """
     base_host = urlparse(base_url).netloc.lower().replace("www.", "")
     inventory = []
@@ -2642,9 +2639,7 @@ def content_internal_link_inventory(article_soup, base_url):
 
         parsed = urlparse(href)
         host = parsed.netloc.lower().replace("www.", "")
-        if host != base_host:
-            # External links are not part of Internal Links.
-            continue
+        is_internal = host == base_host
 
         anchor_text = re.sub(
             r"\s+",
@@ -2669,7 +2664,10 @@ def content_internal_link_inventory(article_soup, base_url):
 
         slug_text = " ".join(
             token
-            for token in re.findall(r"[a-zA-Z0-9]+", parsed.path.replace("-", " "))
+            for token in re.findall(
+                r"[a-zA-Z0-9]+",
+                parsed.path.replace("-", " "),
+            )
             if len(token) > 2
         )
 
@@ -2684,17 +2682,21 @@ def content_internal_link_inventory(article_soup, base_url):
         inventory.append({
             "url": href,
             "anchor_text": anchor_text,
+            "is_internal": is_internal,
             "empty_anchor": empty_anchor,
             "generic_anchor": generic_anchor,
             "suspicious_anchor": suspicious_anchor,
             "anchor_slug_overlap": anchor_slug_overlap,
         })
 
-    # Remove exact duplicate URL + anchor pairs.
     unique = []
     seen = set()
+
     for item in inventory:
-        key = (item["url"], item["anchor_text"].casefold())
+        key = (
+            item["url"],
+            item["anchor_text"].casefold(),
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -2713,52 +2715,82 @@ def content_internal_link_urls(article_soup, base_url):
     return unique_http_urls([
         item["url"]
         for item in content_internal_link_inventory(article_soup, base_url)
+        if item.get("is_internal")
     ])
 
-def internal_link_action_text(inventory, validation):
+def internal_link_issues(inventory, validation):
+    """
+    Return only confirmed or editorially actionable content-link issues.
+
+    HTTP 401, 403 and 429 are not treated as broken because automated
+    validation may be restricted while the user-facing URL still works.
+    """
     validation_by_url = {
         item.get("url"): item
         for item in validation.get("checked", [])
     }
 
-    actions = []
+    issues = []
 
     for item in inventory:
-        problems = []
+        reasons = []
+
+        if not item.get("is_internal"):
+            reasons.append("External link inside article content")
+        else:
+            checked = validation_by_url.get(item["url"])
+            if checked:
+                status = checked.get("status")
+
+                if status in {404, 410}:
+                    reasons.append(f"Broken internal link HTTP {status}")
+                elif status is not None and status >= 500:
+                    reasons.append(f"Internal destination server error HTTP {status}")
+                elif status is None:
+                    reasons.append("Internal destination could not be reached")
+
+                # 401, 403 and 429 are intentionally ignored here.
 
         if item["empty_anchor"]:
-            problems.append("add descriptive anchor text")
+            reasons.append("Empty anchor text")
         elif item["generic_anchor"]:
-            problems.append("replace generic anchor text with descriptive text")
+            reasons.append("Generic anchor text")
         elif item["suspicious_anchor"]:
-            problems.append("rewrite spammy or over-optimised anchor text")
+            reasons.append("Spammy or over optimised anchor text")
 
-        checked = validation_by_url.get(item["url"])
-        if checked:
-            status = checked.get("status")
-            if status is None:
-                problems.append("fix unreachable destination")
-            elif status >= 500:
-                problems.append(f"fix server error HTTP {status}")
-            elif status >= 400:
-                problems.append(f"fix broken or restricted destination HTTP {status}")
-
-        # Low anchor/slug overlap is only a review signal when the anchor has
-        # enough words to be meaningfully assessed.
         if (
             item["anchor_text"]
             and len(tokenize(item["anchor_text"])) >= 2
             and item["anchor_slug_overlap"] < 0.12
         ):
-            problems.append("check that the anchor text accurately describes the linked page")
-
-        if problems:
-            actions.append(
-                f'Anchor "{item["anchor_text"] or "(empty)"}" → {item["url"]}: '
-                + "; ".join(problems)
+            reasons.append(
+                f'Anchor text may not match destination: "{item["anchor_text"]}"'
             )
 
-    return actions
+        if reasons:
+            issues.append({
+                "url": item["url"],
+                "reasons": reasons,
+            })
+
+    return issues
+
+def internal_link_issue_text(issues, limit=20):
+    if not issues:
+        return "No internal linking issues found inside the article content."
+
+    lines = []
+    for item in issues[:limit]:
+        lines.append(
+            f'{item["url"]} | Issue: {", ".join(item["reasons"])}'
+        )
+
+    if len(issues) > limit:
+        lines.append(
+            f"{len(issues) - limit} additional issue(s) not shown."
+        )
+
+    return "\n".join(lines)
 
 def extract_page_links(soup, base_url):
     parsed = urlparse(base_url)
@@ -3035,6 +3067,31 @@ def _robots_access_cached(page_url, _bucket):
 def robots_access_result(page_url):
     return _robots_access_cached(page_url, cache_bucket(600))
 
+
+def image_should_be_ignored(node, base_url=""):
+    """
+    Ignore known Bayut TruBroker promotional/interface assets from the
+    article image quality audit.
+
+    This covers English and Arabic variants, mobile and desktop, because
+    matching is based on 'trubroker' in the resolved image URL/file name.
+    """
+    src = image_source_url(node, base_url) if base_url else (
+        node.get("src")
+        or node.get("data-src")
+        or node.get("data-lazy-src")
+        or node.get("data-original")
+        or ""
+    )
+
+    low = str(src).lower()
+
+    return (
+        "trubroker" in low
+        or "tru-broker" in low
+        or "tru_broker" in low
+    )
+
 def image_is_decorative(node):
     role = (node.get("role") or "").lower()
     aria_hidden = (node.get("aria-hidden") or "").lower()
@@ -3089,6 +3146,12 @@ def meaningful_image_inventory(soup, base_url, resource_validation=None):
 
     for node in article.find_all("img"):
         src = image_source_url(node, base_url)
+
+        # Known Bayut TruBroker promotional/interface images are excluded
+        # entirely from the editorial image quality check.
+        if image_should_be_ignored(node, base_url):
+            continue
+
         alt_present = node.has_attr("alt")
         alt_value = (node.get("alt") or "").strip()
 
@@ -4640,9 +4703,11 @@ def audit_seo(
         article_soup,
         desktop_r.url,
     )
+
     content_internal_urls = unique_http_urls([
         item["url"]
         for item in content_link_inventory
+        if item.get("is_internal")
     ])
 
     if internal_validation is None:
@@ -4652,61 +4717,17 @@ def audit_seo(
             workers=INTERNAL_LINK_CHECK_WORKERS,
         )
 
-    link_actions = internal_link_action_text(
+    internal_issues = internal_link_issues(
         content_link_inventory,
         internal_validation,
     )
 
-    broken_count = len(internal_validation.get("broken", []))
-    server_error_count = len(internal_validation.get("server_errors", []))
-    restricted_count = len(internal_validation.get("restricted", []))
-    unreachable_count = len(internal_validation.get("unreachable", []))
+    internal_status = REVIEW if internal_issues else PASS
+    internal_finding = internal_link_issue_text(internal_issues)
 
-    empty_anchor_count = sum(
-        1 for item in content_link_inventory if item["empty_anchor"]
-    )
-    spam_anchor_count = sum(
-        1 for item in content_link_inventory if item["suspicious_anchor"]
-    )
-    weak_anchor_count = sum(
-        1
-        for item in content_link_inventory
-        if item["anchor_text"]
-        and len(tokenize(item["anchor_text"])) >= 2
-        and item["anchor_slug_overlap"] < 0.12
-    )
-
-    if not content_link_inventory:
-        internal_status = REVIEW
-        internal_finding = (
-            "No internal hyperlink was found inside the isolated article content. "
-            "Header, footer, sidebar, navigation and external links are excluded from this check."
-        )
-        internal_action = (
-            "Review whether the article should contain useful contextual internal links to relevant Bayut content. "
-            "If internal links are intentionally not needed, this can be manually cleared."
-        )
-    elif link_actions:
-        internal_status = REVIEW
-        internal_finding = (
-            f"{len(content_link_inventory)} internal hyperlink instance(s) were found inside the article content, "
-            f"covering {len(content_internal_urls)} unique internal destination(s). "
-            f"{len(internal_validation.get('working', []))} destination(s) resolved successfully. "
-            f"Issues: {broken_count} broken, {server_error_count} server error, "
-            f"{restricted_count} restricted, {unreachable_count} unreachable, "
-            f"{empty_anchor_count} empty anchor, {spam_anchor_count} spammy or generic anchor, "
-            f"{weak_anchor_count} anchor(s) with weak relationship to the destination slug."
-        )
-        internal_action = " || ".join(link_actions[:12])
+    if internal_issues:
+        internal_action = "Fix only the links listed in Result."
     else:
-        internal_status = PASS
-        internal_finding = (
-            f"{len(content_link_inventory)} internal hyperlink instance(s) were checked inside the isolated article content, "
-            f"covering {len(content_internal_urls)} unique internal destination(s). "
-            "All checked destinations resolved without a confirmed broken response, "
-            "all anchors contain usable text, and no obvious spammy anchor pattern was detected. "
-            "Header, footer, sidebar, navigation and external links are excluded."
-        )
         internal_action = ""
 
     rows.append(result(
@@ -4764,21 +4785,42 @@ def audit_seo(
         desktop_r.url,
         resource_validation=resource_validation,
     )
+
     if image_inventory["issues"]:
         image_status = REVIEW
-        image_finding = (
-            f"{len(image_inventory['meaningful'])} meaningful article image(s) and "
-            f"{len(image_inventory['decorative'])} decorative image(s) were classified. "
-            f"Issues: {'; '.join(image_inventory['issues'][:6])}."
-        )
+
+        simple_image_issues = []
+        for issue in image_inventory["issues"][:10]:
+            cleaned = issue
+
+            if issue.startswith("Meaningful image has empty alt text: "):
+                url_value = issue.split(": ", 1)[1]
+                cleaned = f"{url_value} | Issue: Empty alt text"
+
+            elif issue.startswith("Meaningful image missing alt attribute: "):
+                url_value = issue.split(": ", 1)[1]
+                cleaned = f"{url_value} | Issue: Missing alt attribute"
+
+            elif issue.startswith("Meaningful image resource problem: "):
+                rest = issue.split(": ", 1)[1]
+                cleaned = f"{rest} | Issue: Broken image resource"
+
+            simple_image_issues.append(cleaned)
+
+        image_finding = "\n".join(simple_image_issues)
+        image_action = "Fix only the images listed in Result."
     else:
         image_status = PASS
-        image_finding = (
-            f"{len(image_inventory['meaningful'])} meaningful article image(s) checked for alt treatment and "
-            f"{len(image_inventory['decorative'])} decorative image(s) excluded from meaningful alt requirements. "
-            "No meaningful-image alt or resource issue was detected."
-        )
-    rows.append(result("Images", image_status, image_finding, rules["Images"]))
+        image_finding = "No image issues found inside the article content."
+        image_action = ""
+
+    rows.append(result(
+        "Images",
+        image_status,
+        image_finding,
+        rules["Images"],
+        image_action,
+    ))
 
     jsonld, json_errors = parse_jsonld(soup)
     article_objects = article_schema_objects(jsonld)
@@ -6167,7 +6209,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_4_internal_content.json",
+            file_name="url_audit_v17_6_ignore_trubroker.json",
             mime="application/json",
         )
 
