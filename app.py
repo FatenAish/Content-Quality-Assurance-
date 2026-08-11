@@ -3,6 +3,8 @@ import re
 import json
 import time
 import html as html_lib
+import gzip
+import xml.etree.ElementTree as ET
 from collections import Counter
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse
@@ -405,7 +407,7 @@ SPAM_RULES = [
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
     ("Hidden Links", "Inspect the exact link and the reason it is hidden. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Deliberately concealed links intended to manipulate rankings should FAIL."),
-    ("Keyword Stuffing", "FAIL when keywords, locations or query phrases are repeated unnaturally for rankings."),
+    ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
     ("Scraped Content", "FAIL when substantial external content is copied or lightly transformed with little original value. Requires external comparison."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
@@ -425,7 +427,7 @@ SEO_RULES = [
     ("Canonical", "PASS when a valid canonical points to the correct preferred URL."),
     ("Title Tag", "Google does not define a fixed character limit. PASS when the title exists, clearly describes the page, represents the Focus Keyword or its meaning, and is not repetitive or stuffed. Length is an internal quality signal only. Titles from 30 to 70 characters are generally concise. Titles from 71 to 80 characters do not receive REVIEW from length alone. Titles above 80 characters receive REVIEW for possible verbosity. Very short titles receive REVIEW only when they are too vague or weakly related to the page."),
     ("Meta Description", "PASS when a useful, relevant meta description exists."),
-    ("H1", "PASS when a clear relevant H1 exists."),
+    ("H1", "PASS when one clear H1 exists and it represents the Focus Keyword meaning or the page topic. Exact phrase matching is not required. REVIEW multiple H1 elements or a weak semantic relationship. FAIL when the H1 is missing or clearly unrelated."),
     ("Heading Structure", "REVIEW when headings are empty, highly repetitive, or structurally confusing."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
     ("Internal Links", "REVIEW/FAIL when important crawlable internal links are broken."),
@@ -434,7 +436,7 @@ SEO_RULES = [
     ("Structured Data", "PASS when JSON LD is parseable and represents visible page content; REVIEW invalid/missing data where expected."),
     ("datePublished", "PASS when a valid publication date is present where the article schema provides it."),
     ("dateModified", "REVIEW when the modification date is missing, malformed, or inconsistent with visible metadata."),
-    ("Sitemap", "PASS when the preferred URL is present in an accessible sitemap where expected."),
+    ("Sitemap", "Follow sitemap indexes and child sitemaps before deciding the result. PASS when the preferred canonical URL is found in an accessible sitemap. REVIEW when sitemap files are accessible but the preferred URL is not found after child sitemap inspection, or when sitemap inspection cannot be completed."),
     ("Mobile Content", "REVIEW/FAIL when mobile receives materially less main content than desktop."),
     ("JavaScript Rendering", "REVIEW when the initial HTML contains very little article text and depends heavily on scripts."),
     ("HTTPS", "PASS when the preferred page uses HTTPS."),
@@ -448,12 +450,12 @@ CONTENT_RULES = [
     ("Original Value", "PASS when the page adds useful data, examples, analysis or first hand value. External/site comparison may be required."),
     ("Factual Accuracy", "FAIL confirmed false claims; REVIEW claims that require source verification."),
     ("Outdated Information", "REVIEW when time sensitive claims appear stale or reference old years without context."),
-    ("Keyword Use", "PASS when important terms are used naturally; FAIL obvious unnatural repetition."),
+    ("Keyword Use", "Evaluate Focus Keyword and Secondary Keyword use in context. Exact matching is not required for every secondary phrase. Repetition of the primary topic or named entity is allowed when editorially necessary. PASS natural use, REVIEW unusually repetitive wording, FAIL clearly manipulative repetition."),
     ("Repetition", "REVIEW/FAIL when sentences or paragraphs are unnecessarily repeated."),
     ("Generic / Filler Content", "REVIEW when a high share of text adds little topic specific information."),
     ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
-    ("Heading Relevance", "REVIEW when multiple headings have weak topical relation to the title/H1."),
+    ("Heading Relevance", "Evaluate each heading together with the section it introduces. A project, building, place or entity heading can be relevant even without repeating the Focus Keyword. PASS when headings or their section content are semantically related to the main topic. REVIEW when multiple sections remain weakly related after contextual analysis."),
     ("Introduction Quality", "PASS when the opening quickly establishes the promised topic."),
     ("FAQ Quality", "REVIEW when FAQ answers are empty, extremely short, repetitive or unrelated."),
     ("Unsupported Superlatives", "REVIEW claims such as best, cheapest, highest, most popular when no evidence/source is apparent."),
@@ -472,7 +474,7 @@ SYSTEM_USES = {
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
     "Hidden Links": "Rendered DOM when available, computed CSS, desktop and mobile visibility, link URL, anchor text, element and parent context, interface controls, accessibility attributes and hiding reason classification",
-    "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase count, N gram frequency, repetition density",
+    "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
     "Scraped Content": "Current URL content plus external comparison requirement. The current version marks this for review when outside comparison is needed",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Paid Links": "External links, surrounding text, sponsored and affiliate terms, rel sponsored attribute, rel nofollow attribute",
@@ -491,7 +493,7 @@ SYSTEM_USES = {
     "Canonical": "Canonical link element, canonical destination, current final URL, URL path comparison",
     "Title Tag": "HTML title element, character count as an advisory signal, Focus Keyword exact or semantic term overlap, title to article topic overlap, repeated title terms",
     "Meta Description": "Meta description element, description length, Focus Keyword presence",
-    "H1": "H1 elements, H1 count, H1 text, Focus Keyword presence",
+    "H1": "H1 elements, H1 count, H1 text, Focus Keyword exact match, semantic concept overlap and article topic relationship",
     "Heading Structure": "H1 through H6 elements, empty heading count, repeated heading count, heading order",
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
     "Internal Links": "Anchor elements, resolved link URLs, current domain, internal domain comparison",
@@ -500,7 +502,7 @@ SYSTEM_USES = {
     "Structured Data": "JSON LD script elements, JSON parser, schema object extraction, parsing errors",
     "datePublished": "Parsed JSON LD, datePublished property",
     "dateModified": "Parsed JSON LD, dateModified property",
-    "Sitemap": "Common sitemap locations, HTTP requests, sitemap response, audited URL lookup",
+    "Sitemap": "robots.txt sitemap declarations, common sitemap locations, sitemap XML parsing, sitemap index detection, recursive child sitemap requests, preferred URL lookup and lastmod extraction",
     "Mobile Content": "Desktop User Agent, Mobile User Agent, extracted main content, text similarity",
     "JavaScript Rendering": "Extracted article word count, script count, initial HTML content availability",
     "HTTPS": "Final URL scheme and HTTPS detection",
@@ -508,17 +510,17 @@ SYSTEM_USES = {
 
     # Content
     "Search Intent": "Focus Keyword when provided, otherwise title and H1, article body, topic keyword overlap",
-    "Content Relevance": "Focus Keyword or main topic, H2 through H4 headings, heading topic overlap",
+    "Content Relevance": "Focus Keyword or main topic, H2 through H4 headings, semantic heading overlap and the section text introduced by each heading",
     "Thin Content": "Main content extraction and meaningful article word count",
     "Original Value": "Main content word count, tables, lists, numeric references, useful information signals",
     "Factual Accuracy": "Claims found in the article plus external verification requirement. The current version marks unverified facts for review",
     "Outdated Information": "Years in the article, time sensitive terms, prices, rent, ROI, fees, laws, projects and other freshness signals",
-    "Keyword Use": "Focus Keyword, Secondary Keywords, exact phrase count, N gram frequency, keyword frequency in the article",
+    "Keyword Use": "Focus Keyword, Secondary Keywords, exact phrase counts, semantic topic representation, repetition per 1,000 words, N gram frequency and primary topic phrase detection",
     "Repetition": "Normalised sentences, normalised paragraphs, duplicate counts, repetition ratio",
     "Generic / Filler Content": "Substantial paragraphs, Focus Keyword or main topic, paragraph topic overlap",
     "Title vs Content": "HTML title text, main article body, topic keyword overlap",
     "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
-    "Heading Relevance": "Focus Keyword or main topic, H2 through H4 headings, topic similarity",
+    "Heading Relevance": "Focus Keyword or main topic, H2 through H4 headings, semantic concept overlap, section text following each heading and contextual topic relevance",
     "Introduction Quality": "First section of the article, approximately the first 140 words, Focus Keyword or main topic, topic overlap",
     "FAQ Quality": "FAQ like headings, question marks, question text length, repeated or weak question patterns",
     "Unsupported Superlatives": "Superlative terms such as best, cheapest and most popular, external source link presence",
@@ -627,6 +629,384 @@ def keyword_overlap(a, b):
     if not aa:
         return 0.0
     return len(aa & bb) / len(aa)
+
+
+SEMANTIC_CONCEPTS = {
+    # Real estate and housing concepts
+    "property": {
+        "property", "properties", "apartment", "apartments", "flat", "flats",
+        "villa", "villas", "townhouse", "townhouses", "house", "houses",
+        "home", "homes", "residence", "residences", "unit", "units",
+        "عقار", "عقارات", "شقة", "شقق", "فيلا", "فلل", "منزل", "منازل",
+        "وحدة", "وحدات", "سكن", "سكنية"
+    },
+    "rent": {
+        "rent", "rents", "rental", "rentals", "renting", "lease", "leasing",
+        "إيجار", "ايجار", "استئجار", "للإيجار", "للايجار", "تأجير", "تاجير"
+    },
+    "sale": {
+        "sale", "sales", "sell", "selling", "buy", "buying", "purchase",
+        "بيع", "للبيع", "شراء", "للشراء"
+    },
+    "price": {
+        "price", "prices", "cost", "costs", "rate", "rates",
+        "سعر", "أسعار", "اسعار", "تكلفة", "تكاليف"
+    },
+    "location": {
+        "area", "areas", "community", "communities", "neighbourhood",
+        "neighborhood", "district", "location", "locations",
+        "منطقة", "مناطق", "مجمع", "أحياء", "احياء", "حي", "موقع"
+    },
+    "popular": {
+        "popular", "top", "best", "preferred", "favourite", "favorite",
+        "الأكثر", "الاكثر", "أفضل", "افضل", "شهرة", "شعبية"
+    },
+}
+
+SEMANTIC_TOKEN_MAP = {}
+for _concept, _terms in SEMANTIC_CONCEPTS.items():
+    for _term in _terms:
+        SEMANTIC_TOKEN_MAP[_term.casefold()] = _concept
+
+SEMANTIC_STOP_WORDS = {
+    "the","and","for","with","from","this","that","your","you","are","our",
+    "in","on","of","to","a","an","is","can","where","what","which","how",
+    "في","من","على","إلى","الى","عن","هذا","هذه","مع","و","أو","او","ما",
+    "هو","هي","التي","الذي","أين","اين","كيف","يمكن"
+}
+
+def semantic_tokens(text):
+    out = []
+    for token in tokenize(text):
+        token = token.casefold()
+        if len(token) <= 2 or token in SEMANTIC_STOP_WORDS:
+            continue
+
+        # Light English plural normalization for terms not already in the map.
+        canonical = SEMANTIC_TOKEN_MAP.get(token)
+        if canonical:
+            out.append(canonical)
+            continue
+
+        if token.endswith("ies") and len(token) > 5:
+            token = token[:-3] + "y"
+        elif token.endswith("s") and len(token) > 4 and not token.endswith("ss"):
+            token = token[:-1]
+
+        out.append(SEMANTIC_TOKEN_MAP.get(token, token))
+    return out
+
+def semantic_overlap(a, b):
+    """
+    Lightweight semantic concept overlap.
+    This intentionally does not require a large language model or embedding package.
+    It normalises common concepts and then measures how much of A is represented in B.
+    """
+    aa = set(semantic_tokens(a))
+    bb = set(semantic_tokens(b))
+    if not aa:
+        return 0.0
+    return len(aa & bb) / len(aa)
+
+def main_content_node(soup):
+    candidates = []
+    for selector in ["article", "main", "[role='main']", ".entry-content", ".post-content", ".article-content", ".content"]:
+        for node in soup.select(selector):
+            t = clean_text(node)
+            if len(t) > 200:
+                candidates.append((len(t), node))
+    if candidates:
+        return max(candidates, key=lambda x: x[0])[1]
+    return soup.body or soup
+
+def heading_sections(soup):
+    """
+    Return H2 to H4 headings with the text that follows each heading until the next H2 to H4.
+    This lets a heading such as a building name be judged by the section it introduces.
+    """
+    container = main_content_node(soup)
+    headings = container.find_all(re.compile(r"^h[2-4]$"))
+    output = []
+
+    for heading in headings:
+        heading_text = heading.get_text(" ", strip=True)
+        if not heading_text:
+            continue
+
+        parts = []
+        for node in heading.find_all_next():
+            if node is heading:
+                continue
+            if node.name and re.match(r"^h[2-4]$", node.name):
+                break
+            if node.name in {"p", "li", "td", "th", "figcaption"}:
+                value = node.get_text(" ", strip=True)
+                if value:
+                    parts.append(value)
+            if sum(len(x) for x in parts) >= 1200:
+                break
+
+        output.append({
+            "heading": heading_text,
+            "section": " ".join(parts)[:1600],
+        })
+
+    return output
+
+def primary_topic_phrase(gram, title, h1, focus_keyword, url):
+    """
+    Treat a repeated phrase as a primary topic phrase when it is strongly represented
+    in the page identity itself. This prevents location/entity names from being treated
+    as keyword stuffing by frequency alone.
+    """
+    gram = (gram or "").strip().lower()
+    if not gram:
+        return False, []
+
+    evidence = []
+    if phrase_count(title, gram):
+        evidence.append("Title")
+    if phrase_count(h1, gram):
+        evidence.append("H1")
+    if focus_keyword and phrase_count(focus_keyword, gram):
+        evidence.append("Focus Keyword")
+
+    path_words = " ".join(tokenize(urlparse(url).path.replace("-", " ")))
+    if phrase_count(path_words, gram):
+        evidence.append("URL")
+
+    # Require at least two independent page identity signals.
+    return len(evidence) >= 2, evidence
+
+def keyword_repetition_assessment(body_text, focus_keyword, secondary_keywords, title="", h1="", url=""):
+    wc = max(1, word_count(body_text))
+    gram, density, count = top_ngram_density(body_text, 2)
+    is_primary_topic, topic_evidence = primary_topic_phrase(gram, title, h1, focus_keyword, url)
+
+    target_rows = []
+    strongest_per_1000 = 0.0
+    strongest_keyword = ""
+    for kw in ([focus_keyword] if focus_keyword else []) + list(secondary_keywords or []):
+        exact = phrase_count(body_text, kw)
+        per_1000 = exact * 1000 / wc
+        target_rows.append((kw, exact, per_1000))
+        if per_1000 > strongest_per_1000:
+            strongest_per_1000 = per_1000
+            strongest_keyword = kw
+
+    status = PASS
+    reasons = []
+
+    # Exact multiword query repetition is the strongest signal.
+    if strongest_per_1000 >= 25:
+        status = FAIL
+        reasons.append(
+            f"Target phrase '{strongest_keyword}' appears {strongest_per_1000:.1f} times per 1,000 words."
+        )
+    elif strongest_per_1000 >= 15:
+        status = REVIEW
+        reasons.append(
+            f"Target phrase '{strongest_keyword}' appears {strongest_per_1000:.1f} times per 1,000 words and should be reviewed for natural wording."
+        )
+
+    # N gram density only matters when the phrase is not clearly the page's primary entity/topic.
+    if not is_primary_topic:
+        if count >= 20 and density >= 0.035:
+            status = FAIL
+            reasons.append(
+                f"The repeated phrase '{gram}' is not identified as the primary page topic and represents {density:.1%} of two word phrases."
+            )
+        elif count >= 12 and density >= 0.022 and status == PASS:
+            status = REVIEW
+            reasons.append(
+                f"The repeated phrase '{gram}' is not identified as the primary page topic and represents {density:.1%} of two word phrases."
+            )
+    elif count:
+        reasons.append(
+            f"The repeated phrase '{gram}' is treated as a primary topic or entity phrase because it appears in {', '.join(topic_evidence)}. Its frequency alone does not trigger REVIEW."
+        )
+
+    if not reasons:
+        reasons.append("No unusually repetitive target phrase pattern was detected.")
+
+    return {
+        "status": status,
+        "gram": gram,
+        "density": density,
+        "count": count,
+        "primary_topic": is_primary_topic,
+        "topic_evidence": topic_evidence,
+        "targets": target_rows,
+        "reason": " ".join(reasons),
+    }
+
+def normalise_url_for_sitemap(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    scheme = parsed.scheme.lower()
+    host = parsed.netloc.lower()
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+    return f"{scheme}://{host}{path}"
+
+def sitemap_xml_root(response):
+    content = response.content or b""
+    if not content:
+        return None
+
+    # A .gz sitemap can be a gzip file even when the HTTP response is not using Content Encoding.
+    if content[:2] == b"\x1f\x8b":
+        try:
+            content = gzip.decompress(content)
+        except Exception:
+            return None
+
+    if len(content) > 12_000_000:
+        return None
+
+    try:
+        return ET.fromstring(content)
+    except Exception:
+        return None
+
+def xml_local_name(tag):
+    return str(tag).split("}")[-1].lower()
+
+def parse_sitemap_document(response):
+    root = sitemap_xml_root(response)
+    if root is None:
+        return None, []
+
+    root_type = xml_local_name(root.tag)
+    entries = []
+
+    if root_type == "sitemapindex":
+        for item in list(root):
+            loc = ""
+            lastmod = ""
+            for child in list(item):
+                name = xml_local_name(child.tag)
+                if name == "loc":
+                    loc = (child.text or "").strip()
+                elif name == "lastmod":
+                    lastmod = (child.text or "").strip()
+            if loc:
+                entries.append({"loc": loc, "lastmod": lastmod})
+        return "index", entries
+
+    if root_type == "urlset":
+        for item in list(root):
+            loc = ""
+            lastmod = ""
+            for child in list(item):
+                name = xml_local_name(child.tag)
+                if name == "loc":
+                    loc = (child.text or "").strip()
+                elif name == "lastmod":
+                    lastmod = (child.text or "").strip()
+            if loc:
+                entries.append({"loc": loc, "lastmod": lastmod})
+        return "urlset", entries
+
+    return None, []
+
+def robots_sitemaps(origin):
+    found = []
+    try:
+        rr = requests.get(urljoin(origin, "/robots.txt"), headers=UA_DESKTOP, timeout=8)
+        if rr.status_code == 200:
+            for line in rr.text.splitlines():
+                if line.lower().strip().startswith("sitemap:"):
+                    value = line.split(":", 1)[1].strip()
+                    if value.startswith(("http://", "https://")):
+                        found.append(value)
+    except Exception:
+        pass
+    return found
+
+def find_url_in_sitemaps(page_url, max_sitemaps=80, max_depth=3):
+    """
+    Follow sitemap indexes recursively and search child sitemaps.
+    Returns details that can be shown directly in the audit.
+    """
+    parsed = urlparse(page_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    target = normalise_url_for_sitemap(page_url)
+
+    seeds = robots_sitemaps(origin)
+    seeds += [
+        urljoin(origin, "/sitemap.xml"),
+        urljoin(origin, "/sitemap_index.xml"),
+    ]
+
+    queue = []
+    seen_seed = set()
+    for seed in seeds:
+        if seed and seed not in seen_seed:
+            seen_seed.add(seed)
+            queue.append((seed, 0))
+
+    checked = []
+    accessible = 0
+    child_count = 0
+
+    while queue and len(checked) < max_sitemaps:
+        sitemap_url, depth = queue.pop(0)
+        if any(x["url"] == sitemap_url for x in checked):
+            continue
+
+        record = {"url": sitemap_url, "status": None, "type": "", "entries": 0}
+        checked.append(record)
+
+        try:
+            rr = requests.get(sitemap_url, headers=UA_DESKTOP, timeout=10)
+            record["status"] = rr.status_code
+            if rr.status_code != 200:
+                continue
+
+            doc_type, entries = parse_sitemap_document(rr)
+            if not doc_type:
+                continue
+
+            accessible += 1
+            record["type"] = doc_type
+            record["entries"] = len(entries)
+
+            if doc_type == "urlset":
+                for entry in entries:
+                    if normalise_url_for_sitemap(entry["loc"]) == target:
+                        return {
+                            "found": True,
+                            "accessible": accessible,
+                            "checked": checked,
+                            "found_in": sitemap_url,
+                            "lastmod": entry.get("lastmod") or "",
+                            "child_count": child_count,
+                            "complete": True,
+                        }
+
+            elif doc_type == "index" and depth < max_depth:
+                for entry in entries:
+                    child = entry.get("loc")
+                    if child and not any(x["url"] == child for x in checked):
+                        queue.append((child, depth + 1))
+                        child_count += 1
+
+        except Exception as exc:
+            record["error"] = str(exc)
+
+    return {
+        "found": False,
+        "accessible": accessible,
+        "checked": checked,
+        "found_in": "",
+        "lastmod": "",
+        "child_count": child_count,
+        "complete": not queue,
+    }
 
 def parse_keywords(raw):
     """Parse comma/semicolon/newline/pipe-separated secondary keywords and de-duplicate them."""
@@ -1658,18 +2038,32 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
             rules["Hidden Links"]
         ))
 
-    gram, density, count = top_ngram_density(body_text, 2)
-    if count >= 20 and density >= 0.035:
-        kstatus = FAIL
-    elif count >= 12 and density >= 0.022:
-        kstatus = REVIEW
-    else:
-        kstatus = PASS
-    target_counts = keyword_summary(body_text, focus_keyword, secondary_keywords)
+    title_for_kw = title_text(soup)
+    h1_for_kw = first_h1(soup)
+    kw_assessment = keyword_repetition_assessment(
+        body_text,
+        focus_keyword,
+        secondary_keywords,
+        title=title_for_kw,
+        h1=h1_for_kw,
+        url=url,
+    )
     target_note = ""
-    if target_counts:
-        target_note = " Target keywords — " + "; ".join(f"{kw}: {n}" for kw, n in target_counts[:12]) + "."
-    rows.append(result("Keyword Stuffing", kstatus, f"Most repeated 2-word phrase: “{gram}” — {count} uses ({density:.1%} of bigrams).{target_note}", rules["Keyword Stuffing"]))
+    if kw_assessment["targets"]:
+        target_note = " Target phrases: " + "; ".join(
+            f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
+            for kw, exact, per_1000 in kw_assessment["targets"][:12]
+        ) + "."
+    rows.append(
+        result(
+            "Keyword Stuffing",
+            kw_assessment["status"],
+            f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
+            f"({kw_assessment['density']:.1%} of two word phrases). "
+            f"{kw_assessment['reason']}{target_note}",
+            rules["Keyword Stuffing"],
+        )
+    )
 
     rows.append(result("Scraped Content", REVIEW, "A single fetched URL cannot prove external copying. Run an external similarity/search comparison before marking PASS/FAIL.", rules["Scraped Content"]))
 
@@ -1923,18 +2317,54 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     meta_kw_note = f" | Focus keyword {'found' if focus_in_meta else 'not found'}" if focus_keyword else ""
     rows.append(result("Meta Description", md, f"{ml} characters{': ' + meta[:180] if meta else ' — missing'}{meta_kw_note}", rules["Meta Description"]))
 
-    h1s = [h.get_text(" ", strip=True) for h in soup.find_all("h1") if h.get_text(" ", strip=True)]
-    if len(h1s) == 1:
-        h1_status = PASS
-    elif len(h1s) == 0:
+    content_node = main_content_node(soup)
+    h1s = [
+        h.get_text(" ", strip=True)
+        for h in content_node.find_all("h1")
+        if h.get_text(" ", strip=True)
+    ]
+
+    if len(h1s) == 0:
         h1_status = FAIL
+        h1_finding = "No H1 was found in the main content."
     else:
-        h1_status = REVIEW
-    focus_in_h1 = keyword_in_text(focus_keyword, h1s[0]) if focus_keyword and h1s else (not focus_keyword)
-    if focus_keyword and h1s and not focus_in_h1 and h1_status == PASS:
-        h1_status = REVIEW
-    h1_kw_note = f" | Focus keyword {'found' if focus_in_h1 else 'not found'}" if focus_keyword else ""
-    rows.append(result("H1", h1_status, f"{len(h1s)} H1(s) found" + (f": {h1s[0]}" if h1s else "") + h1_kw_note, rules["H1"]))
+        h1_text = h1s[0]
+        h1_status = PASS if len(h1s) == 1 else REVIEW
+
+        if focus_keyword:
+            h1_exact = phrase_count(h1_text, focus_keyword) > 0
+            h1_semantic = semantic_overlap(focus_keyword, h1_text)
+            h1_page_topic = semantic_overlap(h1_text, body_text)
+
+            if h1_exact:
+                relation_note = "The Focus Keyword is directly represented."
+            elif h1_semantic >= 0.60:
+                relation_note = f"The Focus Keyword meaning is represented semantically at {h1_semantic:.0%} concept overlap."
+            elif h1_page_topic >= 0.60:
+                relation_note = (
+                    f"Exact Focus Keyword wording is not present, but the H1 strongly represents the article topic "
+                    f"at {h1_page_topic:.0%} concept overlap."
+                )
+            else:
+                h1_status = REVIEW
+                relation_note = (
+                    f"The H1 has weak semantic representation of the Focus Keyword "
+                    f"({h1_semantic:.0%}) and the article topic ({h1_page_topic:.0%})."
+                )
+        else:
+            h1_page_topic = semantic_overlap(h1_text, body_text)
+            if h1_page_topic < 0.45:
+                h1_status = REVIEW
+            relation_note = f"H1 to article semantic concept overlap is {h1_page_topic:.0%}."
+
+        count_note = (
+            "One H1 was found."
+            if len(h1s) == 1
+            else f"{len(h1s)} H1 elements were found, so the structure should be reviewed."
+        )
+        h1_finding = f"{count_note} H1: {h1_text}. {relation_note}"
+
+    rows.append(result("H1", h1_status, h1_finding, rules["H1"]))
 
     headings = []
     empty_headings = 0
@@ -1989,32 +2419,38 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     rows.append(result("datePublished", PASS if published else REVIEW, f"Schema datePublished: {published[:3] if published else 'not found'}", rules["datePublished"]))
     rows.append(result("dateModified", PASS if modified else REVIEW, f"Schema dateModified: {modified[:3] if modified else 'not found'}", rules["dateModified"]))
 
-    # Sitemap check: lightweight, only common endpoints and only when response is reasonably sized.
-    sitemap_found = False
-    sitemap_contains = False
-    checked = []
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    candidates = [urljoin(origin, "/sitemap.xml"), urljoin(origin, "/sitemap_index.xml")]
-    for sm in candidates:
-        try:
-            rr = requests.get(sm, headers=UA_DESKTOP, timeout=8)
-            checked.append((sm, rr.status_code))
-            if rr.status_code == 200 and len(rr.content) < 8_000_000:
-                sitemap_found = True
-                if desktop_r.url.rstrip("/") in rr.text:
-                    sitemap_contains = True
-                    break
-        except Exception:
-            pass
-    if sitemap_contains:
+    sitemap_result = find_url_in_sitemaps(desktop_r.url)
+
+    if sitemap_result["found"]:
         ss = PASS
-        sf = "Preferred URL found in a common sitemap endpoint."
-    elif sitemap_found:
+        sf = (
+            f"Preferred URL found in sitemap: {sitemap_result['found_in']}. "
+            f"Sitemap files checked: {len(sitemap_result['checked'])}. "
+            f"Child sitemap references discovered: {sitemap_result['child_count']}."
+        )
+        if sitemap_result.get("lastmod"):
+            sf += f" Sitemap lastmod: {sitemap_result['lastmod']}."
+    elif sitemap_result["accessible"] > 0 and sitemap_result["complete"]:
         ss = REVIEW
-        sf = "Sitemap found, but URL was not found in the fetched top-level sitemap. It may be in a child sitemap."
+        sf = (
+            f"Accessible sitemap files were fully inspected but the preferred URL was not found. "
+            f"Sitemap files checked: {len(sitemap_result['checked'])}. "
+            f"Child sitemap references discovered: {sitemap_result['child_count']}."
+        )
+    elif sitemap_result["accessible"] > 0:
+        ss = REVIEW
+        sf = (
+            f"Sitemap inspection reached the configured crawl limit before all sitemap files were processed. "
+            f"Sitemap files checked: {len(sitemap_result['checked'])}. "
+            f"Child sitemap references discovered: {sitemap_result['child_count']}."
+        )
     else:
         ss = REVIEW
-        sf = "Common sitemap endpoints were not confirmed in this lightweight check."
+        sf = (
+            f"No accessible XML sitemap could be confirmed from robots.txt or the common sitemap locations. "
+            f"Endpoints attempted: {len(sitemap_result['checked'])}."
+        )
+
     rows.append(result("Sitemap", ss, sf, rules["Sitemap"]))
 
     mobile_text = main_content_text(soup_of(mobile_r.text))
@@ -2066,10 +2502,29 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     intent_label = f"focus keyword ‘{focus_keyword}’" if focus_keyword else "title topic"
     rows.append(result("Search Intent", s, f"{intent_overlap:.0%} of meaningful {intent_label} terms are represented in the page text.", rules["Search Intent"]))
 
-    headings = [h.get_text(" ", strip=True) for h in soup.find_all(re.compile(r"^h[2-4]$")) if h.get_text(" ", strip=True)]
-    weak = [h for h in headings if keyword_overlap(target_topic, h) < .10 and len(tokenize(h)) >= 3]
-    rel_status = REVIEW if headings and len(weak)/len(headings) > .45 else PASS
-    rows.append(result("Content Relevance", rel_status, f"{len(weak)} of {len(headings)} H2-H4 headings have very weak lexical overlap with the main topic.", rules["Content Relevance"]))
+    content_sections = heading_sections(soup)
+    headings = [item["heading"] for item in content_sections]
+
+    weak_sections = []
+    for item in content_sections:
+        heading_score = semantic_overlap(target_topic, item["heading"])
+        section_score = semantic_overlap(target_topic, item["section"]) if item["section"] else 0.0
+        if heading_score < 0.20 and section_score < 0.35:
+            weak_sections.append(item["heading"])
+
+    if content_sections:
+        weak_share = len(weak_sections) / len(content_sections)
+        rel_status = FAIL if weak_share > 0.65 else REVIEW if weak_share > 0.45 else PASS
+        rel_finding = (
+            f"{len(weak_sections)} of {len(content_sections)} H2 to H4 sections remain weakly related after checking both heading meaning and section context."
+        )
+        if weak_sections:
+            rel_finding += " Weak sections: " + "; ".join(weak_sections[:6]) + "."
+    else:
+        rel_status = PASS
+        rel_finding = "No H2 to H4 sections were available for section level relevance analysis."
+
+    rows.append(result("Content Relevance", rel_status, rel_finding, rules["Content Relevance"]))
 
     thin_status = PASS if wc >= 600 else REVIEW if wc >= 300 else FAIL
     rows.append(result("Thin Content", thin_status, f"{wc:,} extracted meaningful words.", rules["Thin Content"]))
@@ -2098,31 +2553,37 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         odf = "No obvious stale-year signal found by the lightweight rule."
     rows.append(result("Outdated Information", od, odf, rules["Outdated Information"]))
 
-    gram, density, count = top_ngram_density(body_text, 2)
-    if count >= 20 and density >= .035:
-        ku = FAIL
-    elif count >= 12 and density >= .022:
-        ku = REVIEW
-    else:
-        ku = PASS
-    kw_notes = []
+    kw_assessment = keyword_repetition_assessment(
+        body_text,
+        focus_keyword,
+        secondary_keywords,
+        title=title,
+        h1=h1,
+        url=url,
+    )
+
+    semantic_note = ""
     if focus_keyword:
-        fc = phrase_count(body_text, focus_keyword)
-        per_1000 = (fc * 1000 / max(1, wc))
-        kw_notes.append(f"Focus ‘{focus_keyword}’: {fc} exact use(s), {per_1000:.1f}/1,000 words")
-        if fc == 0 and ku == PASS:
-            ku = REVIEW
-        # Internal heuristic only; multi-word exact repetition is more meaningful than one-word frequency.
-        if len(tokenize(focus_keyword)) >= 2:
-            if per_1000 >= 40:
-                ku = FAIL
-            elif per_1000 >= 25 and ku == PASS:
-                ku = REVIEW
-    if secondary_keywords:
-        sec_counts = [(kw, phrase_count(body_text, kw)) for kw in secondary_keywords]
-        kw_notes.append("Secondary — " + "; ".join(f"{kw}: {n}" for kw, n in sec_counts[:12]))
-    extra_kw = " | " + " | ".join(kw_notes) if kw_notes else ""
-    rows.append(result("Keyword Use", ku, f"Top repeated phrase: “{gram}” — {count} uses ({density:.1%}).{extra_kw}", rules["Keyword Use"]))
+        focus_semantic = semantic_overlap(focus_keyword, body_text)
+        semantic_note = f" Focus Keyword concept coverage in the article is {focus_semantic:.0%}."
+
+    target_note = ""
+    if kw_assessment["targets"]:
+        target_note = " Target phrase use: " + "; ".join(
+            f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
+            for kw, exact, per_1000 in kw_assessment["targets"][:12]
+        ) + "."
+
+    rows.append(
+        result(
+            "Keyword Use",
+            kw_assessment["status"],
+            f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
+            f"({kw_assessment['density']:.1%}). {kw_assessment['reason']}"
+            f"{semantic_note}{target_note}",
+            rules["Keyword Use"],
+        )
+    )
 
     sent_ratio, repeated_sents = repeated_sentence_ratio(body_text)
     para_ratio, repeated_paras = repeated_paragraph_ratio(soup)
@@ -2151,14 +2612,48 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     hc = keyword_overlap(h1, body_text) if h1 else 0
     rows.append(result("H1 vs Content", PASS if h1 and hc >= .55 else REVIEW if h1 else FAIL, f"H1-to-body topic overlap: {hc:.0%}." if h1 else "H1 missing.", rules["H1 vs Content"]))
 
-    if headings:
-        relevant = sum(1 for h in headings if keyword_overlap(target_topic, h) >= .10)
-        hr = relevant / len(headings)
-        hstatus = PASS if hr >= .55 else REVIEW
-        hfind = f"{relevant}/{len(headings)} H2-H4 headings show direct lexical relation to the main topic."
+    section_items = heading_sections(soup)
+
+    if section_items:
+        relevant = 0
+        contextual = 0
+        weak_examples = []
+        detail_examples = []
+
+        for item in section_items:
+            heading_score = semantic_overlap(target_topic, item["heading"])
+            section_score = semantic_overlap(target_topic, item["section"]) if item["section"] else 0.0
+
+            # A heading can be an entity name. Its section can establish the connection.
+            is_relevant = heading_score >= 0.20 or section_score >= 0.45
+            if is_relevant:
+                relevant += 1
+                if heading_score < 0.20 and section_score >= 0.45:
+                    contextual += 1
+                    if len(detail_examples) < 4:
+                        detail_examples.append(
+                            f"'{item['heading']}' has low direct heading overlap but its section is contextually related at {section_score:.0%}."
+                        )
+            elif len(weak_examples) < 5:
+                weak_examples.append(
+                    f"'{item['heading']}' heading overlap {heading_score:.0%}, section overlap {section_score:.0%}"
+                )
+
+        hr = relevant / len(section_items)
+        hstatus = PASS if hr >= 0.70 else REVIEW if hr >= 0.45 else FAIL
+
+        hfind = (
+            f"{relevant}/{len(section_items)} H2 to H4 sections are related to the main topic after semantic heading and section context analysis. "
+            f"{contextual} section(s) were accepted through contextual section relevance even though the heading itself had low direct overlap."
+        )
+        if detail_examples:
+            hfind += " Context examples: " + " ".join(detail_examples)
+        if weak_examples:
+            hfind += " Weakest sections: " + "; ".join(weak_examples) + "."
     else:
         hstatus = REVIEW
-        hfind = "No H2-H4 headings available for relevance assessment."
+        hfind = "No H2 to H4 headings were available in the main content for contextual relevance assessment."
+
     rows.append(result("Heading Relevance", hstatus, hfind, rules["Heading Relevance"]))
 
     intro_words = " ".join(tokenize(body_text)[:140])
