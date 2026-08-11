@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17.6 IGNORE TRUBROKER"
-ENGINE_BUILD = "2026.08.11.8"
+APP_VERSION = "V17.7 BODY LINKS ONLY"
+ENGINE_BUILD = "2026.08.11.9"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -480,7 +480,7 @@ SEO_RULES = [
     ("H1", "PASS when one clear H1 exists and it represents the Focus Keyword meaning or the page topic. Exact phrase matching is not required. REVIEW multiple H1 elements or a weak semantic relationship. FAIL when the H1 is missing or clearly unrelated."),
     ("Heading Structure", "Evaluate the editorial heading hierarchy rather than navigation or sidebar headings. REVIEW empty headings, heavy duplication or clear heading level jumps."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
-    ("Internal Links", "Inspect hyperlinks only inside the isolated article content. Result shows only the exact link when there is an issue: external instead of internal, confirmed broken destination, empty or generic anchor, spammy or over optimised anchor, or anchor text that appears poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
+    ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, confirmed broken internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
     ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
     ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
@@ -544,7 +544,7 @@ SYSTEM_USES = {
     "H1": "Full page H1 elements including article header H1, H1 count, Focus Keyword exact match, semantic concept overlap and article topic relationship",
     "Heading Structure": "Primary page H1 plus isolated editorial H2 through H6 headings, empty headings, duplicate headings and hierarchy level jumps",
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
-    "Internal Links": "Only hyperlinks inside the isolated article content, same domain classification, confirmed broken response detection, anchor text presence, generic or spammy anchor detection and anchor to destination slug relevance. Automated HTTP 401, 403 and 429 responses are ignored as broken-link signals",
+    "Internal Links": "Only inline editorial text hyperlinks inside paragraph, list and table text in the isolated article body; non-editorial cards, banners, CTA, image links, social sharing and widgets are excluded before same-domain validation, HTTP checks and anchor relevance analysis",
     "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
     "Images": "Isolated article images, known TruBroker asset exclusion, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
     "Structured Data": "JSON LD parsing, Article BlogPosting or NewsArticle type detection, schema headline, schema URL and mainEntityOfPage comparison with the visible preferred page",
@@ -2621,20 +2621,113 @@ SPAMMY_ANCHOR_TERMS = {
     "اضغط هنا", "اقرأ المزيد", "المزيد",
 }
 
+BODY_LINK_EXCLUDE_PATTERNS = [
+    "share", "sharing", "social", "facebook", "twitter", "linkedin",
+    "whatsapp", "pinterest", "google-news", "google_source",
+    "banner", "advert", "ad-", "promo", "promotion",
+    "property-card", "listing-card", "property-listing", "listing",
+    "recommended", "related", "widget", "sidebar",
+    "agent", "broker-card", "find-agent", "find_an_agent",
+    "cta", "button", "btn", "carousel", "slider",
+    "author", "comment", "newsletter", "subscribe",
+]
+
+BODY_LINK_EXCLUDE_HREF_PATTERNS = [
+    "facebook.com/share",
+    "twitter.com/intent",
+    "linkedin.com/cws/share",
+    "linkedin.com/share",
+    "google.com/preferences/source",
+    "/brokers/?utm_source=organic",
+    "/property/details-",
+]
+
+def body_link_has_excluded_container(anchor):
+    """
+    Exclude links that visually live inside non-editorial modules even when
+    those modules are nested inside the article content container.
+    """
+    node = anchor
+
+    while node is not None:
+        if getattr(node, "name", None) in {
+            "nav", "aside", "footer", "form", "button",
+        }:
+            return True
+
+        attrs = " ".join([
+            str(node.get("id") or ""),
+            " ".join(node.get("class") or []),
+            str(node.get("role") or ""),
+        ]).casefold()
+
+        if any(pattern in attrs for pattern in BODY_LINK_EXCLUDE_PATTERNS):
+            return True
+
+        node = getattr(node, "parent", None)
+
+    return False
+
+def is_inline_editorial_anchor(anchor):
+    """
+    A body link must be an actual text hyperlink inside editorial copy.
+
+    Accepted parent content:
+    paragraph, list item or table text.
+
+    Excluded:
+    image links, cards, banners, buttons, social sharing, agent CTA,
+    property listing modules and other widgets.
+    """
+    if body_link_has_excluded_container(anchor):
+        return False
+
+    if anchor.find("img") is not None:
+        return False
+
+    # Must live inside actual editorial text, not only inside a generic div.
+    textual_parent = anchor.find_parent(["p", "li", "td", "th"])
+    if textual_parent is None:
+        return False
+
+    anchor_text = re.sub(
+        r"\s+",
+        " ",
+        anchor.get_text(" ", strip=True),
+    ).strip()
+
+    if not anchor_text:
+        return False
+
+    href = str(anchor.get("href") or "").casefold()
+    if any(pattern in href for pattern in BODY_LINK_EXCLUDE_HREF_PATTERNS):
+        return False
+
+    return True
+
 def content_internal_link_inventory(article_soup, base_url):
     """
-    Inspect hyperlinks only inside the isolated article body.
+    Inspect only real inline editorial hyperlinks inside the article copy.
 
-    Only actual issues are surfaced:
-    external instead of internal, confirmed broken destination,
-    empty/generic/spammy anchor, or weak anchor-to-destination relevance.
+    Not included:
+    banners, property cards, Find An Agent CTA, social share links,
+    image links, broker modules, widgets, related content and other
+    non-editorial elements that happen to sit inside the article container.
     """
     base_host = urlparse(base_url).netloc.lower().replace("www.", "")
+    base_identity = normalized_destination(base_url)
     inventory = []
 
     for anchor in article_soup.find_all("a", href=True):
+        if not is_inline_editorial_anchor(anchor):
+            continue
+
         href = normalized_link_url(anchor.get("href"), base_url)
         if not href:
+            continue
+
+        # Self links are not useful editorial internal-link candidates.
+        if normalized_destination(href) == base_identity:
             continue
 
         parsed = urlparse(href)
@@ -2650,7 +2743,6 @@ def content_internal_link_inventory(article_soup, base_url):
         low_anchor = anchor_text.casefold()
         anchor_words = tokenize(anchor_text)
 
-        empty_anchor = not anchor_text
         generic_anchor = low_anchor in SPAMMY_ANCHOR_TERMS
 
         suspicious_anchor = (
@@ -2683,7 +2775,7 @@ def content_internal_link_inventory(article_soup, base_url):
             "url": href,
             "anchor_text": anchor_text,
             "is_internal": is_internal,
-            "empty_anchor": empty_anchor,
+            "empty_anchor": False,
             "generic_anchor": generic_anchor,
             "suspicious_anchor": suspicious_anchor,
             "anchor_slug_overlap": anchor_slug_overlap,
@@ -2720,10 +2812,10 @@ def content_internal_link_urls(article_soup, base_url):
 
 def internal_link_issues(inventory, validation):
     """
-    Return only confirmed or editorially actionable content-link issues.
+    Return only actionable issues for inline editorial body links.
 
-    HTTP 401, 403 and 429 are not treated as broken because automated
-    validation may be restricted while the user-facing URL still works.
+    Automated HTTP 401, 403 and 429 responses are ignored because they can
+    reflect bot restrictions rather than a broken user-facing destination.
     """
     validation_by_url = {
         item.get("url"): item
@@ -2736,24 +2828,23 @@ def internal_link_issues(inventory, validation):
         reasons = []
 
         if not item.get("is_internal"):
-            reasons.append("External link inside article content")
+            reasons.append("External link")
         else:
             checked = validation_by_url.get(item["url"])
+
             if checked:
                 status = checked.get("status")
 
                 if status in {404, 410}:
-                    reasons.append(f"Broken internal link HTTP {status}")
+                    reasons.append(f"Broken link HTTP {status}")
                 elif status is not None and status >= 500:
-                    reasons.append(f"Internal destination server error HTTP {status}")
+                    reasons.append(f"Server error HTTP {status}")
                 elif status is None:
-                    reasons.append("Internal destination could not be reached")
+                    reasons.append("Link could not be reached")
 
-                # 401, 403 and 429 are intentionally ignored here.
+                # 401 / 403 / 429 are intentionally not treated as broken.
 
-        if item["empty_anchor"]:
-            reasons.append("Empty anchor text")
-        elif item["generic_anchor"]:
+        if item["generic_anchor"]:
             reasons.append("Generic anchor text")
         elif item["suspicious_anchor"]:
             reasons.append("Spammy or over optimised anchor text")
@@ -2763,13 +2854,12 @@ def internal_link_issues(inventory, validation):
             and len(tokenize(item["anchor_text"])) >= 2
             and item["anchor_slug_overlap"] < 0.12
         ):
-            reasons.append(
-                f'Anchor text may not match destination: "{item["anchor_text"]}"'
-            )
+            reasons.append("Anchor text may not match the linked page")
 
         if reasons:
             issues.append({
                 "url": item["url"],
+                "anchor_text": item["anchor_text"],
                 "reasons": reasons,
             })
 
@@ -2777,12 +2867,14 @@ def internal_link_issues(inventory, validation):
 
 def internal_link_issue_text(issues, limit=20):
     if not issues:
-        return "No internal linking issues found inside the article content."
+        return "No internal linking issues found inside the article body."
 
     lines = []
+
     for item in issues[:limit]:
         lines.append(
-            f'{item["url"]} | Issue: {", ".join(item["reasons"])}'
+            f'{item["url"]} | Anchor: "{item["anchor_text"]}" | '
+            f'Issue: {", ".join(item["reasons"])}'
         )
 
     if len(issues) > limit:
@@ -4726,7 +4818,7 @@ def audit_seo(
     internal_finding = internal_link_issue_text(internal_issues)
 
     if internal_issues:
-        internal_action = "Fix only the links listed in Result."
+        internal_action = "Fix only the editorial body links listed in Result."
     else:
         internal_action = ""
 
@@ -6209,7 +6301,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_6_ignore_trubroker.json",
+            file_name="url_audit_v17_7_body_links_only.json",
             mime="application/json",
         )
 
