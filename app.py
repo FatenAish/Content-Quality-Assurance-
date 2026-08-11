@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse
+import urllib.robotparser
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -38,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V16"
-ENGINE_BUILD = "2026.08.11.1"
+APP_VERSION = "V17 FINAL"
+ENGINE_BUILD = "2026.08.11.2"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -54,6 +55,9 @@ PLAYWRIGHT_SETTLE_MS = 450
 
 LINK_CHECK_TIMEOUT = 3
 LINK_CHECK_WORKERS = 16
+INTERNAL_LINK_CHECK_TIMEOUT = 3
+INTERNAL_LINK_CHECK_WORKERS = 24
+ROBOTS_REQUEST_TIMEOUT = 4
 RESOURCE_CHECK_TIMEOUT = 3
 RESOURCE_CHECK_WORKERS = 24
 
@@ -471,23 +475,23 @@ SPAM_RULES = [
 SEO_RULES = [
     ("HTTP Status", "PASS when the canonical live article returns HTTP 200."),
     ("Indexability", "FAIL when an intended indexable article contains noindex."),
-    ("Robots", "FAIL when Googlebot is unintentionally blocked by page level robots directives."),
+    ("Robots", "Check both page level robots directives and robots.txt crawler access. FAIL when Googlebot is blocked from an intended crawlable article. REVIEW when crawler access cannot be reliably verified."),
     ("Canonical", "PASS when a valid canonical points to the correct preferred URL."),
     ("Title Tag", "Google does not define a fixed character limit. PASS when the title exists, clearly describes the page, represents the Focus Keyword or its meaning, and is not repetitive or stuffed. Length is an internal quality signal only. Titles from 30 to 70 characters are generally concise. Titles from 71 to 80 characters do not receive REVIEW from length alone. Titles above 80 characters receive REVIEW for possible verbosity. Very short titles receive REVIEW only when they are too vague or weakly related to the page."),
-    ("Meta Description", "PASS when a useful, relevant meta description exists."),
+    ("Meta Description", "PASS when a useful and relevant meta description exists. Exact Focus Keyword wording and a fixed character count are not required. REVIEW missing, extremely weak, unusually verbose or poorly related descriptions."),
     ("H1", "PASS when one clear H1 exists and it represents the Focus Keyword meaning or the page topic. Exact phrase matching is not required. REVIEW multiple H1 elements or a weak semantic relationship. FAIL when the H1 is missing or clearly unrelated."),
-    ("Heading Structure", "REVIEW when headings are empty, highly repetitive, or structurally confusing."),
+    ("Heading Structure", "Evaluate the editorial heading hierarchy rather than navigation or sidebar headings. REVIEW empty headings, heavy duplication or clear heading level jumps."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
-    ("Internal Links", "REVIEW/FAIL when important crawlable internal links are broken."),
+    ("Internal Links", "Request discovered internal HTTP links rather than counting them only. PASS when checked links resolve. REVIEW broken, restricted, server error or unreachable internal destinations."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
-    ("Images", "REVIEW when meaningful images are broken or lack useful alt text."),
-    ("Structured Data", "Parse JSON LD and compare important article fields with visible page signals. PASS when JSON LD is valid and headline or article topic is consistent with the visible page. REVIEW parse errors, missing expected article data or material schema to page mismatch."),
+    ("Images", "Separate meaningful article images from decorative images. Decorative images do not require descriptive alt text. REVIEW meaningful images with missing or empty alt treatment or broken image resources."),
+    ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
     ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
     ("dateModified", "Compare schema dateModified with visible update metadata, sitemap lastmod and HTTP Last Modified when available. PASS when signals are consistent. REVIEW missing dates or material freshness inconsistencies. HTTP Last Modified mismatch is treated as a technical inconsistency, not a spam violation."),
     ("Sitemap", "Follow sitemap indexes and prioritise editorial post or article sitemap families before generic page, category and tag sitemaps. PASS when the preferred canonical URL is found in an accessible sitemap. REVIEW only when inspection remains incomplete or the URL is not found after the configured inspection budget."),
     ("Mobile Content", "REVIEW/FAIL when mobile receives materially less main content than desktop."),
     ("JavaScript Rendering", "REVIEW when the initial HTML contains very little article text and depends heavily on scripts."),
-    ("HTTPS", "PASS when the preferred page uses HTTPS."),
+    ("HTTPS", "PASS when the preferred page uses HTTPS and no HTTP render resources create detected mixed content. FAIL non HTTPS preferred pages and REVIEW mixed content."),
     ("Broken Resources", "Request only render relevant image, stylesheet, font preload and JavaScript resources. Exclude API discovery, oEmbed, canonical, alternate and WordPress endpoint links. PASS when checked render resources resolve successfully. REVIEW confirmed broken or unreachable render resources."),
 ]
 
@@ -497,7 +501,7 @@ CONTENT_RULES = [
     ("Thin Content", "System heuristic: PASS at 600+ meaningful words, REVIEW at 300–599, FAIL below 300. This is not a Google word count rule."),
     ("Original Value", "PASS when the page adds useful data, examples, analysis or first hand value. External/site comparison may be required."),
     ("Factual Accuracy", "Extract factual and numeric claims from the isolated article body and show claim examples and visible source signals. REVIEW claims that still require external or first party data verification. FAIL only when a claim is confirmed false by a connected verification source."),
-    ("Outdated Information", "Inspect each old year inside the isolated article body together with its sentence context. Historical or contextual years do not trigger REVIEW by themselves. REVIEW older years only when they appear in time sensitive claims such as current prices, rent, ROI, fees, laws, routes or project status."),
+    ("Outdated Information", "Evaluate old year references in context and also compare time sensitive claims with the latest editorial publication or modification date. Historical dates alone PASS. REVIEW stale or undated prices, rents, ROI, fees, laws, routes or project status using an internal freshness heuristic."),
     ("Keyword Use", "Evaluate Focus Keyword and Secondary Keyword use in context. Exact matching is not required for every secondary phrase. Repetition of the primary topic or named entity is allowed when editorially necessary. PASS natural use, REVIEW unusually repetitive wording, FAIL clearly manipulative repetition."),
     ("Repetition", "REVIEW/FAIL when sentences or paragraphs are unnecessarily repeated."),
     ("Generic / Filler Content", "REVIEW when a high share of text adds little topic specific information."),
@@ -505,10 +509,10 @@ CONTENT_RULES = [
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
     ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
     ("Introduction Quality", "PASS when the opening quickly establishes the promised topic."),
-    ("FAQ Quality", "REVIEW when FAQ answers are empty, extremely short, repetitive or unrelated."),
-    ("Unsupported Superlatives", "REVIEW claims such as best, cheapest, highest, most popular when no evidence/source is apparent."),
-    ("Source Quality", "REVIEW important quantitative/regulatory claims with no visible source where sourcing is reasonably expected."),
-    ("Data Accuracy", "REVIEW inconsistent prices, percentages, dates or repeated figures inside the page."),
+    ("FAQ Quality", "Extract question and answer pairs from the FAQ hierarchy. REVIEW empty or very short answers, heavy answer duplication or a predominantly unrelated FAQ section."),
+    ("Unsupported Superlatives", "Evaluate the exact claim context. Objective ranking claims such as cheapest, highest, lowest or most popular require nearby attribution or a source link. Editorial soft wording such as best is not automatically treated as an unsupported factual claim."),
+    ("Source Quality", "Judge support at the claim level using nearby attribution and source links, not raw external link count. REVIEW poorly supported quantitative or regulatory claims where sourcing is reasonably expected."),
+    ("Data Accuracy", "Check internal numeric consistency by finding substantially repeated statements with conflicting values. PASS when no internal contradiction is detected. External truth verification remains part of Factual Accuracy."),
     ("Entity Accuracy", "Normalize generic property wording and leading prepositions around entity names, merge exact normalized duplicates, and compare only materially different spellings for suspicious near duplicates. REVIEW remaining entities that need external verification or possible inconsistent naming. FAIL only when a connected verification source confirms an entity is incorrect."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
     ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
@@ -537,17 +541,17 @@ SYSTEM_USES = {
     # SEO
     "HTTP Status": "HTTP request and returned response status code",
     "Indexability": "Meta robots directive, Googlebot meta directive, noindex detection",
-    "Robots": "Meta robots directive, Googlebot meta directive, index and follow restrictions",
+    "Robots": "Meta robots and Googlebot directives, robots.txt HTTP response, robots.txt parsing and Googlebot URL fetch permission",
     "Canonical": "Canonical link element, canonical destination, current final URL, URL path comparison",
     "Title Tag": "HTML title element, character count as an advisory signal, Focus Keyword exact or semantic term overlap, title to article topic overlap, repeated title terms",
-    "Meta Description": "Meta description element, description length, Focus Keyword presence",
+    "Meta Description": "Meta description element, advisory length, semantic topic agreement and Focus Keyword meaning rather than exact phrase requirement",
     "H1": "Full page H1 elements including article header H1, H1 count, Focus Keyword exact match, semantic concept overlap and article topic relationship",
-    "Heading Structure": "H1 through H6 elements, empty heading count, repeated heading count, heading order",
+    "Heading Structure": "Primary page H1 plus isolated editorial H2 through H6 headings, empty headings, duplicate headings and hierarchy level jumps",
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
-    "Internal Links": "Anchor elements, resolved link URLs, current domain, internal domain comparison",
+    "Internal Links": "Resolved internal anchor URLs, fragment normalization, HTTP response code, final destination, request errors and article body link count",
     "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
-    "Images": "Image elements, image count, alt attribute presence",
-    "Structured Data": "JSON LD scripts, JSON parsing, schema headline and article fields, visible title and H1 semantic comparison",
+    "Images": "Isolated article images, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
+    "Structured Data": "JSON LD parsing, Article BlogPosting or NewsArticle type detection, schema headline, schema URL and mainEntityOfPage comparison with the visible preferred page",
     "datePublished": "Schema datePublished, article published metadata, visible time elements and date consistency comparison",
     "dateModified": "Schema dateModified, article modified metadata, visible time elements, sitemap lastmod, HTTP Last Modified and date consistency comparison",
     "Sitemap": "robots.txt sitemap declarations, common sitemap locations, recursive sitemap index traversal, editorial post and article sitemap prioritisation, preferred URL lookup, lastmod extraction, caching and bounded parallel requests",
@@ -562,7 +566,7 @@ SYSTEM_USES = {
     "Thin Content": "Main content extraction and meaningful article word count",
     "Original Value": "Main content word count, tables, lists, numeric references, useful information signals",
     "Factual Accuracy": "Isolated article sentences, numeric and date claims, visible external source links and claim examples that require verification",
-    "Outdated Information": "Old years inside isolated article sentences, sentence context, historical markers and time sensitive terms such as prices, rent, ROI, fees, laws, routes and project status",
+    "Outdated Information": "Old year context, time sensitive claim detection, schema and visible editorial dates, and age of the latest editorial freshness signal",
     "Keyword Use": "Focus Keyword, Secondary Keywords, exact phrase counts, semantic topic representation, repetition per 1,000 words, N gram frequency and primary topic phrase detection",
     "Repetition": "Normalised sentences, normalised paragraphs, duplicate counts, repetition ratio",
     "Generic / Filler Content": "Substantial paragraphs, Focus Keyword or main topic, paragraph topic overlap",
@@ -570,10 +574,10 @@ SYSTEM_USES = {
     "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
     "Heading Relevance": "Hierarchical H2 through H4 relationships, Focus Keyword or main topic, FAQ child content, entity heading recognition, semantic concept overlap and section context",
     "Introduction Quality": "First section of the article, approximately the first 140 words, Focus Keyword or main topic, topic overlap",
-    "FAQ Quality": "FAQ like headings, question marks, question text length, repeated or weak question patterns",
-    "Unsupported Superlatives": "Superlative terms such as best, cheapest and most popular, external source link presence",
-    "Source Quality": "Numeric claims, data like statements, external source link count, visible attribution signals",
-    "Data Accuracy": "Numbers and percentages extracted from the page, repeated values, internal consistency signals",
+    "FAQ Quality": "FAQ heading hierarchy, extracted question and answer pairs, answer word count, duplicate answers and topic relevance",
+    "Unsupported Superlatives": "Exact superlative claim blocks, hard versus editorial soft superlatives, nearby attribution, local source links and section context",
+    "Source Quality": "Concrete factual claim extraction, nearby visible attribution, local source links, regulatory claim detection and claim level support ratio",
+    "Data Accuracy": "Repeated numeric statement templates, conflicting value tuples, percentages and internal consistency signals",
     "Entity Accuracy": "Normalized entity candidates from proper noun headings, anchor text and proper noun phrases, property wording and preposition removal, exact normalized de duplication, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
     "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
     "Broken Content": "Placeholder terms, unfinished content indicators, empty headings, repeated paragraphs"
@@ -2488,6 +2492,18 @@ def validate_url_set(urls, timeout=LINK_CHECK_TIMEOUT, workers=LINK_CHECK_WORKER
         "unreachable": unreachable,
     }
 
+
+def normalized_link_url(value, base_url=""):
+    if not value:
+        return ""
+    resolved = urljoin(base_url, value) if base_url else value
+    parsed = urlparse(resolved)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    # Fragments do not change the fetched document and should not create
+    # duplicate link validation requests.
+    return parsed._replace(fragment="").geturl()
+
 def extract_page_links(soup, base_url):
     parsed = urlparse(base_url)
     host = parsed.netloc.lower().replace("www.", "")
@@ -2495,8 +2511,8 @@ def extract_page_links(soup, base_url):
     external = []
 
     for anchor in soup.find_all("a", href=True):
-        href = urljoin(base_url, anchor.get("href"))
-        if not href.startswith(("http://", "https://")):
+        href = normalized_link_url(anchor.get("href"), base_url)
+        if not href:
             continue
 
         target_host = urlparse(href).netloc.lower().replace("www.", "")
@@ -2507,35 +2523,51 @@ def extract_page_links(soup, base_url):
 
     return unique_http_urls(internal), unique_http_urls(external)
 
+
+def image_source_url(node, base_url):
+    candidates = [
+        node.get("src"),
+        node.get("data-src"),
+        node.get("data-lazy-src"),
+        node.get("data-original"),
+    ]
+    srcset = node.get("srcset") or node.get("data-srcset")
+    if srcset:
+        first = srcset.split(",")[0].strip().split(" ")[0]
+        candidates.append(first)
+
+    for value in candidates:
+        if not value or str(value).startswith("data:"):
+            continue
+        resolved = normalized_link_url(str(value), base_url)
+        if resolved:
+            return resolved
+    return ""
+
 def extract_resource_urls(soup, base_url):
     """
     Extract only resources that materially participate in page rendering.
-
-    Excludes WordPress API discovery, oEmbed, canonical, alternate feeds,
-    shortlinks and other link relations that are not CSS, JS, image or font
-    resources required for rendering.
     """
     urls = []
 
-    # JavaScript
     for node in soup.find_all("script", src=True):
-        resolved = urljoin(base_url, node.get("src"))
-        if resolved.startswith(("http://", "https://")):
+        resolved = normalized_link_url(node.get("src"), base_url)
+        if resolved:
             urls.append(resolved)
 
-    # Images
-    for node in soup.find_all("img", src=True):
-        resolved = urljoin(base_url, node.get("src"))
-        if resolved.startswith(("http://", "https://")):
+    for node in soup.find_all("img"):
+        resolved = image_source_url(node, base_url)
+        if resolved:
             urls.append(resolved)
 
-    # Picture/video source assets
-    for node in soup.find_all("source", src=True):
-        resolved = urljoin(base_url, node.get("src"))
-        if resolved.startswith(("http://", "https://")):
+    for node in soup.find_all("source"):
+        value = node.get("src")
+        if not value and node.get("srcset"):
+            value = node.get("srcset").split(",")[0].strip().split(" ")[0]
+        resolved = normalized_link_url(value, base_url) if value else ""
+        if resolved:
             urls.append(resolved)
 
-    # Only render-relevant <link> elements
     for node in soup.find_all("link", href=True):
         rel = {str(x).lower() for x in (node.get("rel") or [])}
         as_value = (node.get("as") or "").lower()
@@ -2549,12 +2581,10 @@ def extract_resource_urls(soup, base_url):
         if not (is_stylesheet or is_preload_resource):
             continue
 
-        resolved = urljoin(base_url, node.get("href"))
-        if resolved.startswith(("http://", "https://")):
+        resolved = normalized_link_url(node.get("href"), base_url)
+        if resolved:
             urls.append(resolved)
 
-    # Explicitly remove known WordPress discovery/API endpoints if they were
-    # somehow included through unusual markup.
     filtered = []
     for url in unique_http_urls(urls):
         low = url.lower()
@@ -2568,18 +2598,6 @@ def extract_resource_urls(soup, base_url):
         filtered.append(url)
 
     return filtered
-
-
-SOCIAL_DOMAINS = {
-    "facebook.com", "www.facebook.com", "m.facebook.com",
-    "instagram.com", "www.instagram.com",
-    "linkedin.com", "www.linkedin.com",
-    "twitter.com", "www.twitter.com",
-    "x.com", "www.x.com",
-    "tiktok.com", "www.tiktok.com",
-    "pinterest.com", "www.pinterest.com",
-    "youtube.com", "www.youtube.com",
-}
 
 def is_social_domain(url):
     host = urlparse(url or "").netloc.lower()
@@ -2677,6 +2695,376 @@ def validation_problem_examples(validation, limit=6):
             )
 
     return examples
+
+
+def response_redirect_chain(response):
+    chain = []
+    for item in list(getattr(response, "history", []) or []) + [response]:
+        chain.append({
+            "status": getattr(item, "status_code", None),
+            "url": getattr(item, "url", ""),
+        })
+    return chain
+
+def normalized_destination(url):
+    p = urlparse(url or "")
+    scheme = (p.scheme or "").lower()
+    host = (p.netloc or "").lower().replace(":80", "").replace(":443", "")
+    path = re.sub(r"/+$", "", p.path or "/") or "/"
+    return (scheme, host, path, p.query or "")
+
+def redirect_chain_summary(response):
+    chain = response_redirect_chain(response)
+    return " → ".join(
+        f"{item['status']} {item['url']}"
+        for item in chain
+        if item.get("url")
+    )
+
+@lru_cache(maxsize=512)
+def _robots_access_cached(page_url, _bucket):
+    parsed = urlparse(page_url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    result_data = {
+        "robots_url": robots_url,
+        "status": None,
+        "googlebot_allowed": None,
+        "wildcard_allowed": None,
+        "error": "",
+    }
+
+    try:
+        response = requests.get(
+            robots_url,
+            headers=UA_DESKTOP,
+            timeout=ROBOTS_REQUEST_TIMEOUT,
+            allow_redirects=True,
+        )
+        result_data["status"] = response.status_code
+
+        if response.status_code == 200:
+            parser = urllib.robotparser.RobotFileParser()
+            parser.set_url(robots_url)
+            parser.parse(response.text.splitlines())
+            result_data["googlebot_allowed"] = parser.can_fetch("Googlebot", page_url)
+            result_data["wildcard_allowed"] = parser.can_fetch("*", page_url)
+        elif response.status_code in {404, 410}:
+            result_data["googlebot_allowed"] = True
+            result_data["wildcard_allowed"] = True
+    except Exception as exc:
+        result_data["error"] = str(exc)
+
+    return result_data
+
+def robots_access_result(page_url):
+    return _robots_access_cached(page_url, cache_bucket(600))
+
+def image_is_decorative(node):
+    role = (node.get("role") or "").lower()
+    aria_hidden = (node.get("aria-hidden") or "").lower()
+    alt = node.get("alt")
+    signature = node_signature(node)
+    src = " ".join([
+        str(node.get("src") or ""),
+        str(node.get("data-src") or ""),
+        str(node.get("class") or ""),
+    ]).lower()
+
+    try:
+        width = int(re.sub(r"[^\d]", "", str(node.get("width") or "0")) or 0)
+        height = int(re.sub(r"[^\d]", "", str(node.get("height") or "0")) or 0)
+    except Exception:
+        width = height = 0
+
+    if role in {"presentation", "none"} or aria_hidden == "true":
+        return True
+    if width and height and width <= 4 and height <= 4:
+        return True
+
+    decorative_markers = [
+        "icon", "sprite", "spacer", "tracking", "pixel",
+        "avatar", "emoji", "badge", "loader", "spinner",
+    ]
+    if any(marker in signature or marker in src for marker in decorative_markers):
+        if not node.find_parent("figure"):
+            return True
+
+    # Empty alt is a valid decorative treatment when the image also has
+    # an explicit decorative signal.
+    if alt == "" and (
+        role in {"presentation", "none"}
+        or aria_hidden == "true"
+        or any(marker in signature or marker in src for marker in decorative_markers)
+    ):
+        return True
+
+    return False
+
+def meaningful_image_inventory(soup, base_url, resource_validation=None):
+    article = main_content_node(soup)
+    meaningful = []
+    decorative = []
+    issues = []
+
+    validation_by_url = {}
+    if resource_validation:
+        for item in resource_validation.get("checked", []):
+            validation_by_url[item.get("url", "")] = item
+
+    for node in article.find_all("img"):
+        src = image_source_url(node, base_url)
+        alt_present = node.has_attr("alt")
+        alt_value = (node.get("alt") or "").strip()
+
+        if image_is_decorative(node):
+            decorative.append(src or "(inline image)")
+            continue
+
+        item = {
+            "src": src,
+            "alt_present": alt_present,
+            "alt": alt_value,
+        }
+        meaningful.append(item)
+
+        if not alt_present:
+            issues.append(f"Meaningful image missing alt attribute: {src or '(source unavailable)'}")
+        elif not alt_value:
+            issues.append(f"Meaningful image has empty alt text: {src or '(source unavailable)'}")
+
+        if src and src in validation_by_url:
+            checked = validation_by_url[src]
+            status = checked.get("status")
+            if status is None or status >= 400:
+                issues.append(
+                    f"Meaningful image resource problem: {src} "
+                    f"returned {status if status is not None else 'request error'}"
+                )
+
+    return {
+        "meaningful": meaningful,
+        "decorative": decorative,
+        "issues": issues,
+    }
+
+ARTICLE_SCHEMA_TYPES = {
+    "article", "blogposting", "newsarticle",
+    "report", "analysisnewsarticle",
+}
+
+def article_schema_objects(jsonld):
+    objects = []
+    for root in jsonld:
+        for obj in walk_json(root):
+            if not isinstance(obj, dict):
+                continue
+            raw_type = obj.get("@type")
+            types = raw_type if isinstance(raw_type, list) else [raw_type]
+            normalized = {
+                str(t).split("/")[-1].lower()
+                for t in types
+                if t
+            }
+            if normalized & ARTICLE_SCHEMA_TYPES:
+                objects.append(obj)
+    return objects
+
+def schema_object_urls(obj):
+    values = []
+    for key in ["url", "@id"]:
+        value = obj.get(key)
+        if isinstance(value, str):
+            values.append(value)
+
+    main_entity = obj.get("mainEntityOfPage")
+    if isinstance(main_entity, str):
+        values.append(main_entity)
+    elif isinstance(main_entity, dict):
+        for key in ["@id", "url"]:
+            value = main_entity.get(key)
+            if isinstance(value, str):
+                values.append(value)
+
+    return values
+
+def latest_editorial_datetime(soup):
+    jsonld, _ = parse_jsonld(soup)
+    modified = [
+        parse_datetime_value(v)
+        for v in get_schema_values(jsonld, "dateModified")
+        if isinstance(v, (str, int, float))
+    ]
+    published = [
+        parse_datetime_value(v)
+        for v in get_schema_values(jsonld, "datePublished")
+        if isinstance(v, (str, int, float))
+    ]
+    visible = visible_date_signals(soup)
+    modified.extend(parse_datetime_value(v) for v in visible["modified"])
+    published.extend(parse_datetime_value(v) for v in visible["published"])
+
+    valid_modified = [d for d in modified if d is not None]
+    valid_published = [d for d in published if d is not None]
+
+    chosen = max(valid_modified) if valid_modified else max(valid_published) if valid_published else None
+    if chosen and chosen.tzinfo is None:
+        chosen = chosen.replace(tzinfo=timezone.utc)
+    return chosen
+
+ATTRIBUTION_TERMS = [
+    "according to", "according to our data", "data experts",
+    "based on our data", "bayut data", "our data", "research shows",
+    "data shows", "as per", "source:", "sources:",
+    "وفقا لبيانات", "وفقاً لبيانات", "بحسب البيانات", "وفق بيانات",
+    "استنادا إلى", "استناداً إلى", "المصدر", "بيانات بيوت",
+]
+
+def has_attribution(text):
+    low = (text or "").lower()
+    return any(term.lower() in low for term in ATTRIBUTION_TERMS)
+
+def nearby_support_context(node):
+    parts = [node.get_text(" ", strip=True)]
+    prev = node.find_previous_sibling()
+    steps = 0
+    while prev is not None and steps < 2:
+        if getattr(prev, "name", None) in {"p", "li", "figcaption", "h2", "h3", "h4"}:
+            parts.append(prev.get_text(" ", strip=True))
+            steps += 1
+        prev = prev.find_previous_sibling()
+    return " ".join(parts)
+
+def node_http_links(node, base_url):
+    links = []
+    for anchor in node.find_all("a", href=True):
+        resolved = normalized_link_url(anchor.get("href"), base_url)
+        if resolved:
+            links.append(resolved)
+    return unique_http_urls(links)
+
+def faq_question_answer_pairs(article_soup):
+    pairs = []
+    for q in article_soup.find_all(re.compile(r"^h[2-4]$")):
+        qtext = re.sub(r"\s+", " ", q.get_text(" ", strip=True)).strip()
+        if not qtext.endswith(("?", "؟")):
+            continue
+
+        level = heading_level(q) or 4
+        answer_parts = []
+        for node in q.find_all_next():
+            if node is q:
+                continue
+            node_level = heading_level(node)
+            if node_level is not None and node_level <= level:
+                break
+            if node.name in {"p", "li", "td"}:
+                value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+                if value:
+                    answer_parts.append(value)
+            if sum(len(x) for x in answer_parts) > 1200:
+                break
+
+        pairs.append({
+            "question": qtext,
+            "answer": " ".join(answer_parts)[:1600],
+        })
+    return pairs
+
+SUPERLATIVE_TERMS = [
+    "most popular", "cheapest", "highest", "lowest", "number one", "#1",
+    "best", "top choice",
+    "الأكثر شعبية", "الأرخص", "الأعلى", "الاعلى", "الأفضل", "افضل",
+]
+
+HARD_SUPERLATIVE_TERMS = {
+    "most popular", "cheapest", "highest", "lowest", "number one", "#1",
+    "الأكثر شعبية", "الأرخص", "الأعلى", "الاعلى",
+}
+
+def superlative_claim_assessment(article_soup, base_url):
+    claims = []
+    section_map = {
+        item["heading"]: item["section"]
+        for item in heading_sections(article_soup)
+    }
+
+    for node in article_soup.find_all(["p", "li", "h2", "h3", "h4", "td"]):
+        value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        if not value:
+            continue
+        low = value.lower()
+        terms = [term for term in SUPERLATIVE_TERMS if term.lower() in low]
+        if not terms:
+            continue
+
+        context = nearby_support_context(node)
+        if node.name in {"h2", "h3", "h4"}:
+            context += " " + section_map.get(value, "")[:700]
+
+        links = node_http_links(node, base_url)
+        supported = bool(links) or has_attribution(context)
+        hard = any(term.lower() in HARD_SUPERLATIVE_TERMS for term in terms)
+
+        claims.append({
+            "text": value[:300],
+            "terms": terms,
+            "supported": supported,
+            "hard": hard,
+            "links": links,
+            "attributed": has_attribution(context),
+        })
+
+    # De duplicate repeated DOM text.
+    unique = []
+    seen = set()
+    for item in claims:
+        key = item["text"].casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+def numeric_statement_conflicts(article_soup):
+    """
+    Detect internal contradictions where essentially the same statement appears
+    more than once with different numeric values.
+    """
+    templates = {}
+    conflicts = []
+
+    number_pattern = re.compile(
+        r"(?:AED\s*)?\b\d+(?:[.,]\d+)?(?:\s*[KMB])?%?\b",
+        flags=re.I,
+    )
+
+    for node in article_soup.find_all(["p", "li", "td", "th"]):
+        value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        numbers = number_pattern.findall(value)
+        if not numbers or len(value) < 35:
+            continue
+
+        template = number_pattern.sub("<num>", value.lower())
+        template = re.sub(r"\s+", " ", template).strip()
+
+        if len(template) < 25:
+            continue
+
+        normalized_numbers = tuple(
+            re.sub(r"\s+", "", n.lower())
+            for n in numbers
+        )
+
+        if template in templates and templates[template] != normalized_numbers:
+            conflicts.append({
+                "statement": value[:300],
+                "previous_values": templates[template],
+                "current_values": normalized_numbers,
+            })
+        else:
+            templates[template] = normalized_numbers
+
+    return conflicts[:8]
 
 def parse_datetime_value(value):
     if not value:
@@ -2862,9 +3250,13 @@ def factual_claim_examples(article_soup, base_url, limit=6):
             if resolved.startswith(("http://", "https://")):
                 sources.append(resolved)
 
+        nearby_context = nearby_support_context(node)
+        claim_links = unique_http_urls(sources)
         claims.append({
             "claim": value[:360],
-            "source_links": unique_http_urls(sources),
+            "source_links": claim_links,
+            "attributed": has_attribution(nearby_context),
+            "supported": bool(claim_links) or has_attribution(nearby_context),
         })
 
         if len(claims) >= limit:
@@ -3232,6 +3624,7 @@ def classify_counts(rows):
 # Spam audit
 # -----------------------------
 
+
 def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="", secondary_keywords=None):
     rows = []
     rules = dict(SPAM_RULES)
@@ -3242,31 +3635,86 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
     mobile_text = main_content_text(soup_of(mobile_r.text))
 
     sim_bot = similarity(desktop_text, bot_text)
-    if desktop_r.url != bot_r.url:
-        rows.append(result("Cloaking", FAIL, f"User final URL and Googlebot final URL differ: {desktop_r.url} vs {bot_r.url}", rules["Cloaking"]))
-    elif sim_bot < 0.72 and min(word_count(desktop_text), word_count(bot_text)) > 150:
-        rows.append(result("Cloaking", FAIL, f"Material user/Googlebot content difference detected ({sim_bot:.0%} similarity).", rules["Cloaking"]))
-    elif sim_bot < 0.88:
-        rows.append(result("Cloaking", REVIEW, f"User/Googlebot content similarity is {sim_bot:.0%}; review dynamic/personalised content.", rules["Cloaking"]))
-    else:
-        rows.append(result("Cloaking", PASS, f"User/Googlebot content similarity is {sim_bot:.0%}.", rules["Cloaking"]))
+    desktop_dest = normalized_destination(desktop_r.url)
+    bot_dest = normalized_destination(bot_r.url)
+    desktop_chain = response_redirect_chain(desktop_r)
+    bot_chain = response_redirect_chain(bot_r)
 
-    if desktop_r.url != bot_r.url:
+    if desktop_dest != bot_dest:
+        rows.append(result(
+            "Cloaking",
+            FAIL,
+            f"User and Googlebot like requests reached different final destinations: {desktop_r.url} vs {bot_r.url}.",
+            rules["Cloaking"],
+        ))
+    elif sim_bot < 0.72 and min(word_count(desktop_text), word_count(bot_text)) > 150:
+        rows.append(result(
+            "Cloaking",
+            FAIL,
+            f"Material user versus Googlebot like content difference detected ({sim_bot:.0%} similarity).",
+            rules["Cloaking"],
+        ))
+    elif sim_bot < 0.88:
+        rows.append(result(
+            "Cloaking",
+            REVIEW,
+            f"User versus Googlebot like content similarity is {sim_bot:.0%}. Review dynamic or personalised content.",
+            rules["Cloaking"],
+        ))
+    else:
+        rows.append(result(
+            "Cloaking",
+            PASS,
+            f"User versus Googlebot like content similarity is {sim_bot:.0%}. Final destination matches.",
+            rules["Cloaking"],
+        ))
+
+    chains_materially_different = (
+        desktop_dest != bot_dest
+        or (
+            len(desktop_chain) != len(bot_chain)
+            and (len(desktop_chain) > 1 or len(bot_chain) > 1)
+        )
+    )
+    if desktop_dest != bot_dest:
         st_redirect = FAIL
-        note = f"Different final destinations: user → {desktop_r.url}; bot → {bot_r.url}"
+        note = (
+            f"Different final destinations. User chain: {redirect_chain_summary(desktop_r)}. "
+            f"Crawler chain: {redirect_chain_summary(bot_r)}."
+        )
+    elif chains_materially_different:
+        st_redirect = REVIEW
+        note = (
+            "Final destination matches, but user and crawler redirect chains differ. "
+            f"User chain: {redirect_chain_summary(desktop_r)}. "
+            f"Crawler chain: {redirect_chain_summary(bot_r)}."
+        )
     else:
         st_redirect = PASS
-        note = f"Same final destination for user and crawler: {desktop_r.url}"
+        note = f"User and crawler reach the same destination with no material redirect-chain difference: {desktop_r.url}"
     rows.append(result("Sneaky Redirect", st_redirect, note, rules["Sneaky Redirect"]))
 
-    if mobile_r.url != desktop_r.url:
-        rows.append(result("Device Spam Redirect", FAIL, f"Mobile final URL differs from desktop: {mobile_r.url}", rules["Device Spam Redirect"]))
+    mobile_dest = normalized_destination(mobile_r.url)
+    if mobile_dest != desktop_dest:
+        rows.append(result(
+            "Device Spam Redirect",
+            FAIL,
+            f"Mobile final destination differs from desktop. Desktop: {desktop_r.url}. Mobile: {mobile_r.url}.",
+            rules["Device Spam Redirect"],
+        ))
     else:
         sm = similarity(desktop_text, mobile_text)
-        rows.append(result("Device Spam Redirect", PASS if sm >= 0.80 else REVIEW, f"Desktop/mobile final URL matches; content similarity {sm:.0%}.", rules["Device Spam Redirect"]))
+        chain_diff = len(response_redirect_chain(mobile_r)) != len(desktop_chain)
+        device_status = REVIEW if sm < 0.80 or chain_diff else PASS
+        rows.append(result(
+            "Device Spam Redirect",
+            device_status,
+            f"Desktop and mobile final destination matches; content similarity {sm:.0%}. "
+            f"Redirect chain difference: {'yes' if chain_diff else 'no'}.",
+            rules["Device Spam Redirect"],
+        ))
 
     hidden_text_items = hidden_text_details(soup)
-
     if hidden_text_items:
         hidden_text_statuses = [x["status"] for x in hidden_text_items]
         hidden_text_status = FAIL if FAIL in hidden_text_statuses else REVIEW if REVIEW in hidden_text_statuses else PASS
@@ -3274,12 +3722,9 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         text_details = []
         for index, item in enumerate(hidden_text_items[:6], 1):
             text_details.append(
-                f"Hidden text {index}. "
-                f"Purpose: {item['purpose']}. "
-                f"Hidden Because: {item['hidden_because']}. "
-                f"Element: {item['hidden_element']}. "
-                f"Example Text: {item['text']}. "
-                f"Assessment: {item['explanation']}"
+                f"Hidden text {index}. Purpose: {item['purpose']}. "
+                f"Hidden Because: {item['hidden_because']}. Element: {item['hidden_element']}. "
+                f"Example Text: {item['text']}. Assessment: {item['explanation']}"
             )
 
         if hidden_text_status == PASS:
@@ -3289,22 +3734,16 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         else:
             text_summary = "Hidden text was detected and at least one block uses a strongly concealed method without a recognised legitimate reason. "
 
-        rows.append(result(
-            "Hidden Text",
-            hidden_text_status,
-            text_summary + " ".join(text_details),
-            rules["Hidden Text"]
-        ))
+        rows.append(result("Hidden Text", hidden_text_status, text_summary + " ".join(text_details), rules["Hidden Text"]))
     else:
         rows.append(result(
             "Hidden Text",
             PASS,
-            "No substantial visually hidden text blocks were detected by the static hiding checks.",
-            rules["Hidden Text"]
+            "No substantial visually hidden text blocks were detected by the available static hiding checks.",
+            rules["Hidden Text"],
         ))
 
     hidden_links, hidden_inventory = hidden_link_details(soup, desktop_r.url)
-
     if hidden_links:
         statuses = [item["status"] for item in hidden_links]
         hidden_status = FAIL if FAIL in statuses else REVIEW if REVIEW in statuses else PASS
@@ -3317,77 +3756,46 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
                     f" Desktop Hidden: {'Yes' if item['desktop_hidden'] else 'No'}. "
                     f"Mobile Hidden: {'Yes' if item['mobile_hidden'] else 'No'}."
                 )
-
-            controller_note = ""
-            if item.get("controllers"):
-                controller_text = "; ".join(
-                    f"{c.get('tag', 'control')} {c.get('text', '')} aria expanded {c.get('ariaExpanded', '')}"
-                    for c in item["controllers"][:3]
-                )
-                controller_note = f" Interface Controller: {controller_text}."
-
             detail_lines.append(
-                f"Link {index}. "
-                f"Status: {item['status']}. "
-                f"URL: {item['url']}. "
-                f"Anchor Text: {item['anchor_text']}. "
-                f"Hidden Element: {item['hidden_element']}. "
-                f"Hidden Because: {item['hidden_because']}. "
-                f"Detected Purpose: {item['purpose']}. "
-                f"Reason Assessment: {item['explanation']}."
-                f"{viewport_note}"
-                f"{controller_note}"
+                f"Link {index}. Status: {item['status']}. URL: {item['url']}. "
+                f"Anchor Text: {item['anchor_text']}. Hidden Element: {item['hidden_element']}. "
+                f"Hidden Because: {item['hidden_because']}. Detected Purpose: {item['purpose']}. "
+                f"Reason Assessment: {item['explanation']}.{viewport_note}"
             )
 
-        extra = ""
-        if len(hidden_links) > 10:
-            extra = f" Additional hidden links not shown: {len(hidden_links) - 10}."
-
-        if hidden_status == PASS:
-            summary = (
-                f"Found {len(hidden_links)} hidden link{'s' if len(hidden_links) != 1 else ''}. "
-                "Every detected hidden link had a recognised legitimate interface, responsive or accessibility reason. "
+        summary = (
+            f"Found {len(hidden_links)} hidden link(s). "
+            + (
+                "Every detected hidden link had a recognised legitimate reason. "
+                if hidden_status == PASS
+                else "At least one hidden link needs manual review. "
+                if hidden_status == REVIEW
+                else "At least one hidden link uses a strongly concealed method without a recognised legitimate reason. "
             )
-        elif hidden_status == REVIEW:
-            summary = (
-                f"Found {len(hidden_links)} hidden link{'s' if len(hidden_links) != 1 else ''}. "
-                "At least one link has an unconfirmed hiding reason and needs review. "
-            )
-        else:
-            summary = (
-                f"Found {len(hidden_links)} hidden link{'s' if len(hidden_links) != 1 else ''}. "
-                "At least one link uses a strongly concealed method without a recognised legitimate interface reason. "
-            )
-
+        )
         if not hidden_inventory.get("available"):
             summary += (
-                "Rendered browser inspection was unavailable, so the system used the static HTML fallback. "
+                "Rendered browser inspection was unavailable, so static HTML fallback was used. "
                 f"Browser inspection note: {hidden_inventory.get('error', 'not available')}. "
             )
 
-        rows.append(result(
-            "Hidden Links",
-            hidden_status,
-            summary + " ".join(detail_lines) + extra,
-            rules["Hidden Links"]
-        ))
+        rows.append(result("Hidden Links", hidden_status, summary + " ".join(detail_lines), rules["Hidden Links"]))
     else:
         browser_note = ""
         if not hidden_inventory.get("available"):
             browser_note = (
-                " Rendered browser inspection was unavailable, so the result used the static HTML fallback. "
+                " Rendered browser inspection was unavailable; static HTML fallback was used. "
                 f"Browser inspection note: {hidden_inventory.get('error', 'not available')}."
             )
-
         rows.append(result(
             "Hidden Links",
             PASS,
             "No visually hidden links were detected by the available checks." + browser_note,
-            rules["Hidden Links"]
+            rules["Hidden Links"],
         ))
 
     title_for_kw = title_text(soup)
-    h1_for_kw = first_h1(soup)
+    h1_for_kw = page_primary_h1(soup)
     kw_assessment = keyword_repetition_assessment(
         body_text,
         focus_keyword,
@@ -3402,63 +3810,107 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
             f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
             for kw, exact, per_1000 in kw_assessment["targets"][:12]
         ) + "."
-    rows.append(
-        result(
-            "Keyword Stuffing",
-            kw_assessment["status"],
-            f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
-            f"({kw_assessment['density']:.1%} of two word phrases). "
-            f"{kw_assessment['reason']}{target_note}",
-            rules["Keyword Stuffing"],
-        )
-    )
+    rows.append(result(
+        "Keyword Stuffing",
+        kw_assessment["status"],
+        f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
+        f"({kw_assessment['density']:.1%} of two word phrases). "
+        f"{kw_assessment['reason']}{target_note}",
+        rules["Keyword Stuffing"],
+    ))
 
-    rows.append(result("Scraped Content", REVIEW, "A single fetched URL cannot prove external copying. Run an external similarity/search comparison before marking PASS/FAIL.", rules["Scraped Content"]))
+    rows.append(result(
+        "Scraped Content",
+        REVIEW,
+        "A single URL fetch cannot prove external copying. External similarity or indexed-source comparison is required before PASS or FAIL.",
+        rules["Scraped Content"],
+    ))
 
-    parsed = urlparse(url)
-    host = parsed.netloc.lower().replace("www.", "")
-    anchors = soup.find_all("a", href=True)
-    external = []
-    for a in anchors:
-        href = urljoin(url, a.get("href"))
-        p = urlparse(href)
-        if p.scheme in {"http","https"} and p.netloc and p.netloc.lower().replace("www.","") != host:
-            external.append((a, href))
+    article_soup = main_content_node(soup)
+    page_internal, page_external = extract_page_links(soup, url)
+    article_internal, article_external = extract_page_links(article_soup, url)
+    article_host = urlparse(url).netloc.lower().replace("www.", "")
+
+    article_anchors = []
+    for a in article_soup.find_all("a", href=True):
+        href = normalized_link_url(a.get("href"), url)
+        if not href:
+            continue
+        host = urlparse(href).netloc.lower().replace("www.", "")
+        if host != article_host and not is_social_domain(href):
+            article_anchors.append((a, href))
+
     keyword_rich = 0
-    for a, href in external:
-        txt = a.get_text(" ", strip=True)
+    repeated_anchor_counts = Counter()
+    for a, href in article_anchors:
+        txt = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip().lower()
         if len(tokenize(txt)) >= 4:
             keyword_rich += 1
-    if len(external) > 60 or (len(external) >= 12 and keyword_rich / max(1,len(external)) > .65):
+        if txt:
+            repeated_anchor_counts[txt] += 1
+
+    repeated_manipulative = [
+        anchor for anchor, count in repeated_anchor_counts.items()
+        if count >= 4 and len(tokenize(anchor)) >= 3
+    ]
+
+    if repeated_manipulative:
         link_status = REVIEW
-        finding = f"{len(external)} external links; {keyword_rich} have 4+ word anchor text. Review link intent."
+        finding = (
+            f"{len(article_anchors)} editorial external link(s) found. "
+            f"Repeated keyword rich anchor patterns need review: {', '.join(repeated_manipulative[:5])}."
+        )
+    elif len(article_anchors) > 40 or (
+        len(article_anchors) >= 12
+        and keyword_rich / max(1, len(article_anchors)) > .70
+    ):
+        link_status = REVIEW
+        finding = (
+            f"{len(article_anchors)} editorial external links; {keyword_rich} use long keyword rich anchor text. "
+            "Review link intent."
+        )
     else:
         link_status = PASS
-        finding = f"{len(external)} external links found; no clear automated link-spam pattern."
+        finding = (
+            f"{len(article_anchors)} non social editorial external link(s) and "
+            f"{len(page_external)} page wide external link(s) found; no clear automated link spam pattern."
+        )
     rows.append(result("Link Spam", link_status, finding, rules["Link Spam"]))
 
     paid_candidates = 0
     paid_bad = 0
-    for a, href in external:
-        context = (a.get_text(" ", strip=True) + " " + (a.parent.get_text(" ", strip=True) if a.parent else "")).lower()
-        if any(k in context for k in ["sponsored", "advertisement", "advertorial", "paid partnership", "affiliate"]):
+    for a, href in article_anchors:
+        context = (
+            a.get_text(" ", strip=True)
+            + " "
+            + (a.parent.get_text(" ", strip=True) if a.parent else "")
+        ).lower()
+        if any(k in context for k in [
+            "sponsored", "advertisement", "advertorial",
+            "paid partnership", "affiliate",
+        ]):
             paid_candidates += 1
             rel = {str(x).lower() for x in (a.get("rel") or [])}
-            if not ({"sponsored","nofollow"} & rel):
+            if not ({"sponsored", "nofollow"} & rel):
                 paid_bad += 1
+
     if paid_bad:
         ps = FAIL
-        pf = f"{paid_bad} identifiable paid or sponsored link(s) lack sponsored or nofollow qualification."
+        pf = f"{paid_bad} identifiable paid or sponsored editorial link(s) lack sponsored or nofollow qualification."
     elif paid_candidates:
         ps = PASS
-        pf = f"{paid_candidates} paid or sponsored candidate link(s) found and qualified."
+        pf = f"{paid_candidates} paid or sponsored editorial candidate link(s) found and qualified."
     else:
         ps = PASS
-        pf = "No clearly identifiable paid or sponsored links detected from visible context."
+        pf = "No clearly identifiable paid or sponsored editorial links detected from visible context."
     rows.append(result("Paid Links", ps, pf, rules["Paid Links"]))
 
-    hacked_terms = ["viagra","cialis","casino","slot gacor","online casino","betting bonus","levitra","payday loan"]
-    low = body_text.lower()
+    full_page_text = clean_text(soup)
+    hacked_terms = [
+        "viagra", "cialis", "casino", "slot gacor",
+        "online casino", "betting bonus", "levitra", "payday loan",
+    ]
+    low = full_page_text.lower()
     hacked_hits = [x for x in hacked_terms if x in low]
     if len(hacked_hits) >= 2:
         hs = FAIL
@@ -3466,174 +3918,320 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         hs = REVIEW
     else:
         hs = PASS
-    rows.append(result("Hacked Content", hs, ("Suspicious terms: " + ", ".join(hacked_hits)) if hacked_hits else "No common injected-spam signatures detected.", rules["Hacked Content"]))
+    rows.append(result(
+        "Hacked Content",
+        hs,
+        ("Suspicious injected-content terms: " + ", ".join(hacked_hits))
+        if hacked_hits
+        else "No common injected-spam signatures detected across the fetched page text.",
+        rules["Hacked Content"],
+    ))
 
     script_text = "\n".join((s.string or s.get_text() or "") for s in soup.find_all("script"))
     suspicious_js = []
-    for pattern in ["window.location", "location.replace(", "document.location", "eval(atob(", "fromCharCode("]:
+    for pattern in [
+        "window.location", "location.replace(", "document.location",
+        "eval(atob(", "fromCharCode(",
+    ]:
         if pattern.lower() in script_text.lower():
             suspicious_js.append(pattern)
     js_status = REVIEW if len(suspicious_js) >= 2 else PASS
-    rows.append(result("Spam JavaScript", js_status, f"Suspicious redirect/obfuscation indicators: {', '.join(suspicious_js) if suspicious_js else 'none detected'}.", rules["Spam JavaScript"]))
+    rows.append(result(
+        "Spam JavaScript",
+        js_status,
+        f"Suspicious redirect or obfuscation indicators: {', '.join(suspicious_js) if suspicious_js else 'none detected'}.",
+        rules["Spam JavaScript"],
+    ))
 
     iframes = soup.find_all("iframe")
     hidden_iframes = [i for i in iframes if obvious_hidden(i)]
-    if hidden_iframes:
+    suspicious_iframe_sources = []
+    for iframe in hidden_iframes:
+        src = normalized_link_url(iframe.get("src"), url)
+        if src and urlparse(src).netloc.lower().replace("www.", "") != article_host:
+            suspicious_iframe_sources.append(src)
+
+    if hidden_iframes and suspicious_iframe_sources:
         iframe_status = REVIEW
-        iframe_find = f"Found {len(hidden_iframes)} hidden iframe(s); verify purpose and source."
+        iframe_find = (
+            f"Found {len(hidden_iframes)} hidden iframe(s), including external hidden source(s): "
+            + ", ".join(suspicious_iframe_sources[:4]) + "."
+        )
+    elif hidden_iframes:
+        iframe_status = REVIEW
+        iframe_find = f"Found {len(hidden_iframes)} hidden iframe(s); verify legitimate interface purpose."
     else:
         iframe_status = PASS
         iframe_find = f"{len(iframes)} iframe(s) found; none obviously hidden."
     rows.append(result("Spam Iframes", iframe_status, iframe_find, rules["Spam Iframes"]))
 
-    rows.append(result("Site Reputation Abuse", REVIEW, "URL only analysis can flag unrelated third party content, but confirming reputation abuse requires editorial/ownership context.", rules["Site Reputation Abuse"]))
+    rows.append(result(
+        "Site Reputation Abuse",
+        REVIEW,
+        "A single URL can show topic and publisher signals, but ownership, third party production and ranking exploitation intent require site level editorial context.",
+        rules["Site Reputation Abuse"],
+    ))
 
     comment_nodes = soup.select(".comment, .comments, [id*='comment'], [class*='comment']")
-    ugc_links = 0
+    ugc_links = []
     for n in comment_nodes:
-        ugc_links += len(n.find_all("a", href=True))
-    ugc_status = REVIEW if ugc_links >= 10 else PASS
-    rows.append(result("User Generated Spam", ugc_status, f"Detected {ugc_links} links in comment/UGC-like containers.", rules["User Generated Spam"]))
+        for a in n.find_all("a", href=True):
+            href = normalized_link_url(a.get("href"), url)
+            if href:
+                ugc_links.append((a.get_text(" ", strip=True), href, a.get("rel") or []))
+
+    ugc_domains = Counter(
+        urlparse(href).netloc.lower().replace("www.", "")
+        for _, href, _ in ugc_links
+    )
+    ugc_anchor_counts = Counter(
+        re.sub(r"\s+", " ", anchor).strip().lower()
+        for anchor, _, _ in ugc_links
+        if anchor.strip()
+    )
+    spammy_ugc = (
+        len(ugc_links) >= 10
+        and (
+            max(ugc_domains.values(), default=0) >= 6
+            or max(ugc_anchor_counts.values(), default=0) >= 5
+        )
+    )
+
+    if spammy_ugc:
+        ugc_status = REVIEW
+        ugc_finding = (
+            f"Detected {len(ugc_links)} UGC link(s) with concentrated domain or repeated anchor patterns. "
+            "Review comment moderation."
+        )
+    else:
+        ugc_status = PASS
+        ugc_finding = (
+            f"Detected {len(ugc_links)} link(s) in comment or UGC like containers; "
+            "no mass repeated UGC link pattern was detected."
+        )
+    rows.append(result("User Generated Spam", ugc_status, ugc_finding, rules["User Generated Spam"]))
 
     lower_js = script_text.lower()
-    hijack = ("popstate" in lower_js and ("pushstate" in lower_js or "replacestate" in lower_js) and ("location" in lower_js or "redirect" in lower_js))
-    rows.append(result("Back Button Hijacking", FAIL if hijack else PASS, "Browser-history redirect pattern detected." if hijack else "No obvious browser-history hijacking pattern detected.", rules["Back Button Hijacking"]))
+    hijack = (
+        "popstate" in lower_js
+        and ("pushstate" in lower_js or "replacestate" in lower_js)
+        and any(x in lower_js for x in ["location.href", "location.replace", "window.location"])
+    )
+    rows.append(result(
+        "Back Button Hijacking",
+        FAIL if hijack else PASS,
+        "Browser-history redirect pattern detected."
+        if hijack
+        else "No obvious browser-history hijacking pattern detected.",
+        rules["Back Button Hijacking"],
+    ))
 
-    malware_signals = sum(1 for x in ["eval(atob(", "unescape(", "document.write('<script", 'document.write("<script'] if x in lower_js)
+    malware_signals = sum(
+        1
+        for x in ["eval(atob(", "unescape(", "document.write('<script", 'document.write("<script']
+        if x in lower_js
+    )
     if malware_signals >= 2:
         ms = REVIEW
-        mf = "Multiple script-obfuscation/injection patterns detected; security review required."
+        mf = "Multiple script obfuscation or injection patterns detected; security review required."
     else:
         ms = PASS
-        mf = "No strong malware/scam script signature detected by static HTML scan."
+        mf = "No strong malware or scam script signature detected by the static HTML and JavaScript scan."
     rows.append(result("Malware / Scam Behaviour", ms, mf, rules["Malware / Scam Behaviour"]))
 
     return rows
 
-# -----------------------------
-# SEO audit
-# -----------------------------
 
-def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_keyword="", secondary_keywords=None, sitemap_result=None, external_validation=None, resource_validation=None):
+def audit_seo(
+    url,
+    desktop_r,
+    desktop_elapsed,
+    mobile_r,
+    soup,
+    body_text,
+    focus_keyword="",
+    secondary_keywords=None,
+    sitemap_result=None,
+    internal_validation=None,
+    external_validation=None,
+    resource_validation=None,
+    robots_txt_result=None,
+):
     rows = []
     rules = dict(SEO_RULES)
     secondary_keywords = secondary_keywords or []
+    article_soup = main_content_node(soup)
 
     code = desktop_r.status_code
-    rows.append(result("HTTP Status", PASS if code == 200 else FAIL, f"HTTP {code}.", rules["HTTP Status"]))
+    redirect_count = len(getattr(desktop_r, "history", []) or [])
+    if code == 200:
+        http_status = PASS
+    elif 300 <= code < 400:
+        http_status = REVIEW
+    else:
+        http_status = FAIL
+    rows.append(result(
+        "HTTP Status",
+        http_status,
+        f"Final HTTP {code}. Redirects followed: {redirect_count}. Final URL: {desktop_r.url}. Response time: {desktop_elapsed:.2f}s.",
+        rules["HTTP Status"],
+    ))
 
     robots = robots_directives(soup)
     if "noindex" in robots:
-        rows.append(result("Indexability", FAIL, f"Page-level robots directive contains noindex: {robots}", rules["Indexability"]))
+        rows.append(result(
+            "Indexability",
+            FAIL,
+            f"Page level robots directive contains noindex: {robots}",
+            rules["Indexability"],
+        ))
     else:
-        rows.append(result("Indexability", PASS, f"No page level noindex detected{': ' + robots if robots else ''}.", rules["Indexability"]))
+        rows.append(result(
+            "Indexability",
+            PASS,
+            f"No page level noindex detected{': ' + robots if robots else ''}.",
+            rules["Indexability"],
+        ))
 
-    if "none" in robots or "noindex" in robots or "nofollow" in robots:
-        rs = REVIEW if "noindex" not in robots else FAIL
+    if robots_txt_result is None:
+        robots_txt_result = robots_access_result(desktop_r.url)
+
+    robots_status = PASS
+    robots_notes = []
+
+    if "noindex" in robots:
+        robots_status = FAIL
+        robots_notes.append(f"Page meta contains noindex: {robots}.")
+    elif "nofollow" in robots or "none" in robots:
+        robots_status = REVIEW
+        robots_notes.append(f"Page meta contains a restrictive follow directive: {robots}.")
     else:
-        rs = PASS
-    rows.append(result("Robots", rs, robots or "No restrictive page level robots meta detected.", rules["Robots"]))
+        robots_notes.append(robots or "No restrictive page level robots meta detected.")
+
+    rt_status = robots_txt_result.get("status")
+    if rt_status == 200:
+        if robots_txt_result.get("googlebot_allowed") is False:
+            robots_status = FAIL
+            robots_notes.append(
+                f"robots.txt blocks the URL for Googlebot: {robots_txt_result['robots_url']}."
+            )
+        else:
+            robots_notes.append(
+                f"robots.txt allows Googlebot to fetch this URL: {robots_txt_result['robots_url']}."
+            )
+    elif rt_status in {404, 410}:
+        robots_notes.append("robots.txt was not found; no URL level robots.txt block was detected.")
+    elif rt_status is None or (rt_status and rt_status >= 500):
+        if robots_status == PASS:
+            robots_status = REVIEW
+        robots_notes.append(
+            f"robots.txt could not be reliably verified. "
+            f"HTTP: {rt_status if rt_status is not None else 'request error'}."
+        )
+    else:
+        if robots_status == PASS:
+            robots_status = REVIEW
+        robots_notes.append(f"robots.txt returned HTTP {rt_status}; verify crawler access manually.")
+
+    rows.append(result("Robots", robots_status, " ".join(robots_notes), rules["Robots"]))
 
     canonical = canonical_href(soup)
     if not canonical:
         cs = REVIEW
         cf = "Canonical tag not found."
     else:
-        can_abs = urljoin(desktop_r.url, canonical)
-        same_path = urlparse(can_abs).path.rstrip("/") == urlparse(desktop_r.url).path.rstrip("/")
-        cs = PASS if same_path else REVIEW
-        cf = f"Canonical: {can_abs}"
+        can_abs = normalized_link_url(canonical, desktop_r.url)
+        current_identity = normalized_destination(desktop_r.url)
+        canonical_identity = normalized_destination(can_abs)
+        canonical_probe = probe_http_url(can_abs) if can_abs else None
+
+        if not can_abs:
+            cs = FAIL
+            cf = f"Canonical is malformed: {canonical}"
+        elif canonical_identity != current_identity:
+            cs = REVIEW
+            cf = f"Canonical points to a different preferred URL: {can_abs}."
+        elif canonical_probe and canonical_probe.get("status") not in range(200, 300):
+            cs = REVIEW
+            cf = (
+                f"Canonical matches the page URL but the target did not return a successful response. "
+                f"Canonical: {can_abs}. HTTP: {canonical_probe.get('status')}."
+            )
+        else:
+            cs = PASS
+            cf = f"Canonical matches the preferred final URL and resolves successfully: {can_abs}."
     rows.append(result("Canonical", cs, cf, rules["Canonical"]))
 
     title = title_text(soup)
     title_len = len(title)
-
-    # Google does not publish a fixed Title Tag character limit.
-    # Length is treated only as an internal quality signal.
     if not title:
         ts = FAIL
         title_reason = "Title is missing."
     else:
         ts = PASS
         title_reason_parts = []
-
-        # Topic relevance between the title and the actual article body.
-        title_body_overlap = keyword_overlap(title, body_text)
-
-        # Focus Keyword representation.
+        title_body_overlap = max(
+            keyword_overlap(title, body_text),
+            semantic_overlap(title, body_text),
+        )
         focus_exact = keyword_in_text(focus_keyword, title) if focus_keyword else True
-        focus_overlap = keyword_overlap(focus_keyword, title) if focus_keyword else 1.0
+        focus_overlap = max(
+            keyword_overlap(focus_keyword, title),
+            semantic_overlap(focus_keyword, title),
+        ) if focus_keyword else 1.0
         focus_represented = focus_exact or focus_overlap >= 0.60
 
-        # Detect obvious repetition inside the Title Tag.
         title_words = [
             w for w in tokenize(title)
             if len(w) > 2 and w not in {
                 "the", "and", "for", "with", "from", "this", "that", "your", "you",
                 "are", "our", "in", "on", "of", "to", "a", "an", "is",
-                "في", "من", "على", "إلى", "الى", "عن", "هذا", "هذه", "مع", "و", "أو", "او"
+                "في", "من", "على", "إلى", "الى", "عن", "هذا", "هذه", "مع", "و", "أو", "او",
             }
         ]
-        title_word_counts = Counter(title_words)
         repeated_title_terms = [
-            word for word, count in title_word_counts.items()
+            word for word, count in Counter(title_words).items()
             if count >= 3
         ]
 
-        # Length logic.
         if title_len > 80:
             ts = REVIEW
             title_reason_parts.append(
                 f"The title contains {title_len} characters and may be more verbose than necessary."
             )
-        elif title_len < 30:
-            # A short title is only reviewed if it also has weak topic coverage.
-            if title_body_overlap < 0.55:
-                ts = REVIEW
-                title_reason_parts.append(
-                    f"The title contains {title_len} characters and has weak topic coverage."
-                )
-            else:
-                title_reason_parts.append(
-                    f"The title contains {title_len} characters but still represents the page topic clearly."
-                )
-        elif 71 <= title_len <= 80:
+        elif title_len < 30 and title_body_overlap < 0.55:
+            ts = REVIEW
             title_reason_parts.append(
-                f"The title contains {title_len} characters. Length alone does not trigger REVIEW."
+                f"The title contains {title_len} characters and has weak topic coverage."
             )
         else:
             title_reason_parts.append(
-                f"The title contains {title_len} characters and is within the system's concise internal range."
+                f"The title contains {title_len} characters. Length is treated as an internal quality signal only."
             )
 
-        # Relevance logic.
         if title_body_overlap < 0.35:
             ts = REVIEW
             title_reason_parts.append(
-                f"Title to article topic overlap is only {title_body_overlap:.0%}."
+                f"Title to article topic agreement is only {title_body_overlap:.0%}."
             )
         else:
             title_reason_parts.append(
-                f"Title to article topic overlap is {title_body_overlap:.0%}."
+                f"Title to article topic agreement is {title_body_overlap:.0%}."
             )
 
-        # Focus Keyword logic uses exact or semantic term overlap.
         if focus_keyword:
             if not focus_represented:
                 ts = REVIEW
                 title_reason_parts.append(
-                    f"The Focus Keyword meaning is weakly represented in the title. Term overlap is {focus_overlap:.0%}."
+                    f"The Focus Keyword meaning is weakly represented in the title ({focus_overlap:.0%})."
                 )
             elif focus_exact:
-                title_reason_parts.append(
-                    f"The Focus Keyword is directly represented in the title."
-                )
+                title_reason_parts.append("The Focus Keyword is directly represented in the title.")
             else:
                 title_reason_parts.append(
-                    f"The Focus Keyword is represented semantically. Term overlap is {focus_overlap:.0%}."
+                    f"The Focus Keyword is represented semantically ({focus_overlap:.0%})."
                 )
 
-        # Obvious repetition inside the title.
         if repeated_title_terms:
             ts = REVIEW
             title_reason_parts.append(
@@ -3642,31 +4240,47 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
 
         title_reason = " ".join(title_reason_parts)
 
-    rows.append(
-        result(
-            "Title Tag",
-            ts,
-            f"Title: {title or 'missing'}. {title_reason}",
-            rules["Title Tag"]
-        )
-    )
+    rows.append(result(
+        "Title Tag",
+        ts,
+        f"Title: {title or 'missing'}. {title_reason}",
+        rules["Title Tag"],
+    ))
 
     meta = meta_content(soup, name="description")
     ml = len(meta)
     if not meta:
         md = REVIEW
-    elif ml < 70 or ml > 180:
-        md = REVIEW
+        meta_note = "Meta description is missing."
     else:
+        meta_topic = max(
+            semantic_overlap(focus_keyword or title, meta),
+            keyword_overlap(focus_keyword or title, meta),
+        )
         md = PASS
-    focus_in_meta = keyword_in_text(focus_keyword, meta) if focus_keyword else True
-    if focus_keyword and not focus_in_meta and md == PASS:
-        md = REVIEW
-    meta_kw_note = f" | Focus keyword {'found' if focus_in_meta else 'not found'}" if focus_keyword else ""
-    rows.append(result("Meta Description", md, f"{ml} characters{': ' + meta[:180] if meta else ' — missing'}{meta_kw_note}", rules["Meta Description"]))
+        notes = [f"{ml} characters.", f"Topic agreement {meta_topic:.0%}."]
+
+        # Google does not define a fixed description character limit.
+        if ml < 50 and meta_topic < 0.55:
+            md = REVIEW
+            notes.append("Description is very short and weakly represents the topic.")
+        elif ml > 320:
+            md = REVIEW
+            notes.append("Description is unusually long and may be unnecessarily verbose.")
+
+        if meta_topic < 0.35:
+            md = REVIEW
+            notes.append("Description has weak semantic relevance to the page topic.")
+        elif focus_keyword and keyword_in_text(focus_keyword, meta):
+            notes.append("Focus Keyword is directly represented.")
+        elif focus_keyword:
+            notes.append("Exact Focus Keyword wording is not required because the meaning is represented semantically.")
+
+        meta_note = " ".join(notes) + f" Description: {meta[:220]}"
+
+    rows.append(result("Meta Description", md, meta_note, rules["Meta Description"]))
 
     h1s = page_h1s(soup)
-
     if len(h1s) == 0:
         h1_status = FAIL
         h1_finding = "No H1 was found on the page."
@@ -3685,14 +4299,13 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
                 relation_note = f"The Focus Keyword meaning is represented semantically at {h1_semantic:.0%} concept overlap."
             elif h1_page_topic >= 0.60:
                 relation_note = (
-                    f"Exact Focus Keyword wording is not present, but the H1 strongly represents the article topic "
-                    f"at {h1_page_topic:.0%} concept overlap."
+                    f"The H1 strongly represents the article topic at {h1_page_topic:.0%} concept overlap."
                 )
             else:
                 h1_status = REVIEW
                 relation_note = (
-                    f"The H1 has weak semantic representation of the Focus Keyword "
-                    f"({h1_semantic:.0%}) and the article topic ({h1_page_topic:.0%})."
+                    f"The H1 has weak semantic representation of the Focus Keyword ({h1_semantic:.0%}) "
+                    f"and article topic ({h1_page_topic:.0%})."
                 )
         else:
             h1_page_topic = semantic_overlap(h1_text, body_text)
@@ -3703,23 +4316,41 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
         count_note = (
             "One H1 was found."
             if len(h1s) == 1
-            else f"{len(h1s)} H1 elements were found, so the structure should be reviewed."
+            else f"{len(h1s)} H1 elements were found."
         )
         h1_finding = f"{count_note} H1: {h1_text}. {relation_note}"
 
     rows.append(result("H1", h1_status, h1_finding, rules["H1"]))
 
-    headings = []
-    empty_headings = 0
-    for tag in soup.find_all(re.compile(r"^h[1-6]$")):
-        txt = tag.get_text(" ", strip=True)
-        if not txt:
-            empty_headings += 1
-        else:
-            headings.append((tag.name, txt))
-    dup_h = len(headings) - len(set(x[1].lower() for x in headings))
-    hs = REVIEW if empty_headings or dup_h >= 3 else PASS
-    rows.append(result("Heading Structure", hs, f"{len(headings)} populated headings; {empty_headings} empty; {dup_h} duplicate heading occurrence(s).", rules["Heading Structure"]))
+    heading_nodes = []
+    primary_h1 = page_primary_h1(soup)
+    if primary_h1:
+        heading_nodes.append(("h1", primary_h1))
+
+    for tag in article_soup.find_all(re.compile(r"^h[2-6]$")):
+        txt = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
+        heading_nodes.append((tag.name, txt))
+
+    empty_headings = sum(1 for _, txt in heading_nodes if not txt)
+    populated = [(tag, txt) for tag, txt in heading_nodes if txt]
+    duplicate_count = len(populated) - len(set(txt.casefold() for _, txt in populated))
+
+    level_jumps = []
+    last_level = None
+    for tag, txt in populated:
+        level = int(tag[1])
+        if last_level is not None and level > last_level + 1:
+            level_jumps.append(f"{last_level} to {level} before '{txt[:70]}'")
+        last_level = level
+
+    hs = REVIEW if empty_headings or duplicate_count >= 3 or level_jumps else PASS
+    heading_finding = (
+        f"{len(populated)} editorial headings; {empty_headings} empty; "
+        f"{duplicate_count} duplicate occurrence(s); {len(level_jumps)} hierarchy jump(s)."
+    )
+    if level_jumps:
+        heading_finding += " Examples: " + "; ".join(level_jumps[:4]) + "."
+    rows.append(result("Heading Structure", hs, heading_finding, rules["Heading Structure"]))
 
     parsed = urlparse(desktop_r.url)
     q = parsed.query
@@ -3730,17 +4361,53 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
         us = REVIEW
     else:
         us = PASS
-    rows.append(result("URL Structure", us, f"Path: {parsed.path}" + (f" | Query: {q[:120]}" if q else ""), rules["URL Structure"]))
+    rows.append(result(
+        "URL Structure",
+        us,
+        f"Path: {parsed.path}" + (f" | Query: {q[:120]}" if q else ""),
+        rules["URL Structure"],
+    ))
 
     internal, external = extract_page_links(soup, desktop_r.url)
-    rows.append(
-        result(
-            "Internal Links",
-            PASS if internal else REVIEW,
-            f"{len(internal)} unique crawlable HTTP(S) internal links found.",
-            rules["Internal Links"],
+    article_internal, _ = extract_page_links(article_soup, desktop_r.url)
+
+    if internal_validation is None:
+        internal_validation = validate_url_set(
+            internal,
+            timeout=INTERNAL_LINK_CHECK_TIMEOUT,
+            workers=INTERNAL_LINK_CHECK_WORKERS,
         )
+
+    internal_problems = (
+        internal_validation.get("broken", [])
+        + internal_validation.get("server_errors", [])
+        + internal_validation.get("restricted", [])
+        + internal_validation.get("unreachable", [])
     )
+    if not internal:
+        internal_status = REVIEW
+        internal_finding = "No crawlable internal HTTP links were found."
+    elif internal_problems:
+        internal_status = REVIEW
+        examples = validation_problem_examples({
+            "broken": internal_validation.get("broken", []),
+            "server_errors": internal_validation.get("server_errors", []),
+            "restricted": internal_validation.get("restricted", []),
+            "unreachable": internal_validation.get("unreachable", []),
+        })
+        internal_finding = (
+            f"{len(internal_validation.get('checked', []))} unique internal links were requested; "
+            f"{len(article_internal)} appear inside the isolated article body. "
+            f"{len(internal_validation.get('working', []))} resolved successfully. "
+            "Problems requiring review: " + "; ".join(examples) + "."
+        )
+    else:
+        internal_status = PASS
+        internal_finding = (
+            f"All {len(internal_validation.get('checked', []))} unique internal HTTP links were requested successfully; "
+            f"{len(article_internal)} appear inside the isolated article body."
+        )
+    rows.append(result("Internal Links", internal_status, internal_finding, rules["Internal Links"]))
 
     if external_validation is None:
         external_validation = validate_url_set(
@@ -3762,86 +4429,108 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
         external_finding = "No external HTTP links were found."
     elif external_problem_items:
         external_status = REVIEW
-        external_problems = validation_problem_examples(
-            {
-                "broken": external_classified["broken"],
-                "server_errors": external_classified["server_errors"],
-                "restricted": external_classified["restricted"],
-                "unreachable": external_classified["unreachable"],
-            }
-        )
+        external_problems = validation_problem_examples({
+            "broken": external_classified["broken"],
+            "server_errors": external_classified["server_errors"],
+            "restricted": external_classified["restricted"],
+            "unreachable": external_classified["unreachable"],
+        })
         external_finding = (
             f"{len(external_classified['checked'])} unique external links were requested. "
             f"{len(external_classified['working'])} resolved successfully. "
-            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected automated access restrictions and were not treated as broken. "
-            f"Problems requiring review: " + "; ".join(external_problems) + "."
+            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected automated access restrictions. "
+            "Problems requiring review: " + "; ".join(external_problems) + "."
         )
     else:
         external_status = PASS
         external_finding = (
             f"{len(external_classified['checked'])} unique external HTTP links were requested. "
             f"{len(external_classified['working'])} resolved directly. "
-            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected login or anti-bot responses and were not treated as broken. "
+            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected login or anti bot responses and were not treated as broken. "
             f"{len(external_classified['redirected'])} redirected to a working final destination."
         )
+    rows.append(result("External Links", external_status, external_finding, rules["External Links"]))
 
-    rows.append(
-        result(
-            "External Links",
-            external_status,
-            external_finding,
-            rules["External Links"],
-        )
+    image_inventory = meaningful_image_inventory(
+        soup,
+        desktop_r.url,
+        resource_validation=resource_validation,
     )
-
-    imgs = soup.find_all("img")
-    no_alt = [i for i in imgs if i.get("alt") is None]
-    image_status = REVIEW if imgs and len(no_alt)/len(imgs) > .35 else PASS
-    rows.append(result("Images", image_status, f"{len(imgs)} images; {len(no_alt)} missing alt attribute.", rules["Images"]))
+    if image_inventory["issues"]:
+        image_status = REVIEW
+        image_finding = (
+            f"{len(image_inventory['meaningful'])} meaningful article image(s) and "
+            f"{len(image_inventory['decorative'])} decorative image(s) were classified. "
+            f"Issues: {'; '.join(image_inventory['issues'][:6])}."
+        )
+    else:
+        image_status = PASS
+        image_finding = (
+            f"{len(image_inventory['meaningful'])} meaningful article image(s) checked for alt treatment and "
+            f"{len(image_inventory['decorative'])} decorative image(s) excluded from meaningful alt requirements. "
+            "No meaningful-image alt or resource issue was detected."
+        )
+    rows.append(result("Images", image_status, image_finding, rules["Images"]))
 
     jsonld, json_errors = parse_jsonld(soup)
-    headlines = [
-        str(value)
-        for value in get_schema_values(jsonld, "headline")
-        if isinstance(value, (str, int, float))
-    ]
-
+    article_objects = article_schema_objects(jsonld)
     visible_title = title_text(soup)
     visible_h1 = page_primary_h1(soup)
-    headline_scores = [
-        max(
-            semantic_overlap(headline, visible_title),
-            semantic_overlap(headline, visible_h1),
-            keyword_overlap(headline, visible_title),
-            keyword_overlap(headline, visible_h1),
-        )
-        for headline in headlines
-    ] if headlines else []
+    sd = PASS
+    schema_notes = []
 
     if json_errors:
         sd = REVIEW
-        schema_finding = f"{len(jsonld)} valid JSON LD block(s) and {json_errors} parse error(s)."
-    elif not jsonld:
+        schema_notes.append(f"{json_errors} JSON LD parse error(s) detected.")
+    if not jsonld:
         sd = REVIEW
-        schema_finding = "No valid JSON LD block was found."
-    elif headlines and max(headline_scores or [0]) < 0.45:
+        schema_notes.append("No valid JSON LD block was found.")
+    elif not article_objects and word_count(body_text) >= 300:
         sd = REVIEW
-        schema_finding = (
-            f"{len(jsonld)} valid JSON LD block(s) found, but schema headline has weak agreement with the visible title and H1. "
-            f"Schema headline example: {headlines[0]}."
+        schema_notes.append(
+            f"{len(jsonld)} JSON LD block(s) are parseable, but no Article, BlogPosting or NewsArticle type was identified for this editorial page."
         )
     else:
-        sd = PASS
-        schema_finding = (
-            f"{len(jsonld)} valid JSON LD block(s); {json_errors} parse error(s)."
+        schema_notes.append(
+            f"{len(jsonld)} valid JSON LD block(s); {len(article_objects)} article type schema object(s)."
         )
-        if headlines:
-            schema_finding += (
-                f" Schema headline is consistent with the visible page at "
-                f"{max(headline_scores):.0%} semantic or lexical agreement."
-            )
 
-    rows.append(result("Structured Data", sd, schema_finding, rules["Structured Data"]))
+    if article_objects:
+        obj = article_objects[0]
+        headline = obj.get("headline")
+        if isinstance(headline, str) and headline.strip():
+            headline_score = max(
+                semantic_overlap(headline, visible_title),
+                semantic_overlap(headline, visible_h1),
+                keyword_overlap(headline, visible_title),
+                keyword_overlap(headline, visible_h1),
+            )
+            if headline_score < 0.45:
+                sd = REVIEW
+                schema_notes.append(
+                    f"Schema headline has weak agreement with visible title and H1 ({headline_score:.0%})."
+                )
+            else:
+                schema_notes.append(
+                    f"Schema headline agrees with visible page topic at {headline_score:.0%}."
+                )
+
+        schema_urls = [
+            normalized_link_url(value, desktop_r.url)
+            for value in schema_object_urls(obj)
+        ]
+        schema_urls = [u for u in schema_urls if u]
+        if schema_urls:
+            if not any(
+                normalized_destination(u) == normalized_destination(desktop_r.url)
+                for u in schema_urls
+            ):
+                sd = REVIEW
+                schema_notes.append(
+                    "Article schema URL or mainEntityOfPage does not match the preferred final page URL."
+                )
+
+    rows.append(result("Structured Data", sd, " ".join(schema_notes), rules["Structured Data"]))
 
     published = [
         str(value)
@@ -3860,9 +4549,7 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
         f"Schema datePublished: {published[:3] if published else 'not found'}."
     ]
     if visible_dates["published"]:
-        published_notes.append(
-            f"Visible or metadata published dates: {visible_dates['published'][:3]}."
-        )
+        published_notes.append(f"Visible or metadata published dates: {visible_dates['published'][:3]}.")
         if published:
             diffs = [
                 datetime_difference_hours(published[0], value)
@@ -3872,25 +4559,14 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
             if diffs and min(diffs) > 24:
                 published_status = REVIEW
                 published_notes.append("Publication date signals differ by more than 24 hours.")
-
-    rows.append(
-        result(
-            "datePublished",
-            published_status,
-            " ".join(published_notes),
-            rules["datePublished"],
-        )
-    )
+    rows.append(result("datePublished", published_status, " ".join(published_notes), rules["datePublished"]))
 
     modified_status = PASS if modified else REVIEW
     modified_notes = [
         f"Schema dateModified: {modified[:3] if modified else 'not found'}."
     ]
-
     if visible_dates["modified"]:
-        modified_notes.append(
-            f"Visible or metadata modified dates: {visible_dates['modified'][:3]}."
-        )
+        modified_notes.append(f"Visible or metadata modified dates: {visible_dates['modified'][:3]}.")
 
     sitemap_lastmod = sitemap_result.get("lastmod") if sitemap_result else ""
     if sitemap_lastmod:
@@ -3909,7 +4585,8 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
             if diff is not None and diff > 24:
                 modified_status = REVIEW
                 modified_notes.append(
-                    "HTTP Last Modified differs materially from the editorial modification date. This is a technical freshness inconsistency, not a spam violation."
+                    "HTTP Last Modified differs materially from the editorial modification date. "
+                    "This is a technical freshness inconsistency, not a spam violation."
                 )
 
     if visible_dates["modified"] and modified:
@@ -3922,14 +4599,7 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
             modified_status = REVIEW
             modified_notes.append("Visible modified date and schema dateModified differ by more than 24 hours.")
 
-    rows.append(
-        result(
-            "dateModified",
-            modified_status,
-            " ".join(modified_notes),
-            rules["dateModified"],
-        )
-    )
+    rows.append(result("dateModified", modified_status, " ".join(modified_notes), rules["dateModified"]))
 
     if sitemap_result is None:
         sitemap_result = find_url_in_sitemaps(desktop_r.url)
@@ -3947,7 +4617,7 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     elif sitemap_result["accessible"] > 0 and sitemap_result["complete"]:
         ss = REVIEW
         sf = (
-            f"Accessible sitemap files were fully inspected but the preferred URL was not found. "
+            "Accessible sitemap files were fully inspected but the preferred URL was not found. "
             f"Sitemap files checked: {len(sitemap_result['checked'])}. "
             f"Child sitemap references discovered: {sitemap_result['child_count']}."
         )
@@ -3959,7 +4629,6 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
             stop_reason = f"the {SITEMAP_MAX_FILES} sitemap file audit limit was reached"
         else:
             stop_reason = "the sitemap inspection could not process every discovered file"
-
         sf = (
             f"Sitemap inspection was incomplete because {stop_reason}. "
             f"Sitemap files checked: {len(sitemap_result['checked'])}. "
@@ -3969,29 +4638,52 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     else:
         ss = REVIEW
         sf = (
-            f"No accessible XML sitemap could be confirmed from robots.txt or the common sitemap locations. "
+            "No accessible XML sitemap could be confirmed from robots.txt or common sitemap locations. "
             f"Endpoints attempted: {len(sitemap_result['checked'])}."
         )
-
     rows.append(result("Sitemap", ss, sf, rules["Sitemap"]))
 
     mobile_text = main_content_text(soup_of(mobile_r.text))
     sm = similarity(body_text, mobile_text)
-    rows.append(result("Mobile Content", PASS if sm >= .80 else REVIEW, f"Desktop/mobile main-content similarity: {sm:.0%}.", rules["Mobile Content"]))
+    rows.append(result(
+        "Mobile Content",
+        PASS if sm >= .80 else REVIEW,
+        f"Desktop and mobile main content similarity: {sm:.0%}.",
+        rules["Mobile Content"],
+    ))
 
     script_count = len(soup.find_all("script"))
     wc = word_count(body_text)
     if wc < 150 and script_count >= 20:
         jr = REVIEW
-        jf = f"Only {wc} extracted words with {script_count} scripts; rendered-content test recommended."
+        jf = f"Only {wc} extracted words with {script_count} scripts; rendered content verification is recommended."
     else:
         jr = PASS
-        jf = f"{wc} extracted words; {script_count} scripts. No obvious empty-HTML shell pattern."
+        jf = (
+            f"{wc} meaningful article words were already present in initial HTML with {script_count} scripts. "
+            "No obvious empty HTML shell pattern was detected."
+        )
     rows.append(result("JavaScript Rendering", jr, jf, rules["JavaScript Rendering"]))
 
-    rows.append(result("HTTPS", PASS if parsed.scheme == "https" else FAIL, f"Preferred URL scheme: {parsed.scheme}", rules["HTTPS"]))
-
     resource_urls = extract_resource_urls(soup, desktop_r.url)
+    mixed_content = [
+        u for u in resource_urls
+        if parsed.scheme == "https" and urlparse(u).scheme == "http"
+    ]
+    if parsed.scheme != "https":
+        https_status = FAIL
+        https_finding = f"Preferred page scheme is {parsed.scheme}, not HTTPS."
+    elif mixed_content:
+        https_status = REVIEW
+        https_finding = (
+            f"Preferred page uses HTTPS, but {len(mixed_content)} HTTP render resource(s) create potential mixed content. "
+            f"Examples: {', '.join(mixed_content[:4])}."
+        )
+    else:
+        https_status = PASS
+        https_finding = "Preferred page and discovered render resources use HTTPS without detected mixed content."
+    rows.append(result("HTTPS", https_status, https_finding, rules["HTTPS"]))
+
     if resource_validation is None:
         resource_validation = validate_url_set(
             resource_urls,
@@ -4002,41 +4694,29 @@ def audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_
     resource_problems = validation_problem_examples(resource_validation)
     if not resource_urls:
         resource_status = REVIEW
-        resource_finding = "No external image, stylesheet or JavaScript resource URLs were discovered."
+        resource_finding = "No image, stylesheet, font preload or JavaScript resource URLs were discovered."
     elif resource_problems:
         resource_status = REVIEW
         resource_finding = (
-            f"{len(resource_validation['checked'])} unique resource URLs were requested. "
+            f"{len(resource_validation['checked'])} unique render resource URLs were requested. "
             f"{len(resource_validation['working'])} resolved successfully. "
-            f"Problems: " + "; ".join(resource_problems) + "."
+            "Problems: " + "; ".join(resource_problems) + "."
         )
     else:
         resource_status = PASS
         resource_finding = (
-            f"All {len(resource_validation['checked'])} unique image, stylesheet and JavaScript resource URLs were requested and resolved successfully."
+            f"All {len(resource_validation['checked'])} unique image, stylesheet, font preload and JavaScript resource URLs resolved successfully."
         )
-
-    rows.append(
-        result(
-            "Broken Resources",
-            resource_status,
-            resource_finding,
-            rules["Broken Resources"],
-        )
-    )
+    rows.append(result("Broken Resources", resource_status, resource_finding, rules["Broken Resources"]))
 
     return rows
 
-# -----------------------------
-# Content audit
-# -----------------------------
 
 def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=None):
     rows = []
     rules = dict(CONTENT_RULES)
     secondary_keywords = secondary_keywords or []
 
-    # All Content QA rules use the isolated editorial article body.
     article_soup = main_content_node(soup)
     body_text = clean_text(article_soup)
 
@@ -4045,7 +4725,10 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     wc = word_count(body_text)
     target_topic = focus_keyword or title or h1
 
-    intent_overlap = keyword_overlap(target_topic, body_text)
+    intent_overlap = max(
+        keyword_overlap(target_topic, body_text),
+        semantic_overlap(target_topic, body_text),
+    )
     if intent_overlap >= .65:
         s = PASS
     elif intent_overlap >= .35:
@@ -4053,7 +4736,12 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     else:
         s = FAIL
     intent_label = f"focus keyword ‘{focus_keyword}’" if focus_keyword else "title topic"
-    rows.append(result("Search Intent", s, f"{intent_overlap:.0%} of meaningful {intent_label} terms are represented in the page text.", rules["Search Intent"]))
+    rows.append(result(
+        "Search Intent",
+        s,
+        f"Meaning or terms from the {intent_label} are represented in the article at {intent_overlap:.0%} topic agreement.",
+        rules["Search Intent"],
+    ))
 
     content_sections = heading_sections(article_soup)
     headings = [item["heading"] for item in content_sections]
@@ -4068,11 +4756,7 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
                 weak_sections.append(item["heading"])
             continue
 
-        if entity_heading_context_relevant(
-            item["heading"],
-            item["section"],
-            target_topic,
-        ):
+        if entity_heading_context_relevant(item["heading"], item["section"], target_topic):
             continue
 
         if heading_score < 0.20 and section_score < 0.35:
@@ -4082,57 +4766,59 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         weak_share = len(weak_sections) / len(content_sections)
         rel_status = FAIL if weak_share > 0.65 else REVIEW if weak_share > 0.45 else PASS
         rel_finding = (
-            f"{len(weak_sections)} of {len(content_sections)} H2 to H4 sections remain weakly related after checking both heading meaning and section context."
+            f"{len(weak_sections)} of {len(content_sections)} H2 to H4 sections remain weakly related "
+            "after heading hierarchy, entity context and FAQ content analysis."
         )
         if weak_sections:
             rel_finding += " Weak sections: " + "; ".join(weak_sections[:6]) + "."
     else:
         rel_status = PASS
-        rel_finding = "No H2 to H4 sections were available for section level relevance analysis."
-
+        rel_finding = "No H2 to H4 sections were available; no unrelated section pattern was detected."
     rows.append(result("Content Relevance", rel_status, rel_finding, rules["Content Relevance"]))
 
     thin_status = PASS if wc >= 600 else REVIEW if wc >= 300 else FAIL
-    rows.append(result("Thin Content", thin_status, f"{wc:,} extracted meaningful words.", rules["Thin Content"]))
+    rows.append(result("Thin Content", thin_status, f"{wc:,} extracted meaningful article words.", rules["Thin Content"]))
 
     value_signals = {
         "tables": len(article_soup.find_all("table")),
-        "lists": len(article_soup.find_all(["ul","ol"])),
+        "lists": len(article_soup.find_all(["ul", "ol"])),
         "numbers": len(re.findall(r"\b\d+(?:[.,]\d+)?%?\b", body_text)),
+        "headings": len(content_sections),
     }
-    if wc >= 800 and (value_signals["tables"] or value_signals["numbers"] >= 12 or value_signals["lists"] >= 3):
+    if wc >= 800 and (
+        value_signals["tables"]
+        or value_signals["numbers"] >= 12
+        or value_signals["lists"] >= 3
+    ):
         ov = PASS
-        of = f"Useful-value signals detected: {value_signals['tables']} table(s), {value_signals['lists']} list(s), {value_signals['numbers']} numeric references."
+        of = (
+            f"Internal useful value signals: {value_signals['tables']} table(s), "
+            f"{value_signals['lists']} list(s), {value_signals['numbers']} numeric references and "
+            f"{value_signals['headings']} structured sections. "
+            "External originality comparison is separate."
+        )
     else:
         ov = REVIEW
-        of = "Original value cannot be confirmed from one URL alone; compare against competing/site content. " + f"Signals: {value_signals}."
+        of = (
+            "The page has limited internal evidence of added value. "
+            f"Signals: {value_signals}. External or site comparison may still be required."
+        )
     rows.append(result("Original Value", ov, of, rules["Original Value"]))
 
-    claim_examples = factual_claim_examples(article_soup, url)
+    claim_examples = factual_claim_examples(article_soup, url, limit=20)
     if claim_examples:
-        claims_with_links = sum(1 for item in claim_examples if item["source_links"])
+        supported_claims = sum(1 for item in claim_examples if item.get("supported"))
         factual_status = REVIEW
         factual_finding = (
-            f"{len(claim_examples)} factual or numeric claim example(s) were extracted from the isolated article body. "
-            f"{claims_with_links} sampled claim(s) contain a visible HTTP source link in the same content block. "
-            "External or first party verification is still required before confirming factual accuracy. "
-            "Examples: "
+            f"{len(claim_examples)} concrete factual or numeric claim example(s) were extracted. "
+            f"{supported_claims} have nearby visible attribution or a source link. "
+            "External or first party verification is still required to confirm truth. Examples: "
             + " | ".join(item["claim"] for item in claim_examples[:4])
         )
     else:
         factual_status = PASS
-        factual_finding = (
-            "No high confidence factual or numeric claim examples were extracted that require separate source verification."
-        )
-
-    rows.append(
-        result(
-            "Factual Accuracy",
-            factual_status,
-            factual_finding,
-            rules["Factual Accuracy"],
-        )
-    )
+        factual_finding = "No high confidence factual or numeric claim was extracted that requires separate verification."
+    rows.append(result("Factual Accuracy", factual_status, factual_finding, rules["Factual Accuracy"]))
 
     year_contexts = contextual_old_years(body_text)
     risky_years = [item for item in year_contexts if item["sensitive"]]
@@ -4141,6 +4827,16 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         if not item["sensitive"] and item["classification"] == "Context needs review"
     ]
 
+    freshness_date = latest_editorial_datetime(soup)
+    freshness_days = None
+    if freshness_date is not None:
+        freshness_days = max(
+            0,
+            (datetime.now(timezone.utc) - freshness_date).total_seconds() / 86400,
+        )
+
+    time_sensitive = looks_time_sensitive(body_text)
+
     if risky_years:
         od = REVIEW
         examples = " | ".join(
@@ -4148,8 +4844,21 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             for item in risky_years[:5]
         )
         odf = (
-            f"{len(risky_years)} old year reference(s) occur inside time sensitive claims in the isolated article body. "
+            f"{len(risky_years)} old year reference(s) occur inside time sensitive claims. "
             f"Examples: {examples}"
+        )
+    elif time_sensitive and freshness_days is not None and freshness_days > 365:
+        od = REVIEW
+        odf = (
+            f"The article contains time sensitive information such as prices, rents, ROI, fees, routes or project status, "
+            f"while the latest editorial date signal is about {freshness_days:.0f} days old "
+            f"({freshness_date.isoformat()}). Verify current data."
+        )
+    elif time_sensitive and freshness_date is None:
+        od = REVIEW
+        odf = (
+            "The article contains time sensitive information, but no reliable editorial publication or modification date "
+            "was available to judge freshness."
         )
     elif uncertain_years:
         od = REVIEW
@@ -4157,24 +4866,24 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             f"{item['year']}: {item['sentence']}"
             for item in uncertain_years[:4]
         )
-        odf = (
-            f"Old year references were found in the isolated article body, but their purpose is not clearly historical or time sensitive. "
-            f"Review these contexts: {examples}"
-        )
+        odf = f"Old year references need context review: {examples}"
     elif year_contexts:
         od = PASS
         examples = " | ".join(
             f"{item['year']}: {item['sentence']}"
             for item in year_contexts[:4]
         )
-        odf = (
-            f"Old year references were found, but they appear contextual or historical rather than stale current claims. "
-            f"Examples: {examples}"
-        )
+        odf = f"Old year references appear historical or contextual rather than stale current claims. Examples: {examples}"
     else:
         od = PASS
-        odf = "No old year references were found inside the isolated article body."
-
+        odf = (
+            "No stale year signal was found in the isolated article body."
+            + (
+                f" Latest editorial date signal is about {freshness_days:.0f} days old."
+                if freshness_days is not None
+                else ""
+            )
+        )
     rows.append(result("Outdated Information", od, odf, rules["Outdated Information"]))
 
     kw_assessment = keyword_repetition_assessment(
@@ -4185,7 +4894,6 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         h1=h1,
         url=url,
     )
-
     semantic_note = ""
     if focus_keyword:
         focus_semantic = semantic_overlap(focus_keyword, body_text)
@@ -4198,16 +4906,13 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             for kw, exact, per_1000 in kw_assessment["targets"][:12]
         ) + "."
 
-    rows.append(
-        result(
-            "Keyword Use",
-            kw_assessment["status"],
-            f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
-            f"({kw_assessment['density']:.1%}). {kw_assessment['reason']}"
-            f"{semantic_note}{target_note}",
-            rules["Keyword Use"],
-        )
-    )
+    rows.append(result(
+        "Keyword Use",
+        kw_assessment["status"],
+        f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
+        f"({kw_assessment['density']:.1%}). {kw_assessment['reason']}{semantic_note}{target_note}",
+        rules["Keyword Use"],
+    ))
 
     sent_ratio, repeated_sents = repeated_sentence_ratio(body_text)
     para_ratio, repeated_paras = repeated_paragraph_ratio(article_soup)
@@ -4218,26 +4923,56 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         rp = REVIEW
     else:
         rp = PASS
-    rows.append(result("Repetition", rp, f"Estimated duplicate sentence/paragraph ratio: {rep:.1%}.", rules["Repetition"]))
+    repetition_note = f"Estimated duplicate sentence or paragraph ratio: {rep:.1%}."
+    if repeated_sents or repeated_paras:
+        examples = (repeated_sents + repeated_paras)[:3]
+        repetition_note += " Examples: " + " | ".join(x[:180] for x in examples) + "."
+    rows.append(result("Repetition", rp, repetition_note, rules["Repetition"]))
 
-    paragraphs = [p.get_text(" ", strip=True) for p in article_soup.find_all("p") if len(p.get_text(" ", strip=True)) >= 60]
+    paragraphs = [
+        p.get_text(" ", strip=True)
+        for p in article_soup.find_all("p")
+        if len(p.get_text(" ", strip=True)) >= 60
+    ]
     if paragraphs:
-        topic = target_topic
-        low_specific = sum(1 for p in paragraphs if keyword_overlap(topic, p) < .05)
+        low_specific = sum(
+            1
+            for p in paragraphs
+            if max(
+                keyword_overlap(target_topic, p),
+                semantic_overlap(target_topic, p),
+            ) < .08
+        )
         filler_share = low_specific / len(paragraphs)
     else:
         filler_share = 1
+
     filler_status = REVIEW if filler_share > .55 else PASS
-    rows.append(result("Generic / Filler Content", filler_status, f"{filler_share:.0%} of substantial paragraphs have very weak lexical overlap with the title topic. Use this as a review signal, not proof.", rules["Generic / Filler Content"]))
+    rows.append(result(
+        "Generic / Filler Content",
+        filler_status,
+        f"{filler_share:.0%} of substantial paragraphs have very weak semantic and lexical relationship to the main topic. "
+        "This is a review signal, not proof of filler.",
+        rules["Generic / Filler Content"],
+    ))
 
-    tc = keyword_overlap(title, body_text)
-    rows.append(result("Title vs Content", PASS if tc >= .55 else REVIEW if tc >= .3 else FAIL, f"Title-to-body topic overlap: {tc:.0%}.", rules["Title vs Content"]))
+    tc = max(keyword_overlap(title, body_text), semantic_overlap(title, body_text))
+    rows.append(result(
+        "Title vs Content",
+        PASS if tc >= .55 else REVIEW if tc >= .30 else FAIL,
+        f"Title to body topic agreement: {tc:.0%}.",
+        rules["Title vs Content"],
+    ))
 
-    hc = keyword_overlap(h1, body_text) if h1 else 0
-    rows.append(result("H1 vs Content", PASS if h1 and hc >= .55 else REVIEW if h1 else FAIL, f"H1-to-body topic overlap: {hc:.0%}." if h1 else "H1 missing.", rules["H1 vs Content"]))
+    hc = max(keyword_overlap(h1, body_text), semantic_overlap(h1, body_text)) if h1 else 0
+    rows.append(result(
+        "H1 vs Content",
+        PASS if h1 and hc >= .55 else REVIEW if h1 else FAIL,
+        f"H1 to body topic agreement: {hc:.0%}." if h1 else "H1 missing.",
+        rules["H1 vs Content"],
+    ))
 
     section_items = heading_sections(article_soup)
-
     if section_items:
         relevant = 0
         contextual = 0
@@ -4248,26 +4983,14 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             heading_score = semantic_overlap(target_topic, item["heading"])
             section_score = semantic_overlap(target_topic, item["section"]) if item["section"] else 0.0
 
-            # FAQ is a structural heading. Judge the FAQ content rather than the
-            # literal heading word.
             if is_faq_heading(item["heading"]):
-                is_relevant = faq_section_relevant(
-                    item["section"],
-                    target_topic,
-                )
+                is_relevant = faq_section_relevant(item["section"], target_topic)
                 relevance_reason = "FAQ section context"
-            elif entity_heading_context_relevant(
-                item["heading"],
-                item["section"],
-                target_topic,
-            ):
+            elif entity_heading_context_relevant(item["heading"], item["section"], target_topic):
                 is_relevant = True
                 relevance_reason = "entity heading with related section context"
             else:
-                is_relevant = (
-                    heading_score >= 0.20
-                    or section_score >= 0.45
-                )
+                is_relevant = heading_score >= 0.20 or section_score >= 0.45
                 relevance_reason = "semantic heading or section overlap"
 
             if is_relevant:
@@ -4276,8 +4999,7 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
                     contextual += 1
                     if len(detail_examples) < 5:
                         detail_examples.append(
-                            f"'{item['heading']}' accepted through {relevance_reason}; "
-                            f"section topic overlap {section_score:.0%}."
+                            f"'{item['heading']}' accepted through {relevance_reason}; section topic overlap {section_score:.0%}."
                         )
             elif len(weak_examples) < 5:
                 weak_examples.append(
@@ -4286,10 +5008,9 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
 
         hr = relevant / len(section_items)
         hstatus = PASS if hr >= 0.70 else REVIEW if hr >= 0.45 else FAIL
-
         hfind = (
-            f"{relevant}/{len(section_items)} H2 to H4 sections are related to the main topic after semantic heading and section context analysis. "
-            f"{contextual} section(s) were accepted through contextual section relevance even though the heading itself had low direct overlap."
+            f"{relevant}/{len(section_items)} H2 to H4 sections are related to the main topic. "
+            f"{contextual} section(s) were accepted through contextual relevance."
         )
         if detail_examples:
             hfind += " Context examples: " + " ".join(detail_examples)
@@ -4297,45 +5018,150 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             hfind += " Weakest sections: " + "; ".join(weak_examples) + "."
     else:
         hstatus = REVIEW
-        hfind = "No H2 to H4 headings were available in the main content for contextual relevance assessment."
-
+        hfind = "No H2 to H4 headings were available for contextual heading relevance assessment."
     rows.append(result("Heading Relevance", hstatus, hfind, rules["Heading Relevance"]))
 
     intro_words = " ".join(tokenize(body_text)[:140])
-    intro_overlap = keyword_overlap(target_topic, intro_words)
+    intro_overlap = max(
+        keyword_overlap(target_topic, intro_words),
+        semantic_overlap(target_topic, intro_words),
+    )
     iq = PASS if intro_overlap >= .45 else REVIEW
-    rows.append(result("Introduction Quality", iq, f"Opening 140-word topic overlap: {intro_overlap:.0%}.", rules["Introduction Quality"]))
+    rows.append(result(
+        "Introduction Quality",
+        iq,
+        f"Opening 140 word topic agreement: {intro_overlap:.0%}.",
+        rules["Introduction Quality"],
+    ))
 
-    faq_headers = [h for h in headings if "faq" in h.lower() or "frequently asked" in h.lower() or "أسئلة" in h]
-    questions = [x.get_text(" ", strip=True) for x in article_soup.find_all(["h2","h3","h4","strong"]) if x.get_text(" ", strip=True).endswith(("?","؟"))]
-    if faq_headers or questions:
-        fq = REVIEW if len(questions) and sum(len(tokenize(q)) < 3 for q in questions) > len(questions)/2 else PASS
-        ff = f"FAQ-like content detected: {len(questions)} question heading(s)."
+    faq_pairs = faq_question_answer_pairs(article_soup)
+    faq_headers = [h for h in headings if is_faq_heading(h)]
+    if faq_headers or faq_pairs:
+        short_answers = [
+            item for item in faq_pairs
+            if word_count(item["answer"]) < 15
+        ]
+        unrelated_answers = [
+            item for item in faq_pairs
+            if item["answer"]
+            and max(
+                semantic_overlap(target_topic, item["answer"]),
+                keyword_overlap(target_topic, item["answer"]),
+            ) < .12
+        ]
+        normalized_answers = [
+            re.sub(r"\W+", " ", item["answer"].lower()).strip()
+            for item in faq_pairs
+            if item["answer"]
+        ]
+        duplicate_answers = len(normalized_answers) - len(set(normalized_answers))
+
+        if not faq_pairs and faq_headers:
+            fq = REVIEW
+            ff = "FAQ heading detected but no question and answer pairs were extracted."
+        elif short_answers or duplicate_answers >= 2 or len(unrelated_answers) > len(faq_pairs) / 2:
+            fq = REVIEW
+            ff = (
+                f"{len(faq_pairs)} FAQ pair(s); {len(short_answers)} short or empty answer(s); "
+                f"{duplicate_answers} duplicate answer occurrence(s); {len(unrelated_answers)} weakly related answer(s)."
+            )
+        else:
+            fq = PASS
+            ff = (
+                f"{len(faq_pairs)} FAQ question and answer pair(s) checked. "
+                "No empty, very short, heavily duplicated or predominantly unrelated FAQ answer pattern was detected."
+            )
     else:
         fq = PASS
         ff = "No FAQ section detected; no FAQ quality issue to evaluate."
     rows.append(result("FAQ Quality", fq, ff, rules["FAQ Quality"]))
 
-    super_terms = ["best", "cheapest", "most popular", "number one", "#1", "highest", "lowest", "أفضل", "الأرخص", "الأكثر شعبية"]
-    hits = [x for x in super_terms if x.lower() in body_text.lower()]
-    outbound_citations = len([a for a in article_soup.find_all("a", href=True) if urlparse(urljoin(url,a["href"])).netloc not in {"", urlparse(url).netloc}])
-    ss = REVIEW if hits and outbound_citations == 0 else PASS
-    rows.append(result("Unsupported Superlatives", ss, f"Superlative indicators: {hits if hits else 'none'}; external source links: {outbound_citations}.", rules["Unsupported Superlatives"]))
+    super_claims = superlative_claim_assessment(article_soup, url)
+    unsupported_hard = [
+        item for item in super_claims
+        if item["hard"] and not item["supported"]
+    ]
+    unsupported_soft = [
+        item for item in super_claims
+        if not item["hard"] and not item["supported"]
+    ]
 
-    numeric_claims = len(re.findall(r"(?:AED\s*)?\b\d+(?:[.,]\d+)?(?:\s*[KMB])?\b|\b\d+(?:\.\d+)?%", body_text, flags=re.I))
-    if numeric_claims >= 10 and outbound_citations == 0:
+    if unsupported_hard:
+        ss = REVIEW
+        sf = (
+            f"{len(super_claims)} superlative claim(s) detected. "
+            f"{len(unsupported_hard)} objective or ranking superlative claim(s) lack nearby attribution or a source link. "
+            "Examples: " + " | ".join(item["text"] for item in unsupported_hard[:4])
+        )
+    else:
+        ss = PASS
+        sf = (
+            f"{len(super_claims)} superlative claim(s) detected. "
+            "No hard ranking, cheapest, highest, lowest or most popular claim was found without nearby attribution or a source link."
+        )
+        if unsupported_soft:
+            sf += (
+                f" {len(unsupported_soft)} editorial soft superlative wording instance(s), such as best, "
+                "were treated as editorial framing rather than automatically unsupported factual claims."
+            )
+    rows.append(result("Unsupported Superlatives", ss, sf, rules["Unsupported Superlatives"]))
+
+    source_claims = factual_claim_examples(article_soup, url, limit=40)
+    supported = [item for item in source_claims if item.get("supported")]
+    unsupported = [item for item in source_claims if not item.get("supported")]
+
+    regulatory_terms = [
+        "law", "regulation", "visa", "fee", "fees", "rule",
+        "قانون", "قوانين", "رسوم", "تأشيرة", "تاشيرة",
+    ]
+    regulatory_unsourced = [
+        item for item in unsupported
+        if any(term in item["claim"].lower() for term in regulatory_terms)
+    ]
+
+    support_ratio = len(supported) / len(source_claims) if source_claims else 1.0
+
+    if regulatory_unsourced:
         sq = REVIEW
-        sf = f"{numeric_claims} numeric/data-like claims and no external source links detected. Verify whether internal Bayut data is properly attributed."
+        sf = (
+            f"{len(source_claims)} concrete source sensitive claim(s) assessed; "
+            f"{len(supported)} have nearby attribution or source links. "
+            f"{len(regulatory_unsourced)} regulatory or fee claim(s) lack visible support. "
+            "Examples: " + " | ".join(item["claim"] for item in regulatory_unsourced[:3])
+        )
+    elif len(source_claims) >= 4 and support_ratio < .35:
+        sq = REVIEW
+        sf = (
+            f"{len(source_claims)} concrete source sensitive claim(s) assessed; only {len(supported)} "
+            f"({support_ratio:.0%}) have nearby attribution or source links. "
+            "Review sourcing for important quantitative claims."
+        )
     else:
         sq = PASS
-        sf = f"{numeric_claims} numeric/data-like claims; {outbound_citations} external source links."
+        sf = (
+            f"{len(source_claims)} concrete source sensitive claim(s) assessed; {len(supported)} "
+            f"({support_ratio:.0%} if claims exist) have nearby visible attribution or source links. "
+            "Source Quality is based on claim level support, not raw external link count."
+        )
     rows.append(result("Source Quality", sq, sf, rules["Source Quality"]))
 
-    # Detect conflicting identical labels followed by multiple different numeric values.
-    # Conservative: only REVIEW when repeated percentage labels show many different values.
+    conflicts = numeric_statement_conflicts(article_soup)
     percents = re.findall(r"\b\d+(?:\.\d+)?%", body_text)
-    data_status = REVIEW if len(set(percents)) >= 12 else PASS
-    rows.append(result("Data Accuracy", data_status, f"{len(percents)} percentage references ({len(set(percents))} unique). External/source-level validation may still be required.", rules["Data Accuracy"]))
+    if conflicts:
+        data_status = REVIEW
+        data_finding = (
+            f"{len(conflicts)} possible internal numeric contradiction(s) were detected where substantially the same statement "
+            "appears with different values. Examples: "
+            + " | ".join(item["statement"] for item in conflicts[:4])
+        )
+    else:
+        data_status = PASS
+        data_finding = (
+            f"No repeated statement template with conflicting numeric values was detected. "
+            f"{len(percents)} percentage reference(s) were found. "
+            "This checks internal consistency only; external data verification remains part of Factual Accuracy."
+        )
+    rows.append(result("Data Accuracy", data_status, data_finding, rules["Data Accuracy"]))
 
     entities = entity_candidates(article_soup)
     near_duplicates = near_duplicate_entities(entities)
@@ -4343,7 +5169,7 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     if entities:
         entity_status = REVIEW
         entity_finding = (
-            f"{len(entities)} cleaned entity candidate(s) were extracted from the isolated article body and require external or first party verification. "
+            f"{len(entities)} normalized entity candidate(s) were extracted and require external or first party verification. "
             f"Examples: {', '.join(entities[:10])}."
         )
 
@@ -4352,64 +5178,69 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
             for item in near_duplicates[:5]:
                 left_key = entity_similarity_key(item["left"])
                 right_key = entity_similarity_key(item["right"])
-
-                left_words = left_key.split()
-                right_words = right_key.split()
-
                 likely_typo = (
-                    len(left_words) == len(right_words)
+                    len(left_key.split()) == len(right_key.split())
                     and item["similarity"] >= 0.90
                 )
-
-                label = (
-                    "possible typo"
-                    if likely_typo
-                    else "possible naming variation"
-                )
-
+                label = "possible typo" if likely_typo else "possible naming variation"
                 duplicate_parts.append(
                     f"{item['left']} vs {item['right']} "
                     f"({item['similarity']:.0%} spelling similarity; {label})"
                 )
-
             entity_finding += (
-                " Possible near duplicate entity spellings were detected after normalization and should be checked: "
+                " Possible near duplicate entity spellings should be checked: "
                 + " | ".join(duplicate_parts)
                 + "."
             )
         else:
-            entity_finding += (
-                " No suspicious near duplicate entity spelling was detected inside the article."
-            )
+            entity_finding += " No suspicious near duplicate entity spelling was detected internally."
     else:
         entity_status = PASS
-        entity_finding = (
-            "No clear named entity candidates requiring separate verification were extracted."
-        )
+        entity_finding = "No clear named entity candidate requiring separate verification was extracted."
+    rows.append(result("Entity Accuracy", entity_status, entity_finding, rules["Entity Accuracy"]))
 
-    rows.append(
-        result(
-            "Entity Accuracy",
-            entity_status,
-            entity_finding,
-            rules["Entity Accuracy"],
-        )
+    sentences = re.split(r"(?<=[.!?؟])\s+", body_text)
+    lens = [len(tokenize(s)) for s in sentences if len(tokenize(s)) >= 3]
+    avg = sum(lens) / len(lens) if lens else 0
+    malformed = sum(
+        1 for s in sentences
+        if len(s.strip()) > 180 and not re.search(r"[.!?؟]$", s.strip())
     )
+    gr = REVIEW if avg > 32 or malformed >= 4 else PASS
+    rows.append(result(
+        "Grammar / Readability",
+        gr,
+        f"Average sentence length: {avg:.1f} words; {malformed} unusually long or potentially malformed sentence fragment(s). "
+        "This is a readability heuristic, not a full grammar proof.",
+        rules["Grammar / Readability"],
+    ))
 
-    sentences = [s for s in re.split(r"[.!?؟]+", body_text) if len(tokenize(s)) >= 4]
-    avg_len = sum(len(tokenize(s)) for s in sentences) / max(1, len(sentences))
-    gr = REVIEW if avg_len > 35 else PASS
-    rows.append(result("Grammar / Readability", gr, f"Average sentence length: {avg_len:.1f} words. This is a readability heuristic, not a grammar proof.", rules["Grammar / Readability"]))
-
-    placeholders = [x for x in ["lorem ipsum", "todo", "tbd", "[insert", "placeholder", "coming soon"] if x in body_text.lower()]
-    empty_heads = sum(1 for h in article_soup.find_all(re.compile(r"^h[1-6]$")) if not h.get_text(" ", strip=True))
+    placeholders = [
+        p for p in [
+            "lorem ipsum", "todo", "tbd", "[insert", "placeholder",
+            "coming soon", "xx", "xxx",
+        ]
+        if p in body_text.lower()
+    ]
+    empty_heads = sum(
+        1 for h in article_soup.find_all(re.compile(r"^h[1-6]$"))
+        if not h.get_text(" ", strip=True)
+    )
+    _, repeated_paras = repeated_paragraph_ratio(article_soup)
     if placeholders:
         bc = FAIL
-    elif empty_heads >= 2 or para_ratio >= .10:
+    elif empty_heads or repeated_paras:
         bc = REVIEW
     else:
         bc = PASS
-    rows.append(result("Broken Content", bc, f"Placeholder indicators: {placeholders if placeholders else 'none'}; empty headings: {empty_heads}.", rules["Broken Content"]))
+
+    rows.append(result(
+        "Broken Content",
+        bc,
+        f"Placeholder indicators: {placeholders if placeholders else 'none'}; "
+        f"empty editorial headings: {empty_heads}; repeated substantial paragraph templates: {len(repeated_paras)}.",
+        rules["Broken Content"],
+    ))
 
     return rows
 
@@ -4508,6 +5339,7 @@ with st.sidebar:
             _find_url_in_sitemaps_cached,
             _rendered_hidden_inventory_cached,
             _probe_http_url_cached,
+            _robots_access_cached,
         ]:
             try:
                 fn.cache_clear()
@@ -4642,11 +5474,11 @@ if run:
         resource_urls = extract_resource_urls(soup, desktop_r.url)
 
         audit_status.write(
-            "2 of 4  Running Spam, Content, Sitemap, External Link and Resource checks in parallel"
+            "2 of 4  Running Spam, Content, Sitemap, Robots, Internal Link, External Link and Resource checks in parallel"
         )
 
         parallel_results = {}
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=7) as executor:
             futures = {
                 executor.submit(
                     audit_spam,
@@ -4675,6 +5507,12 @@ if run:
                 ): "Sitemap",
                 executor.submit(
                     validate_url_set,
+                    internal_urls,
+                    INTERNAL_LINK_CHECK_TIMEOUT,
+                    INTERNAL_LINK_CHECK_WORKERS,
+                ): "Internal Links",
+                executor.submit(
+                    validate_url_set,
                     external_urls,
                     LINK_CHECK_TIMEOUT,
                     LINK_CHECK_WORKERS,
@@ -4685,6 +5523,10 @@ if run:
                     RESOURCE_CHECK_TIMEOUT,
                     RESOURCE_CHECK_WORKERS,
                 ): "Resources",
+                executor.submit(
+                    robots_access_result,
+                    desktop_r.url,
+                ): "Robots",
             }
 
             for future in as_completed(futures):
@@ -4697,9 +5539,17 @@ if run:
                         f"Sitemap check completed in {sitemap_stage.get('elapsed', 0):.1f}s "
                         f"after checking {len(sitemap_stage.get('checked', []))} sitemap file(s)"
                     )
+                elif label == "Internal Links":
+                    audit_status.write(
+                        f"Internal link validation completed for {len(parallel_results[label].get('checked', []))} link(s)"
+                    )
                 elif label == "External Links":
                     audit_status.write(
                         f"External link validation completed for {len(parallel_results[label].get('checked', []))} link(s)"
+                    )
+                elif label == "Robots":
+                    audit_status.write(
+                        f"robots.txt validation completed with HTTP {parallel_results[label].get('status')}"
                     )
                 elif label == "Resources":
                     audit_status.write(
@@ -4711,8 +5561,10 @@ if run:
         spam_rows = parallel_results["Spam"]
         content_rows = parallel_results["Content"]
         sitemap_result = parallel_results["Sitemap"]
+        internal_validation = parallel_results["Internal Links"]
         external_validation = parallel_results["External Links"]
         resource_validation = parallel_results["Resources"]
+        robots_txt_result = parallel_results["Robots"]
 
         audit_status.write("3 of 4  Finalising SEO checks")
         seo_rows = audit_seo(
@@ -4725,8 +5577,10 @@ if run:
             focus_keyword,
             secondary_keywords,
             sitemap_result=sitemap_result,
+            internal_validation=internal_validation,
             external_validation=external_validation,
             resource_validation=resource_validation,
+            robots_txt_result=robots_txt_result,
         )
 
         total_audit_time = time.time() - audit_started
@@ -4863,7 +5717,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name=f"url_audit_{APP_VERSION.lower()}.json",
+            file_name="url_audit_v17_final.json",
             mime="application/json",
         )
 
