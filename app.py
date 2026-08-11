@@ -43,7 +43,7 @@ CURRENT_YEAR = 2026
 # Performance controls
 PAGE_FETCH_TIMEOUT = 9
 SITEMAP_REQUEST_TIMEOUT = 4
-SITEMAP_MAX_FILES = 28
+SITEMAP_MAX_FILES = 36
 SITEMAP_MAX_DEPTH = 3
 SITEMAP_WORKERS = 8
 SITEMAP_TIME_BUDGET = 12
@@ -455,7 +455,7 @@ SEO_RULES = [
     ("Structured Data", "Parse JSON LD and compare important article fields with visible page signals. PASS when JSON LD is valid and headline or article topic is consistent with the visible page. REVIEW parse errors, missing expected article data or material schema to page mismatch."),
     ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
     ("dateModified", "Compare schema dateModified with visible update metadata, sitemap lastmod and HTTP Last Modified when available. PASS when signals are consistent. REVIEW missing dates or material freshness inconsistencies. HTTP Last Modified mismatch is treated as a technical inconsistency, not a spam violation."),
-    ("Sitemap", "Follow sitemap indexes and child sitemaps before deciding the result. PASS when the preferred canonical URL is found in an accessible sitemap. REVIEW when sitemap files are accessible but the preferred URL is not found after child sitemap inspection, or when sitemap inspection cannot be completed."),
+    ("Sitemap", "Follow sitemap indexes and prioritise editorial post or article sitemap families before generic page, category and tag sitemaps. PASS when the preferred canonical URL is found in an accessible sitemap. REVIEW only when inspection remains incomplete or the URL is not found after the configured inspection budget."),
     ("Mobile Content", "REVIEW/FAIL when mobile receives materially less main content than desktop."),
     ("JavaScript Rendering", "REVIEW when the initial HTML contains very little article text and depends heavily on scripts."),
     ("HTTPS", "PASS when the preferred page uses HTTPS."),
@@ -480,7 +480,7 @@ CONTENT_RULES = [
     ("Unsupported Superlatives", "REVIEW claims such as best, cheapest, highest, most popular when no evidence/source is apparent."),
     ("Source Quality", "REVIEW important quantitative/regulatory claims with no visible source where sourcing is reasonably expected."),
     ("Data Accuracy", "REVIEW inconsistent prices, percentages, dates or repeated figures inside the page."),
-    ("Entity Accuracy", "Clean generic property wording around entity names, extract conservative named entities, and compare entity spellings for suspicious near duplicates. REVIEW remaining entities that need external verification and possible inconsistent spellings. FAIL only when a connected verification source confirms an entity is incorrect."),
+    ("Entity Accuracy", "Normalize generic property wording and leading prepositions around entity names, merge exact normalized duplicates, and compare only materially different spellings for suspicious near duplicates. REVIEW remaining entities that need external verification or possible inconsistent naming. FAIL only when a connected verification source confirms an entity is incorrect."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
     ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
 ]
@@ -521,7 +521,7 @@ SYSTEM_USES = {
     "Structured Data": "JSON LD scripts, JSON parsing, schema headline and article fields, visible title and H1 semantic comparison",
     "datePublished": "Schema datePublished, article published metadata, visible time elements and date consistency comparison",
     "dateModified": "Schema dateModified, article modified metadata, visible time elements, sitemap lastmod, HTTP Last Modified and date consistency comparison",
-    "Sitemap": "robots.txt sitemap declarations, common sitemap locations, sitemap XML parsing, sitemap index detection, recursive child sitemap requests, preferred URL lookup and lastmod extraction",
+    "Sitemap": "robots.txt sitemap declarations, common sitemap locations, recursive sitemap index traversal, editorial post and article sitemap prioritisation, preferred URL lookup, lastmod extraction, caching and bounded parallel requests",
     "Mobile Content": "Desktop User Agent, Mobile User Agent, extracted main content, text similarity",
     "JavaScript Rendering": "Extracted article word count, script count, initial HTML content availability",
     "HTTPS": "Final URL scheme and HTTPS detection",
@@ -545,7 +545,7 @@ SYSTEM_USES = {
     "Unsupported Superlatives": "Superlative terms such as best, cheapest and most popular, external source link presence",
     "Source Quality": "Numeric claims, data like statements, external source link count, visible attribution signals",
     "Data Accuracy": "Numbers and percentages extracted from the page, repeated values, internal consistency signals",
-    "Entity Accuracy": "Cleaned entity candidates from proper noun headings, anchor text and proper noun phrases, generic property prefix removal, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
+    "Entity Accuracy": "Normalized entity candidates from proper noun headings, anchor text and proper noun phrases, property wording and preposition removal, exact normalized de duplication, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
     "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
     "Broken Content": "Placeholder terms, unfinished content indicators, empty headings, repeated paragraphs"
 }
@@ -1309,8 +1309,11 @@ def fetch_sitemap_document(sitemap_url):
 
 def sitemap_priority(sitemap_url, page_url):
     """
-    Rank likely child sitemaps first without pretending that ranking is proof.
-    If the configured file limit is reached, the result is marked incomplete.
+    Rank likely child sitemaps first.
+
+    Editorial article sitemaps receive a stronger priority than generic page,
+    category, tag, author or media sitemaps. This makes the result less likely
+    to alternate between PASS and REVIEW because of the time budget.
     """
     sm = (sitemap_url or "").lower()
     path = urlparse(page_url).path.lower()
@@ -1325,7 +1328,36 @@ def sitemap_priority(sitemap_url, page_url):
         if token in sm:
             score += 5
 
-    for useful in ("mybayut", "post", "posts", "article", "articles", "blog", "page"):
+    # Strong editorial sitemap preferences.
+    if "post-sitemap" in sm:
+        score += 30
+    if "article-sitemap" in sm or "articles-sitemap" in sm:
+        score += 26
+    if "blog-sitemap" in sm:
+        score += 22
+
+    # MyBayut article URLs should strongly prefer MyBayut post sitemaps.
+    if "/mybayut/" in path and "mybayut" in sm:
+        score += 18
+    if "/mybayut/" in path and "post-sitemap" in sm:
+        score += 18
+
+    # Lower priority for non-editorial sitemap families.
+    for low_priority in (
+        "category-sitemap",
+        "tag-sitemap",
+        "author-sitemap",
+        "attachment-sitemap",
+        "media-sitemap",
+        "image-sitemap",
+    ):
+        if low_priority in sm:
+            score -= 20
+
+    if "page-sitemap" in sm:
+        score -= 4
+
+    for useful in ("post", "posts", "article", "articles", "blog"):
         if useful in sm:
             score += 3
 
@@ -2821,21 +2853,30 @@ GENERIC_ENTITY_HEADINGS = {
 
 
 ENTITY_GENERIC_PREFIX_PATTERNS = [
-    r"^(?:studio|studios)\s+(?:in|at|from)\s+",
-    r"^(?:apartment|apartments|flat|flats)\s+(?:in|at|from)\s+",
-    r"^(?:villa|villas|townhouse|townhouses)\s+(?:in|at|from)\s+",
-    r"^(?:unit|units|property|properties)\s+(?:in|at|from)\s+",
-    r"^(?:rent|rental|renting)\s+(?:in|at|from)\s+",
+    # Generic property wording before a real named entity
+    r"^(?:studio|studios)\s+(?:in|at|from|near|within|inside)\s+",
+    r"^(?:apartment|apartments|flat|flats)\s+(?:in|at|from|near|within|inside)\s+",
+    r"^(?:villa|villas|townhouse|townhouses)\s+(?:in|at|from|near|within|inside)\s+",
+    r"^(?:unit|units|property|properties)\s+(?:in|at|from|near|within|inside)\s+",
+    r"^(?:rent|rental|renting)\s+(?:in|at|from|near|within|inside)\s+",
+
+    # Standalone English prepositions accidentally captured with a proper noun
+    r"^(?:in|at|from|near|within|inside|around|across|by)\s+",
+
+    # Common Arabic location prepositions accidentally captured with an entity
+    r"^(?:في|داخل|ضمن|قرب|حول)\s+",
+    r"^بالقرب\s+من\s+",
+    r"^من\s+(?=[A-Z\u0600-\u06ff])",
 ]
 
 def clean_entity_candidate(value):
     """
-    Remove generic property wording around a proper noun.
+    Remove generic property wording and leading prepositions around a proper noun.
 
-    Example:
-    studio in Elite Sports Residents
-    becomes:
-    Elite Sports Residents
+    Examples:
+    studio in Elite Sports Residents -> Elite Sports Residents
+    in Global Golf Residence -> Global Golf Residence
+    near Victory Heights -> Victory Heights
     """
     value = re.sub(r"\s+", " ", (value or "")).strip(" ,.;:-")
 
@@ -2853,6 +2894,9 @@ def clean_entity_candidate(value):
                 value = cleaned
                 changed = True
 
+    # Remove punctuation or connector remnants after repeated prefix cleaning.
+    value = re.sub(r"^(?:[-–—,:;]+\s*)+", "", value).strip()
+    value = re.sub(r"\s+", " ", value).strip(" ,.;:-")
     return value
 
 def entity_similarity_key(value):
@@ -2878,23 +2922,33 @@ def roman_variant_pair(a, b):
 
 def near_duplicate_entities(entities, threshold=0.88):
     """
-    Find suspiciously similar entity spellings.
+    Find suspiciously similar entity spellings after full normalization.
 
-    This is a consistency signal, not automatic proof of an error.
+    Exact matches after removing wrappers and prepositions are merged and are
+    not reported. Legitimate numbered variants are also excluded.
+
+    Real spelling variants such as:
+    Elite Sports Residence
+    Elite Sports Residents
+    remain visible for editorial verification.
     """
     pairs = []
 
     for i, left in enumerate(entities):
-        left_key = entity_similarity_key(left)
+        left_clean = clean_entity_candidate(left)
+        left_key = entity_similarity_key(left_clean)
         if not left_key:
             continue
 
         for right in entities[i + 1:]:
-            right_key = entity_similarity_key(right)
+            right_clean = clean_entity_candidate(right)
+            right_key = entity_similarity_key(right_clean)
+
+            # Exact normalized entities are the same entity, not a near duplicate.
             if not right_key or left_key == right_key:
                 continue
 
-            if roman_variant_pair(left, right):
+            if roman_variant_pair(left_clean, right_clean):
                 continue
 
             left_tokens = set(left_key.split())
@@ -2909,24 +2963,35 @@ def near_duplicate_entities(entities, threshold=0.88):
                 right_key,
             ).ratio()
 
+            # Avoid false positives caused only by one extra generic connector token.
+            if left_key in right_key or right_key in left_key:
+                longer = right_key if len(right_key) > len(left_key) else left_key
+                shorter = left_key if len(left_key) <= len(right_key) else right_key
+                extra = longer.replace(shorter, "", 1).strip()
+                if extra in {
+                    "in", "at", "from", "near", "within", "inside",
+                    "around", "by", "في", "داخل", "ضمن", "قرب"
+                }:
+                    continue
+
             if ratio >= threshold and token_overlap >= 0.60:
                 pairs.append({
-                    "left": left,
-                    "right": right,
+                    "left": left_clean,
+                    "right": right_clean,
                     "similarity": ratio,
                 })
 
-    # Remove mirrored or duplicate pair representations.
     unique = []
     seen = set()
+
     for item in sorted(
         pairs,
         key=lambda x: x["similarity"],
         reverse=True,
     ):
         key = tuple(sorted([
-            item["left"].casefold(),
-            item["right"].casefold(),
+            entity_similarity_key(item["left"]),
+            entity_similarity_key(item["right"]),
         ]))
         if key in seen:
             continue
@@ -3070,19 +3135,19 @@ def entity_candidates(article_soup, limit=20):
 
     for value in values:
         value = clean_entity_candidate(value)
-        key = value.casefold()
+        key = entity_similarity_key(value)
 
-        if key in seen:
+        if not key or key in seen:
             continue
-        seen.add(key)
 
-        # Avoid article title / focus keyword style headings being mistaken for entities.
+        # Avoid article title or focus keyword style headings being mistaken for entities.
         if len(tokenize(value)) >= 6 and any(
             token in key
             for token in ["rent", "apartments", "villas", "properties"]
         ):
             continue
 
+        seen.add(key)
         clean_values.append(value)
 
         if len(clean_values) >= limit:
@@ -4254,14 +4319,33 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         )
 
         if near_duplicates:
-            duplicate_text = " | ".join(
-                f"{item['left']} vs {item['right']} "
-                f"({item['similarity']:.0%} spelling similarity)"
-                for item in near_duplicates[:5]
-            )
+            duplicate_parts = []
+            for item in near_duplicates[:5]:
+                left_key = entity_similarity_key(item["left"])
+                right_key = entity_similarity_key(item["right"])
+
+                left_words = left_key.split()
+                right_words = right_key.split()
+
+                likely_typo = (
+                    len(left_words) == len(right_words)
+                    and item["similarity"] >= 0.90
+                )
+
+                label = (
+                    "possible typo"
+                    if likely_typo
+                    else "possible naming variation"
+                )
+
+                duplicate_parts.append(
+                    f"{item['left']} vs {item['right']} "
+                    f"({item['similarity']:.0%} spelling similarity; {label})"
+                )
+
             entity_finding += (
-                " Possible near duplicate entity spellings were detected and should be checked for a typo or legitimate naming variation: "
-                + duplicate_text
+                " Possible near duplicate entity spellings were detected after normalization and should be checked: "
+                + " | ".join(duplicate_parts)
                 + "."
             )
         else:
