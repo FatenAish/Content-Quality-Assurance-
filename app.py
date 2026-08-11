@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 
 # =========================================================
 # BAYUT URL QUALITY AUDITOR
-# Single URL audit: Spam + SEO + Content
+# Single URL audit for Spam, SEO and Content
 # =========================================================
 
 BAYUT_GREEN = "#28B16D"
@@ -661,7 +661,15 @@ def status_class(s):
     return {"PASS":"status-pass","REVIEW":"status-review","FAIL":"status-fail"}.get(s, "")
 
 def result(name, status, finding, rule):
-    return {"Check": name, "Status": status, "What the System Uses": SYSTEM_USES.get(name, "Rule based page analysis"), "Finding": finding, "Rule": rule}
+    method = SYSTEM_USES.get(name, "Rule based page analysis")
+    return {
+        "Check": name,
+        "Result": finding,
+        "Why": f"The system used {method}. The fixed rule applied is: {rule}",
+        "_internal_status": status,
+        "_rule": rule,
+        "_system_uses": method,
+    }
 
 def robots_directives(soup):
     values = []
@@ -745,7 +753,7 @@ def old_years(text):
     return sorted(set(y for y in years if y <= CURRENT_YEAR - 2))
 
 def classify_counts(rows):
-    c = Counter(r["Status"] for r in rows)
+    c = Counter(r.get("_internal_status", PASS) for r in rows)
     if c[FAIL]:
         overall = FAIL
     elif c[REVIEW]:
@@ -899,7 +907,7 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         iframe_find = f"{len(iframes)} iframe(s) found; none obviously hidden."
     rows.append(result("Spam Iframes", iframe_status, iframe_find, rules["Spam Iframes"]))
 
-    rows.append(result("Site Reputation Abuse", REVIEW, "URL-only analysis can flag unrelated third party content, but confirming reputation abuse requires editorial/ownership context.", rules["Site Reputation Abuse"]))
+    rows.append(result("Site Reputation Abuse", REVIEW, "URL only analysis can flag unrelated third party content, but confirming reputation abuse requires editorial/ownership context.", rules["Site Reputation Abuse"]))
 
     comment_nodes = soup.select(".comment, .comments, [id*='comment'], [class*='comment']")
     ugc_links = 0
@@ -1260,7 +1268,7 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     data_status = REVIEW if len(set(percents)) >= 12 else PASS
     rows.append(result("Data Accuracy", data_status, f"{len(percents)} percentage references ({len(set(percents))} unique). External/source-level validation may still be required.", rules["Data Accuracy"]))
 
-    rows.append(result("Entity Accuracy", REVIEW, "Entity names require external/source verification; URL-only static parsing cannot confirm every project, school, developer or place name.", rules["Entity Accuracy"]))
+    rows.append(result("Entity Accuracy", REVIEW, "Entity names require external/source verification; URL only static parsing cannot confirm every project, school, developer or place name.", rules["Entity Accuracy"]))
 
     sentences = [s for s in re.split(r"[.!?؟]+", body_text) if len(tokenize(s)) >= 4]
     avg_len = sum(len(tokenize(s)) for s in sentences) / max(1, len(sentences))
@@ -1458,46 +1466,63 @@ if run:
         seo_rows = audit_seo(url, desktop_r, desktop_elapsed, mobile_r, soup, body_text, focus_keyword, secondary_keywords)
         content_rows = audit_content(url, soup, body_text, focus_keyword, secondary_keywords)
 
+        # Internal rule outcomes are retained only for engine logic.
+        # They are never shown to the user.
         spam_status, spam_counts = classify_counts(spam_rows)
         seo_status, seo_counts = classify_counts(seo_rows)
         content_status, content_counts = classify_counts(content_rows)
 
-        all_statuses = [spam_status, seo_status, content_status]
-        overall = FAIL if FAIL in all_statuses else REVIEW if REVIEW in all_statuses else PASS
+        st.markdown(
+            """
+            <div style="margin-top:18px;margin-bottom:8px;">
+              <div style="font-size:22px;font-weight:800;">Audit Results</div>
+              <div style="font-size:13px;color:#66736F;margin-top:4px;">
+                Each rule shows only what the system found and why it reached that result.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        st.markdown('<div class="section-heading">Audit Results</div>', unsafe_allow_html=True)
-        cols = st.columns(4)
-        cards = [
-            ("Overall", overall, f"Final URL: {desktop_r.url}"),
-            ("Spam", spam_status, f"{spam_counts[FAIL]} fail · {spam_counts[REVIEW]} review"),
-            ("SEO", seo_status, f"{seo_counts[FAIL]} fail · {seo_counts[REVIEW]} review"),
-            ("Content", content_status, f"{content_counts[FAIL]} fail · {content_counts[REVIEW]} review"),
-        ]
-        for col, (label, value, note) in zip(cols, cards):
-            with col:
-                st.markdown(
-                    f"""
-                    <div class="metric-card">
-                      <div class="metric-label">{label}</div>
-                      <div class="metric-value {status_class(value)}">{value}</div>
-                      <div class="metric-note">{html_lib.escape(note)}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+        info_cols = st.columns(3)
+        with info_cols[0]:
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                  <div class="metric-label">Spam Rules Checked</div>
+                  <div class="metric-value">{len(spam_rows)}</div>
+                  <div class="metric-note">Every Spam rule was applied to this URL</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with info_cols[1]:
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                  <div class="metric-label">SEO Rules Checked</div>
+                  <div class="metric-value">{len(seo_rows)}</div>
+                  <div class="metric-note">Every SEO rule was applied to this URL</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with info_cols[2]:
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                  <div class="metric-label">Content Rules Checked</div>
+                  <div class="metric-value">{len(content_rows)}</div>
+                  <div class="metric-note">Every Content rule was applied to this URL</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         st.caption(
             f"HTTP {desktop_r.status_code} · {word_count(body_text):,} extracted words · "
-            f"{desktop_elapsed:.2f}s server response · {len(desktop_r.history)} redirect(s)"
+            f"{desktop_elapsed:.2f}s server response · {len(desktop_r.history)} redirects"
         )
-
-        if focus_keyword or secondary_keywords:
-            focus_html = html_lib.escape(focus_keyword) if focus_keyword else "Not provided"
-            secondary_html = ", ".join(html_lib.escape(x) for x in secondary_keywords) if secondary_keywords else "None"
-            st.markdown(
-                f'<div class="keyword-context"><strong>Focus Keyword:</strong> {focus_html} &nbsp;&nbsp; <strong>Secondary Keywords:</strong> {secondary_html}</div>',
-                unsafe_allow_html=True,
-            )
 
         tabs = st.tabs([
             f"Spam Check ({len(spam_rows)})",
@@ -1507,19 +1532,23 @@ if run:
 
         for tab, rows in zip(tabs, [spam_rows, seo_rows, content_rows]):
             with tab:
-                df = pd.DataFrame(rows)
-                status_order = pd.Categorical(df["Status"], categories=[FAIL, REVIEW, PASS], ordered=True)
-                df = df.assign(_sort=status_order).sort_values("_sort").drop(columns="_sort")
+                public_rows = [
+                    {
+                        "Check": row["Check"],
+                        "Result": row["Result"],
+                        "Why": row["Why"],
+                    }
+                    for row in rows
+                ]
+                df = pd.DataFrame(public_rows)
                 st.dataframe(
                     df,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
                         "Check": st.column_config.TextColumn(width="medium"),
-                        "Status": st.column_config.TextColumn(width="small"),
-                        "What the System Uses": st.column_config.TextColumn(width="large"),
-                        "Finding": st.column_config.TextColumn(width="large"),
-                        "Rule": st.column_config.TextColumn(width="large"),
+                        "Result": st.column_config.TextColumn(width="large"),
+                        "Why": st.column_config.TextColumn(width="large"),
                     },
                 )
 
@@ -1528,11 +1557,20 @@ if run:
             "url_final": desktop_r.url,
             "focus_keyword": focus_keyword,
             "secondary_keywords": secondary_keywords,
-            "overall": overall,
-            "spam": spam_rows,
-            "seo": seo_rows,
-            "content": content_rows,
+            "spam": [
+                {"Check": r["Check"], "Result": r["Result"], "Why": r["Why"]}
+                for r in spam_rows
+            ],
+            "seo": [
+                {"Check": r["Check"], "Result": r["Result"], "Why": r["Why"]}
+                for r in seo_rows
+            ],
+            "content": [
+                {"Check": r["Check"], "Result": r["Result"], "Why": r["Why"]}
+                for r in content_rows
+            ],
         }
+
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
@@ -1543,11 +1581,17 @@ if run:
         with st.expander("Important interpretation notes"):
             st.markdown(
                 """
-                - A **FAIL** means the rule engine found a strong condition that should be investigated immediately.
-                - A **REVIEW** is not a Google penalty or proof of spam. It means the URL needs human or external-source verification.
-                - The Googlebot check uses a Googlebot **User Agent comparison**. It does not reproduce Google's full rendering and indexing infrastructure.
-                - External plagiarism and scraping, factual accuracy, entity accuracy and site reputation abuse cannot be conclusively proven from one static URL alone.
-                - Content word count and repetition thresholds are internal QA heuristics, not Google thresholds.
+                The results show what the system found and why.
+
+                The system does not display status labels.
+
+                When a rule cannot be fully verified from one URL, the Result explains that additional verification is required.
+
+                The Googlebot check uses a Googlebot User Agent comparison. It does not reproduce Google's full rendering and indexing infrastructure.
+
+                External plagiarism, factual accuracy, entity accuracy and site reputation abuse may require external verification.
+
+                Content word count and repetition thresholds are internal QA heuristics and are not Google thresholds.
                 """
             )
 
