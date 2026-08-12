@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.4 KEYWORD STUFFING SEO"
-ENGINE_BUILD = "2026.08.12.7"
+APP_VERSION = "V18.5 REMOVE PAID LINKS"
+ENGINE_BUILD = "2026.08.12.8"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -460,7 +460,6 @@ SPAM_RULES = [
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
     ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. Self references to the current article are ignored. PASS when no other hidden or empty links are found."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
-    ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
     ("Spam Iframes", "FAIL when unauthorized or suspicious iframes introduce deceptive or spam content."),
@@ -526,7 +525,6 @@ SYSTEM_USES = {
     "Hidden Links": "Fetched HTML <a href> elements, same-page URL exclusion, empty anchors and HTML/CSS hiding signals",
     "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
-    "Paid Links": "External links, surrounding text, sponsored and affiliate terms, rel sponsored attribute, rel nofollow attribute",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
     "Spam JavaScript": "Inline JavaScript, redirect patterns, obfuscation patterns, location functions, encoded script indicators",
     "Spam Iframes": "Iframe elements, iframe visibility, CSS hiding rules, iframe source information",
@@ -1600,7 +1598,6 @@ DEFAULT_ACTIONS = {
     "Hidden Links": "Remove deliberately concealed links. Keep hidden interface links only when their UI or accessibility purpose is clear.",
     "Keyword Stuffing": "Reduce repeated query phrases that read unnaturally. Keep necessary location and entity names when editorially justified.",
     "Link Spam": "Remove or rewrite manipulative keyword rich links and repeated commercial anchor patterns. Keep editorial links relevant and natural.",
-    "Paid Links": "Mark identifiable paid or sponsored links with rel=sponsored or rel=nofollow, or remove the paid link.",
     "Hacked Content": "Remove injected spam content, secure the CMS and plugins, rotate credentials and verify the clean page after remediation.",
     "Spam JavaScript": "Review suspicious redirect or obfuscation scripts. Remove scripts that inject spam, links or deceptive redirects.",
     "Spam Iframes": "Remove unauthorized or unexplained hidden iframes. Keep only legitimate embeds with a clear visible purpose.",
@@ -4137,39 +4134,6 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
             if not ({"sponsored", "nofollow"} & rel):
                 paid_bad += 1
 
-    if paid_bad:
-        ps = FAIL
-        pf = f"{paid_bad} identifiable paid or sponsored editorial link(s) lack sponsored or nofollow qualification."
-    elif paid_candidates:
-        ps = PASS
-        pf = f"{paid_candidates} paid or sponsored editorial candidate link(s) found and qualified."
-    else:
-        ps = PASS
-        pf = "No clearly identifiable paid or sponsored editorial links detected from visible context."
-    rows.append(result("Paid Links", ps, pf, rules["Paid Links"]))
-
-    full_page_text = clean_text(soup)
-    hacked_terms = [
-        "viagra", "cialis", "casino", "slot gacor",
-        "online casino", "betting bonus", "levitra", "payday loan",
-    ]
-    low = full_page_text.lower()
-    hacked_hits = [x for x in hacked_terms if x in low]
-    if len(hacked_hits) >= 2:
-        hs = FAIL
-    elif hacked_hits:
-        hs = REVIEW
-    else:
-        hs = PASS
-    rows.append(result(
-        "Hacked Content",
-        hs,
-        ("Suspicious injected-content terms: " + ", ".join(hacked_hits))
-        if hacked_hits
-        else "No common injected-spam signatures detected across the fetched page text.",
-        rules["Hacked Content"],
-    ))
-
     script_text = "\n".join((s.string or s.get_text() or "") for s in soup.find_all("script"))
     suspicious_js = []
     for pattern in [
@@ -6143,7 +6107,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_4_keyword_stuffing_seo.json",
+            file_name="url_audit_v18_5_remove_paid_links.json",
             mime="application/json",
         )
 
