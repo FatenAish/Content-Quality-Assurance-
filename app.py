@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.13 REMOVE DATEMODIFIED"
-ENGINE_BUILD = "2026.08.12.17"
+APP_VERSION = "V18.14 FACTUAL ACCURACY NON MARKET ONLY"
+ENGINE_BUILD = "2026.08.12.18"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -494,7 +494,7 @@ CONTENT_RULES = [
     ("Content Relevance", "Evaluate the isolated article by heading hierarchy and section context. FAQ sections are judged by their answers, and named project or place headings are judged by the content beneath them. REVIEW or FAIL only when substantial article sections remain unrelated after contextual analysis."),
     ("Thin Content", "System heuristic: PASS at 600+ meaningful words, REVIEW at 300–599, FAIL below 300. This is not a Google word count rule."),
     ("Original Value", "PASS when the page adds useful data, examples, analysis or first hand value. External/site comparison may be required."),
-    ("Factual Accuracy", "Extract factual and numeric claims from the isolated article body and show claim examples and visible source signals. REVIEW claims that still require external or first party data verification. FAIL only when a claim is confirmed false by a connected verification source."),
+    ("Factual Accuracy", "Check non market factual information in the editorial article, such as transport, locations, institutions, laws, routes, services and historical facts. Exclude property prices, rents, ROI, yields and other market data. Do not treat the absence of a nearby source link as a factual error. REVIEW only when the article contains an internal factual contradiction or another concrete factual inconsistency that the system can demonstrate."),
     ("Outdated Information", "Evaluate old year references in context and also compare time sensitive claims with the latest editorial publication or modification date. Historical dates alone PASS. REVIEW stale or undated prices, rents, ROI, fees, laws, routes or project status using an internal freshness heuristic."),
     ("Keyword Use", "Evaluate Focus Keyword and Secondary Keyword use in context. Exact matching is not required for every secondary phrase. Repetition of the primary topic or named entity is allowed when editorially necessary. PASS natural use, REVIEW unusually repetitive wording, FAIL clearly manipulative repetition."),
     ("Repetition", "REVIEW/FAIL when sentences or paragraphs are unnecessarily repeated."),
@@ -554,7 +554,7 @@ SYSTEM_USES = {
     "Content Relevance": "Focus Keyword or main topic, hierarchical H2 through H4 sections, FAQ parent and child content, entity heading recognition, semantic heading overlap and section context",
     "Thin Content": "Main content extraction and meaningful article word count",
     "Original Value": "Main content word count, tables, lists, numeric references, useful information signals",
-    "Factual Accuracy": "Isolated article sentences, numeric and date claims, visible external source links and claim examples that require verification",
+    "Factual Accuracy": "Editorial non market factual claims only, including transport, locations, institutions, laws, routes, services and historical facts; property prices, rents, ROI, yields and market statistics are excluded; nearby source links are optional and are not used as a failure condition",
     "Outdated Information": "Old year context, time sensitive claim detection, schema and visible editorial dates, and age of the latest editorial freshness signal",
     "Keyword Use": "Focus Keyword, Secondary Keywords, exact phrase counts, semantic topic representation, repetition per 1,000 words, N gram frequency and primary topic phrase detection",
     "Repetition": "Normalised sentences, normalised paragraphs, duplicate counts, repetition ratio",
@@ -1698,7 +1698,7 @@ DEFAULT_ACTIONS = {
     "Content Relevance": "Remove unrelated sections or rewrite them so each H2 to H4 section clearly serves the page topic.",
     "Thin Content": "Add useful information, data, examples, comparisons or guidance. Do not add filler simply to increase word count.",
     "Original Value": "Add original Bayut value such as first party data, useful analysis, comparisons, tables, examples or practical guidance.",
-    "Factual Accuracy": "Verify the exact factual statements reported by the system against first party or authoritative sources and correct any value or statement that cannot be confirmed.",
+    "Factual Accuracy": "Review and correct only the specific non market factual inconsistency listed in Result. Property market figures are intentionally excluded from this rule.",
     "Outdated Information": "Refresh time sensitive prices, rents, ROI, fees, laws, routes or project status, then update the editorial modification date only after the content is actually updated.",
     "Keyword Use": "Reduce unnatural repeated target phrases while keeping necessary topic and entity wording.",
     "Repetition": "Remove or consolidate repeated sentences and paragraphs.",
@@ -3802,6 +3802,206 @@ def factual_claim_examples(article_soup, base_url, limit=6):
 
     return claims
 
+
+def is_property_market_data_claim(value):
+    """
+    Return True for property-market data that Factual Accuracy must ignore.
+
+    This intentionally excludes prices, rents, yields, ROI and similar market
+    statistics while preserving non-market facts such as station names,
+    transport routes, locations, institutions and historical dates.
+    """
+    value = re.sub(r"\s+", " ", value or "").strip()
+    low = value.lower()
+
+    if not value:
+        return False
+
+    monetary = bool(re.search(
+        r"\bAED\s*[\d,.]+|\b(?:aed|dh|dhs)\b\s*[\d,.]+",
+        value,
+        flags=re.I,
+    ))
+
+    market_terms = [
+        "rent", "rents", "rental", "renting",
+        "price", "prices", "priced", "pricing",
+        "sale price", "selling price", "asking price",
+        "roi", "yield", "capital appreciation",
+        "average cost", "average price", "average rent",
+        "annual rent", "annual outlay", "financial outlay",
+        "per sq ft", "per sqft", "psf",
+        "market trend", "rental trend", "sales trend",
+        "most searched", "search volume",
+        "إيجار", "ايجار", "الإيجار", "الايجار",
+        "سعر", "أسعار", "اسعار", "عائد", "عوائد",
+        "متوسط السعر", "متوسط الإيجار", "متوسط الايجار",
+    ]
+
+    market_context = any(term in low for term in market_terms)
+
+    numeric_market_signal = bool(re.search(
+        r"\b\d+(?:[.,]\d+)?\s*(?:k|m|million|thousand|%)\b",
+        low,
+        flags=re.I,
+    ))
+
+    bedroom_price_context = bool(re.search(
+        r"\b(?:studio|studios|\d+\s*(?:bed|bedroom|bhk))\b",
+        low,
+        flags=re.I,
+    )) and (monetary or market_context)
+
+    # Monetary property statements are market data by definition.
+    if monetary:
+        return True
+
+    if market_context and numeric_market_signal:
+        return True
+
+    if bedroom_price_context:
+        return True
+
+    # Explicit ROI / yield percentages are market data.
+    if re.search(r"\b(?:roi|yield)\b", low) and re.search(r"\d", low):
+        return True
+
+    return False
+
+
+def non_market_factual_claim_examples(article_soup, limit=30):
+    """
+    Extract concrete non-market factual claims.
+
+    Examples:
+    transport lines and stations, routes, locations, institutions,
+    laws/regulations, services, operating facts and historical facts.
+
+    Property prices, rents, ROI, yields and other market data are excluded.
+    A nearby source link is NOT required.
+    """
+    claims = []
+
+    factual_patterns = [
+        # Transport / location / service facts
+        r"\b(?:metro station|metro stations|red line|green line|route 2020|bus route|bus routes|interchange station)\b",
+        r"\b(?:connects?|connected to|served by|operates?|runs?|located in|located at|situated in|situated at|close to|near the)\b",
+        r"\b(?:airport|station|terminal|authority|department|ministry|municipality|rta)\b",
+
+        # Historical / institutional facts
+        r"\b(?:opened|launched|established|founded|introduced|inaugurated|completed|since)\b",
+        r"\b20(?:0\d|1\d|2\d)\b",
+
+        # Legal / regulatory facts
+        r"\b(?:law|laws|regulation|regulations|rule|rules|licence|license|visa)\b",
+
+        # Arabic equivalents
+        r"\b(?:محطة مترو|الخط الأحمر|الخط الاحمر|الخط الأخضر|الخط الاخضر|مسار 2020|خط حافلات|محطة تبادلية)\b",
+        r"\b(?:يربط|تخدمها|يقع في|تقع في|بالقرب من|افتتح|أطلق|اطلق|تأسس|منذ)\b",
+        r"\b(?:هيئة|وزارة|بلدية|قانون|قوانين|لائحة|لوائح|تأشيرة|تاشيرة)\b",
+    ]
+
+    for node in article_soup.find_all(["p", "li", "td"]):
+        value = re.sub(
+            r"\s+",
+            " ",
+            node.get_text(" ", strip=True),
+        ).strip()
+
+        if len(value) < 35:
+            continue
+
+        if is_property_market_data_claim(value):
+            continue
+
+        if not any(
+            re.search(pattern, value, flags=re.I)
+            for pattern in factual_patterns
+        ):
+            continue
+
+        claims.append({
+            "claim": value[:420],
+        })
+
+        if len(claims) >= limit:
+            break
+
+    return claims
+
+
+def non_market_factual_conflicts(claim_examples):
+    """
+    Detect only concrete internal contradictions that can be demonstrated
+    from the article itself.
+
+    The checker is deliberately conservative. It compares substantially
+    repeated non-market statements whose numeric/date values differ.
+    """
+    seen = {}
+    conflicts = []
+
+    for item in claim_examples:
+        claim = re.sub(
+            r"\s+",
+            " ",
+            item.get("claim", ""),
+        ).strip()
+
+        if not claim:
+            continue
+
+        # Values worth comparing for factual consistency: years and explicit
+        # counts/durations/distances. Property market numbers are already gone.
+        values = tuple(re.findall(
+            r"\b20(?:0\d|1\d|2\d)\b|\b\d+(?:\.\d+)?\s*(?:minutes?|mins?|km|kilometres?|kilometers?|metres?|meters?)\b",
+            claim,
+            flags=re.I,
+        ))
+
+        if not values:
+            continue
+
+        template = claim.lower()
+
+        # Normalize comparison values, punctuation and whitespace.
+        template = re.sub(
+            r"\b20(?:0\d|1\d|2\d)\b",
+            "<value>",
+            template,
+        )
+        template = re.sub(
+            r"\b\d+(?:\.\d+)?\s*(?:minutes?|mins?|km|kilometres?|kilometers?|metres?|meters?)\b",
+            "<value>",
+            template,
+            flags=re.I,
+        )
+        template = re.sub(r"[^a-z0-9<>]+", " ", template)
+        template = re.sub(r"\s+", " ", template).strip()
+
+        # Very short templates are too ambiguous.
+        if len(template.split()) < 6:
+            continue
+
+        previous = seen.get(template)
+
+        if previous and previous["values"] != values:
+            conflicts.append({
+                "first": previous["claim"],
+                "second": claim,
+                "first_values": previous["values"],
+                "second_values": values,
+            })
+        else:
+            seen[template] = {
+                "claim": claim,
+                "values": values,
+            }
+
+    return conflicts
+
+
+
 GENERIC_ENTITY_HEADINGS = {
     "faqs", "faq", "introduction", "conclusion", "overview", "summary",
     "popular", "comments", "leave a reply", "find a reliable agent",
@@ -5218,38 +5418,33 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         )
     rows.append(result("Original Value", ov, of, rules["Original Value"]))
 
-    claim_examples = factual_claim_examples(article_soup, url, limit=20)
-    if claim_examples:
-        supported_items = [item for item in claim_examples if item.get("supported")]
-        unsupported_items = [item for item in claim_examples if not item.get("supported")]
+    factual_claims = non_market_factual_claim_examples(
+        article_soup,
+        limit=40,
+    )
+    factual_conflicts = non_market_factual_conflicts(
+        factual_claims,
+    )
+
+    if factual_conflicts:
         factual_status = REVIEW
-
         factual_finding = (
-            f"{len(claim_examples)} concrete factual or numeric statement(s) were sampled. "
-            f"{len(supported_items)} have nearby visible attribution or a source link; "
-            f"{len(unsupported_items)} do not have nearby visible support. "
+            f"{len(factual_conflicts)} internal non market factual contradiction(s) found. "
+            "Examples: "
+            + " | ".join(
+                f"{item['first']} <> {item['second']}"
+                for item in factual_conflicts[:5]
+            )
         )
-
-        if unsupported_items:
-            factual_finding += (
-                "Unsupported examples: "
-                + " | ".join(item["claim"] for item in unsupported_items[:6])
-                + "."
-            )
-        else:
-            factual_finding += (
-                "All sampled statements have a nearby source or attribution, but the system still requires external or first party verification before confirming factual truth."
-            )
-
-        factual_actions = []
-        targets = unsupported_items if unsupported_items else claim_examples[:6]
-        for item in targets[:8]:
-            factual_actions.append(compact_claim_action(item["claim"]))
-
-        factual_action = " || ".join(factual_actions)
+        factual_action = " || ".join(
+            f"Verify and correct the conflicting factual statements: {item['first']} <> {item['second']}"
+            for item in factual_conflicts[:6]
+        )
     else:
         factual_status = PASS
-        factual_finding = "No high confidence factual or numeric statement was extracted that requires separate verification."
+        factual_finding = (
+            "No factual inconsistencies found in non market article information."
+        )
         factual_action = ""
 
     rows.append(result(
@@ -6258,7 +6453,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_13_remove_datemodified.json",
+            file_name="url_audit_v18_14_factual_accuracy_non_market_only.json",
             mime="application/json",
         )
 
@@ -6277,7 +6472,7 @@ if run:
 
                 The Googlebot check uses a Googlebot User Agent comparison. It does not reproduce Google's full rendering and indexing infrastructure.
 
-                External plagiarism, factual accuracy, entity accuracy and site reputation abuse may require external verification.
+                External plagiarism and entity accuracy may require external verification.
 
                 Content word count and repetition thresholds are internal QA heuristics and are not Google thresholds.
 
