@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17.7 BODY LINKS ONLY"
-ENGINE_BUILD = "2026.08.11.9"
+APP_VERSION = "V17.8 BODY IMAGES ONLY"
+ENGINE_BUILD = "2026.08.12.1"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -482,7 +482,7 @@ SEO_RULES = [
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
     ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, confirmed broken internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
-    ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
+    ("Images", "Inspect only real editorial images inside the article body. Exclude Bayut app-download banners, mobile and desktop promotional banners, TruBroker assets, CTA images, widgets, social/share assets and other non-editorial UI images. Result shows only the exact editorial image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource."),
     ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
     ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
     ("dateModified", "Compare schema dateModified with visible update metadata, sitemap lastmod and HTTP Last Modified when available. PASS when signals are consistent. REVIEW missing dates or material freshness inconsistencies. HTTP Last Modified mismatch is treated as a technical inconsistency, not a spam violation."),
@@ -3160,13 +3160,75 @@ def robots_access_result(page_url):
     return _robots_access_cached(page_url, cache_bucket(600))
 
 
+
+NON_EDITORIAL_IMAGE_URL_PATTERNS = [
+    "download-bayut-app-banner",
+    "bayut-app-banner",
+    "download-app-banner",
+    "app-download-banner",
+    "mobile-app-banner",
+    "desktop-app-banner",
+    "trubroker",
+    "tru-broker",
+    "tru_broker",
+]
+
+NON_EDITORIAL_IMAGE_CONTAINER_PATTERNS = [
+    "banner",
+    "advert",
+    "advertisement",
+    "promo",
+    "promotion",
+    "download-app",
+    "app-download",
+    "mobile-app",
+    "bayut-app",
+    "trubroker",
+    "tru-broker",
+    "cta",
+    "call-to-action",
+    "widget",
+    "sidebar",
+    "share",
+    "social",
+    "agent",
+    "broker",
+    "newsletter",
+    "subscribe",
+    "carousel",
+    "slider",
+]
+
+def image_has_non_editorial_container(node):
+    current = node
+
+    while current is not None:
+        if getattr(current, "name", None) in {
+            "nav", "aside", "footer", "form", "button",
+        }:
+            return True
+
+        attrs = " ".join([
+            str(current.get("id") or ""),
+            " ".join(current.get("class") or []),
+            str(current.get("role") or ""),
+            str(current.get("aria-label") or ""),
+        ]).casefold()
+
+        if any(
+            pattern in attrs
+            for pattern in NON_EDITORIAL_IMAGE_CONTAINER_PATTERNS
+        ):
+            return True
+
+        current = getattr(current, "parent", None)
+
+    return False
+
 def image_should_be_ignored(node, base_url=""):
     """
-    Ignore known Bayut TruBroker promotional/interface assets from the
-    article image quality audit.
-
-    This covers English and Arabic variants, mobile and desktop, because
-    matching is based on 'trubroker' in the resolved image URL/file name.
+    Exclude non-editorial assets even when they are nested somewhere inside
+    the broad article container.
     """
     src = image_source_url(node, base_url) if base_url else (
         node.get("src")
@@ -3176,13 +3238,61 @@ def image_should_be_ignored(node, base_url=""):
         or ""
     )
 
-    low = str(src).lower()
+    low_src = str(src).casefold()
 
-    return (
-        "trubroker" in low
-        or "tru-broker" in low
-        or "tru_broker" in low
-    )
+    if any(
+        pattern in low_src
+        for pattern in NON_EDITORIAL_IMAGE_URL_PATTERNS
+    ):
+        return True
+
+    return image_has_non_editorial_container(node)
+
+def is_editorial_body_image(node, base_url=""):
+    """
+    Audit only real editorial images that belong to the article body.
+
+    Accepted:
+    WordPress editorial images, figure images, or images directly embedded
+    inside paragraph/list/table copy.
+
+    Excluded:
+    App banners, mobile/desktop promo banners, TruBroker, CTA, widgets,
+    social/share, broker/agent modules, newsletter assets and generic UI.
+    """
+    if image_should_be_ignored(node, base_url):
+        return False
+
+    role = (node.get("role") or "").casefold()
+    aria_hidden = (node.get("aria-hidden") or "").casefold()
+
+    if role in {"presentation", "none"} or aria_hidden == "true":
+        return False
+
+    classes = " ".join(node.get("class") or []).casefold()
+
+    # Strong WordPress editorial-image markers.
+    if any(marker in classes for marker in [
+        "wp-image",
+        "aligncenter",
+        "alignleft",
+        "alignright",
+        "size-full",
+        "size-large",
+        "size-medium",
+    ]):
+        return True
+
+    # Normal article figures.
+    if node.find_parent("figure") is not None:
+        return True
+
+    # Images embedded directly in editorial copy.
+    if node.find_parent(["p", "li", "td", "th"]) is not None:
+        return True
+
+    # A generic image inside a div is not assumed to be editorial.
+    return False
 
 def image_is_decorative(node):
     role = (node.get("role") or "").lower()
@@ -3239,9 +3349,8 @@ def meaningful_image_inventory(soup, base_url, resource_validation=None):
     for node in article.find_all("img"):
         src = image_source_url(node, base_url)
 
-        # Known Bayut TruBroker promotional/interface images are excluded
-        # entirely from the editorial image quality check.
-        if image_should_be_ignored(node, base_url):
+        # Only real editorial body images are audited.
+        if not is_editorial_body_image(node, base_url):
             continue
 
         alt_present = node.has_attr("alt")
@@ -4900,10 +5009,10 @@ def audit_seo(
             simple_image_issues.append(cleaned)
 
         image_finding = "\n".join(simple_image_issues)
-        image_action = "Fix only the images listed in Result."
+        image_action = "Fix only the editorial body images listed in Result."
     else:
         image_status = PASS
-        image_finding = "No image issues found inside the article content."
+        image_finding = "No image issues found inside the article body."
         image_action = ""
 
     rows.append(result(
@@ -6301,7 +6410,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_7_body_links_only.json",
+            file_name="url_audit_v17_8_body_images_only.json",
             mime="application/json",
         )
 
