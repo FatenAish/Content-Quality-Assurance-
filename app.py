@@ -1,2365 +1,6193 @@
+import re
+import json
+import time
+import html as html_lib
+import gzip
+import xml.etree.ElementTree as ET
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
+from difflib import SequenceMatcher
+from urllib.parse import urljoin, urlparse
+import urllib.robotparser
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
-<!DOCTYPE html>
-<html lang="en-US" class="no-js no-svg">
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-	<meta http-equiv="X-UA-Compatible" content="IE=edge">
-	<link rel="profile" href="http://gmpg.org/xfn/11">
-	<script>(function(html){html.className = html.className.replace(/\bno-js\b/,'js')})(document.documentElement);</script>
-<title>Top Areas With Apartments for Rent Near the Dubai Metro – MyBayut</title>
+import pandas as pd
+import requests
+import streamlit as st
+from bs4 import BeautifulSoup
 
-<!-- Social Warfare v4.4.5.1 https://warfareplugins.com - BEGINNING OF OUTPUT -->
-<style>
-	@font-face {
-		font-family: "sw-icon-font";
-		src:url("https://www.bayut.com/mybayut/wp-content/plugins/social-warfare/assets/fonts/sw-icon-font.eot?ver=4.4.5.1");
-		src:url("https://www.bayut.com/mybayut/wp-content/plugins/social-warfare/assets/fonts/sw-icon-font.eot?ver=4.4.5.1#iefix") format("embedded-opentype"),
-		url("https://www.bayut.com/mybayut/wp-content/plugins/social-warfare/assets/fonts/sw-icon-font.woff?ver=4.4.5.1") format("woff"),
-		url("https://www.bayut.com/mybayut/wp-content/plugins/social-warfare/assets/fonts/sw-icon-font.ttf?ver=4.4.5.1") format("truetype"),
-		url("https://www.bayut.com/mybayut/wp-content/plugins/social-warfare/assets/fonts/sw-icon-font.svg?ver=4.4.5.1#1445203416") format("svg");
-		font-weight: normal;
-		font-style: normal;
-		font-display:block;
-	}
-</style>
-<!-- Social Warfare v4.4.5.1 https://warfareplugins.com - END OF OUTPUT -->
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except Exception:
+    PLAYWRIGHT_AVAILABLE = False
+
+# =========================================================
+# BAYUT URL QUALITY AUDITOR
+# Single URL audit for Spam, SEO and Content
+# =========================================================
+
+BAYUT_GREEN = "#28B16D"
+BAYUT_DARK = "#1F2D2A"
+BAYUT_LIGHT = "#F4FBF7"
+BORDER = "#E4E9E7"
+TEXT_MUTED = "#66736F"
+FAIL = "FAIL"
+REVIEW = "REVIEW"
+PASS = "PASS"
+
+APP_VERSION = "V18.7.1 CLEAN DEPLOY"
+ENGINE_BUILD = "2026.08.12.11"
+CURRENT_YEAR = 2026
+
+# Performance controls
+PAGE_FETCH_TIMEOUT = 9
+SITEMAP_REQUEST_TIMEOUT = 4
+SITEMAP_MAX_FILES = 36
+SITEMAP_MAX_DEPTH = 3
+SITEMAP_WORKERS = 8
+SITEMAP_TIME_BUDGET = 12
+PLAYWRIGHT_NAV_TIMEOUT = 12000
+PLAYWRIGHT_SETTLE_MS = 450
+
+LINK_CHECK_TIMEOUT = 3
+LINK_CHECK_WORKERS = 16
+INTERNAL_LINK_CHECK_TIMEOUT = 3
+INTERNAL_LINK_CHECK_WORKERS = 24
+ROBOTS_REQUEST_TIMEOUT = 4
+RESOURCE_CHECK_TIMEOUT = 3
+RESOURCE_CHECK_WORKERS = 24
+
+st.set_page_config(
+    page_title=f"Bayut URL Quality Auditor {APP_VERSION}",
+    page_icon="🔎",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    f"""
+    <style>
+    :root {{
+        --bayut-green: #00A66A;
+        --bayut-green-dark: #008B59;
+        --bayut-mint: #F2FBF7;
+        --bayut-mint-2: #EAF7F1;
+        --ink: #121926;
+        --muted: #667085;
+        --line: #E4E9E7;
+        --panel: #FFFFFF;
+        --soft: #F8FAF9;
+        --warn: #B7791F;
+        --danger: #C53030;
+    }}
+
+    html, body, [class*="css"] {{
+        font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+    .stApp {{
+        background: #ffffff;
+        color: var(--ink);
+    }}
+    .version-chip {{
+        display:inline-flex;
+        align-items:center;
+        gap:6px;
+        padding:5px 9px;
+        border-radius:999px;
+        background:#E9F8F1;
+        border:1px solid #CDEEE0;
+        color:#087A52;
+        font-size:12px;
+        font-weight:800;
+        letter-spacing:.02em;
+        white-space:nowrap;
+    }}
+    .engine-proof {{
+        margin-top:10px;
+        padding:10px 12px;
+        border:1px solid #DCEBE4;
+        border-radius:12px;
+        background:#F8FCFA;
+        font-size:12px;
+        line-height:1.45;
+        color:#44524B;
+    }}
+    .engine-proof strong {{
+        color:#087A52;
+    }}
+    header[data-testid="stHeader"] {{
+        display:none;
+    }}
+    #MainMenu, footer {{
+        visibility:hidden;
+    }}
+    .block-container {{
+        max-width: 1460px;
+        padding: 22px 30px 42px 30px;
+    }}
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {{
+        width: 286px !important;
+        min-width: 286px !important;
+        max-width: 286px !important;
+        background: #ffffff;
+        border-right: 1px solid #E8ECEA;
+    }}
+    section[data-testid="stSidebar"] > div {{
+        width: 286px !important;
+        padding-top: 0 !important;
+    }}
+    section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+        padding: 24px 18px 22px 18px;
+    }}
+    .side-brand {{
+        display:flex;
+        align-items:center;
+        gap:9px;
+        padding: 2px 3px 30px 3px;
+        color:var(--bayut-green);
+        font-size:28px;
+        font-weight:800;
+        letter-spacing:-1px;
+    }}
+    .side-brand svg {{width:31px;height:31px;}}
+    .side-title {{
+        font-size:12px;
+        line-height:1;
+        color:#667085;
+        font-weight:800;
+        letter-spacing:.7px;
+        text-transform:uppercase;
+        padding: 5px 6px 14px 6px;
+    }}
+    .nav-card {{
+        display:flex;
+        align-items:center;
+        gap:13px;
+        padding:14px 12px;
+        border-radius:12px;
+        margin-bottom:9px;
+        border-left:4px solid transparent;
+    }}
+    .nav-card.active {{
+        background:linear-gradient(90deg, #F0FAF5 0%, #F6FBF8 100%);
+        border-left-color:var(--bayut-green);
+    }}
+    .nav-icon {{
+        width:43px;
+        height:43px;
+        border-radius:50%;
+        border:1px solid #E6EEE9;
+        background:#fff;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        flex:0 0 43px;
+    }}
+    .nav-icon svg {{width:23px;height:23px;stroke:var(--bayut-green);}}
+    .nav-name {{font-size:14px;font-weight:800;color:#172026;margin-bottom:4px;}}
+    .nav-desc {{font-size:11px;line-height:1.55;color:#667085;}}
+    .side-divider {{height:1px;background:#ECEFED;margin:22px 4px;}}
+    .side-note {{
+        padding:13px 12px;
+        border:1px solid #E5EAE7;
+        border-radius:10px;
+        background:#FAFBFA;
+        color:#69736F;
+        font-size:10.5px;
+        line-height:1.55;
+    }}
+    .side-note strong {{color:var(--bayut-green);}}
+    section[data-testid="stSidebar"] .stCheckbox {{
+        margin-top:28px;
+        padding: 8px 4px 0 4px;
+    }}
+    section[data-testid="stSidebar"] .stCheckbox label p {{
+        font-size:12px;
+        font-weight:700;
+        color:#29312F;
+    }}
+
+    /* Utility row */
+    .utility-row {{
+        display:flex;
+        justify-content:flex-end;
+        gap:10px;
+        margin: 0 2px 12px 0;
+    }}
+    .utility-btn {{
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        gap:7px;
+        min-width:38px;
+        height:38px;
+        padding:0 12px;
+        border:1px solid #E6EAE8;
+        border-radius:999px;
+        background:#fff;
+        color:#111827;
+        font-size:12px;
+        box-shadow:0 2px 8px rgba(16,24,40,.03);
+    }}
+    .utility-btn.icon-only {{padding:0;width:38px;}}
+    .utility-btn svg {{width:17px;height:17px;stroke:#202723;}}
+
+    /* Hero */
+    .hero-card {{
+        position:relative;
+        overflow:hidden;
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        min-height:142px;
+        padding:25px 30px;
+        border:1px solid #D7E9E0;
+        border-radius:15px;
+        background:
+            radial-gradient(circle at 17% 50%, rgba(0,166,106,.10), transparent 18%),
+            radial-gradient(circle at 90% 22%, rgba(0,166,106,.06), transparent 24%),
+            linear-gradient(115deg, #FFFFFF 0%, #F7FCF9 55%, #F0FAF5 100%);
+        box-shadow:0 4px 18px rgba(16,24,40,.03);
+        margin-bottom:10px;
+    }}
+    .hero-card:after {{
+        content:"";
+        position:absolute;
+        right:-80px; top:18px;
+        width:420px; height:160px;
+        border-radius:55% 0 0 55%;
+        background:linear-gradient(120deg, rgba(0,166,106,.025), rgba(0,166,106,.055));
+        transform:rotate(-7deg);
+        pointer-events:none;
+    }}
+    .hero-left {{display:flex;align-items:center;gap:22px;position:relative;z-index:2;}}
+    .hero-icon {{
+        width:76px;height:76px;border-radius:50%;
+        background:rgba(0,166,106,.075);
+        border:1px solid rgba(0,166,106,.08);
+        display:flex;align-items:center;justify-content:center;
+        box-shadow:0 0 0 12px rgba(0,166,106,.035);
+    }}
+    .hero-icon svg {{width:43px;height:43px;stroke:var(--bayut-green);stroke-width:2;}}
+    .hero-title {{
+        font-size:28px;line-height:1.12;font-weight:800;color:#101828;letter-spacing:-.8px;
+    }}
+    .hero-title .bayut-word {{color:var(--bayut-green);}}
+    .hero-sub {{font-size:13px;color:#667085;margin-top:11px;}}
+    .audit-pill {{
+        position:relative;z-index:2;
+        padding:12px 18px;
+        border-radius:999px;
+        background:#fff;
+        border:1px solid #DDE8E2;
+        color:var(--bayut-green-dark);
+        font-size:12px;font-weight:800;
+        box-shadow:0 6px 16px rgba(16,24,40,.08);
+    }}
+
+    /* URL input panel */
+    .url-shell {{
+        border:1px solid #E4E8E6;
+        background:#fff;
+        border-radius:14px;
+        padding:16px 18px 17px;
+        box-shadow:0 7px 18px rgba(16,24,40,.05);
+        margin: 8px 0 22px 0;
+    }}
+    .url-label {{font-size:12px;font-weight:800;color:#27302D;margin-bottom:8px;}}
+    .field-label {{font-size:11.5px;font-weight:800;color:#344054;margin:10px 0 6px;}}
+    .field-help {{font-size:10.5px;color:#98A2B3;margin-top:4px;line-height:1.4;}}
+    .keyword-context {{margin:8px 0 16px;padding:10px 12px;border:1px solid #E1ECE6;border-radius:10px;background:#F8FCFA;color:#475467;font-size:11.5px;}}
+    .keyword-context strong {{color:var(--bayut-green-dark);}}
+    div[data-testid="stTextInput"] {{margin-top:0;}}
+    div[data-testid="stTextInput"] input {{
+        height:48px;
+        border:1px solid #CFE8DC !important;
+        border-radius:10px !important;
+        padding-left:15px !important;
+        background:#fff !important;
+        color:#344054 !important;
+        box-shadow:none !important;
+        font-size:12px !important;
+    }}
+    div[data-testid="stTextInput"] > div > div {{
+        border:none !important;
+        box-shadow:none !important;
+        background:transparent !important;
+    }}
+    div[data-testid="stButton"] button {{
+        height:48px;
+        border:0 !important;
+        border-radius:9px !important;
+        background:linear-gradient(180deg, #00AF70 0%, #009960 100%) !important;
+        color:#fff !important;
+        font-size:13px !important;
+        font-weight:800 !important;
+        box-shadow:0 7px 14px rgba(0,166,106,.22) !important;
+        transition:.16s ease;
+    }}
+    div[data-testid="stButton"] button:hover {{
+        transform:translateY(-1px);
+        background:linear-gradient(180deg, #00A86B 0%, #008B59 100%) !important;
+    }}
+
+    /* Section title */
+    .section-heading {{
+        font-size:20px;
+        font-weight:800;
+        color:#172026;
+        letter-spacing:-.35px;
+        margin:20px 2px 14px 2px;
+    }}
+
+    /* Feature cards */
+    .feature-card {{
+        position:relative;
+        min-height:150px;
+        padding:20px 20px 20px 20px;
+        border:1px solid #E2E7E5;
+        border-radius:13px;
+        background:#fff;
+        box-shadow:0 7px 18px rgba(16,24,40,.05);
+        overflow:hidden;
+    }}
+    .feature-card:after {{
+        content:"";
+        position:absolute;bottom:0;left:0;width:58px;height:3px;background:var(--bayut-green);
+        border-radius:0 3px 0 0;
+    }}
+    .feature-row {{display:flex;gap:15px;align-items:flex-start;}}
+    .feature-icon {{
+        width:48px;height:48px;border-radius:50%;flex:0 0 48px;
+        display:flex;align-items:center;justify-content:center;
+        border:1px solid #DDECE5;background:#F2FAF6;
+    }}
+    .feature-icon svg {{width:25px;height:25px;stroke:#008B59;}}
+    .feature-title {{font-size:15px;font-weight:800;color:#202725;margin-top:2px;}}
+    .feature-title span {{color:var(--bayut-green-dark);}}
+    .feature-desc {{font-size:11px;line-height:1.55;color:#667085;margin-top:10px;}}
+
+    /* How it works */
+    .how-card {{
+        border:1px solid #E2E7E5;
+        border-radius:13px;
+        background:#fff;
+        padding:20px 22px 22px;
+        box-shadow:0 7px 18px rgba(16,24,40,.045);
+        margin-top:8px;
+    }}
+    .steps {{display:grid;grid-template-columns:1fr 32px 1fr 32px 1fr 32px 1fr;gap:8px;align-items:center;}}
+    .step {{display:flex;gap:13px;align-items:flex-start;min-width:0;}}
+    .step-icon {{
+        width:52px;height:52px;border-radius:50%;background:#F1FAF5;border:1px solid #DCECE4;
+        display:flex;align-items:center;justify-content:center;flex:0 0 52px;position:relative;
+    }}
+    .step-icon svg {{width:25px;height:25px;stroke:var(--bayut-green);}}
+    .step-num {{
+        position:absolute;bottom:-12px;left:50%;transform:translateX(-50%);
+        width:19px;height:19px;border-radius:50%;background:var(--bayut-green);color:#fff;
+        font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;
+        border:2px solid #fff;
+    }}
+    .step-title {{font-size:12px;font-weight:800;color:#202725;margin-top:3px;}}
+    .step-desc {{font-size:10.5px;line-height:1.5;color:#667085;margin-top:6px;}}
+    .arrow {{text-align:center;color:#C3CCC7;font-size:25px;font-weight:300;}}
+
+    /* Results */
+    .metric-card {{
+        border:1px solid #E2E7E5;
+        border-radius:13px;
+        padding:17px 18px;
+        background:#fff;
+        min-height:112px;
+        box-shadow:0 5px 14px rgba(16,24,40,.04);
+    }}
+    .metric-label {{
+        color:#667085;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.55px;
+    }}
+    .metric-value {{font-size:23px;font-weight:850;margin-top:7px;}}
+    .metric-note {{color:#667085;font-size:10px;margin-top:6px;line-height:1.4;}}
+    .status-pass {{ color: var(--bayut-green); font-weight:800; }}
+    .status-review {{ color: var(--warn); font-weight:800; }}
+    .status-fail {{ color: var(--danger); font-weight:800; }}
+
+    /* Tabs / dataframe / expanders */
+    button[data-baseweb="tab"] {{font-weight:800 !important;font-size:12px !important;}}
+    div[data-testid="stDataFrame"] {{
+        border:1px solid #E4E8E6;
+        border-radius:12px;
+        overflow:hidden;
+    }}
+    div[data-testid="stExpander"] {{
+        border:1px solid #E5EAE7 !important;
+        border-radius:10px !important;
+        background:#fff !important;
+    }}
+    .stDownloadButton button {{
+        background:#fff !important;
+        color:var(--bayut-green-dark) !important;
+        border:1px solid #CFE8DC !important;
+        box-shadow:none !important;
+    }}
+
+    @media (max-width: 1100px) {{
+        section[data-testid="stSidebar"] {{width:240px !important;min-width:240px !important;max-width:240px !important;}}
+        section[data-testid="stSidebar"] > div {{width:240px !important;}}
+        .steps {{grid-template-columns:1fr;}}
+        .arrow {{display:none;}}
+        .hero-card {{padding:22px;}}
+        .hero-title {{font-size:24px;}}
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# -----------------------------
+# Rule library
+# -----------------------------
+
+SPAM_RULES = [
+    ("Cloaking", "Compare normal user and Googlebot responses. FAIL when materially different content is served specifically to search crawlers."),
+    ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
+    ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
+    ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
+    ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. Every actual <a href> occurrence is counted separately, even when several links point to the same URL. Self references to the current article are ignored."),
+    ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
+    ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
+    ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
+    ("Spam Iframes", "FAIL when unauthorized or suspicious iframes introduce deceptive or spam content."),
+    ("User Generated Spam", "FAIL when comments/profiles/UGC contain mass spam or manipulative links."),
+    ("Back Button Hijacking", "FAIL when scripts manipulate browser history to prevent users from returning to the previous page."),
+    ("Malware / Scam Behaviour", "FAIL when malicious downloads, harmful scripts, impersonation or deliberately deceptive functionality is detected."),
+]
+
+SEO_RULES = [
+    ("HTTP Status", "PASS when the canonical live article returns HTTP 200."),
+    ("Indexability", "FAIL when an intended indexable article contains noindex."),
+    ("Robots", "Check both page level robots directives and robots.txt crawler access. FAIL when Googlebot is blocked from an intended crawlable article. REVIEW when crawler access cannot be reliably verified."),
+    ("Canonical", "PASS when a valid canonical points to the correct preferred URL."),
+    ("Title Tag", "Google does not define a fixed character limit. PASS when the title exists, clearly describes the page, represents the Focus Keyword or its meaning, and is not repetitive or stuffed. Length is an internal quality signal only. Titles from 30 to 70 characters are generally concise. Titles from 71 to 80 characters do not receive REVIEW from length alone. Titles above 80 characters receive REVIEW for possible verbosity. Very short titles receive REVIEW only when they are too vague or weakly related to the page."),
+    ("Meta Description", "PASS when a useful and relevant meta description exists. Exact Focus Keyword wording and a fixed character count are not required. REVIEW missing, extremely weak, unusually verbose or poorly related descriptions."),
+    ("H1", "PASS when one clear H1 exists and it represents the Focus Keyword meaning or the page topic. Exact phrase matching is not required. REVIEW multiple H1 elements or a weak semantic relationship. FAIL when the H1 is missing or clearly unrelated."),
+    ("Heading Structure", "Evaluate the editorial heading hierarchy rather than navigation or sidebar headings. REVIEW empty headings, heavy duplication or clear heading level jumps."),
+    ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
+    ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
+    ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, confirmed broken internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
+    ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
+    ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
+    ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
+    ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
+    ("dateModified", "Compare schema dateModified with visible update metadata, sitemap lastmod and HTTP Last Modified when available. PASS when signals are consistent. REVIEW missing dates or material freshness inconsistencies. HTTP Last Modified mismatch is treated as a technical inconsistency, not a spam violation."),
+    ("Sitemap", "Follow sitemap indexes and prioritise editorial post or article sitemap families before generic page, category and tag sitemaps. PASS when the preferred canonical URL is found in an accessible sitemap. REVIEW only when inspection remains incomplete or the URL is not found after the configured inspection budget."),
+    ("Mobile Content", "REVIEW/FAIL when mobile receives materially less main content than desktop."),
+    ("JavaScript Rendering", "REVIEW when the initial HTML contains very little article text and depends heavily on scripts."),
+    ("HTTPS", "PASS when the preferred page uses HTTPS and no HTTP render resources create detected mixed content. FAIL non HTTPS preferred pages and REVIEW mixed content."),
+    ("Broken Resources", "Request only render relevant image, stylesheet, font preload and JavaScript resources. Exclude API discovery, oEmbed, canonical, alternate and WordPress endpoint links. PASS when checked render resources resolve successfully. REVIEW confirmed broken or unreachable render resources."),
+]
+
+CONTENT_RULES = [
+    ("Search Intent", "PASS when the main content directly addresses the topic promised by the title/H1."),
+    ("Content Relevance", "Evaluate the isolated article by heading hierarchy and section context. FAQ sections are judged by their answers, and named project or place headings are judged by the content beneath them. REVIEW or FAIL only when substantial article sections remain unrelated after contextual analysis."),
+    ("Thin Content", "System heuristic: PASS at 600+ meaningful words, REVIEW at 300–599, FAIL below 300. This is not a Google word count rule."),
+    ("Original Value", "PASS when the page adds useful data, examples, analysis or first hand value. External/site comparison may be required."),
+    ("Factual Accuracy", "Extract factual and numeric claims from the isolated article body and show claim examples and visible source signals. REVIEW claims that still require external or first party data verification. FAIL only when a claim is confirmed false by a connected verification source."),
+    ("Outdated Information", "Evaluate old year references in context and also compare time sensitive claims with the latest editorial publication or modification date. Historical dates alone PASS. REVIEW stale or undated prices, rents, ROI, fees, laws, routes or project status using an internal freshness heuristic."),
+    ("Keyword Use", "Evaluate Focus Keyword and Secondary Keyword use in context. Exact matching is not required for every secondary phrase. Repetition of the primary topic or named entity is allowed when editorially necessary. PASS natural use, REVIEW unusually repetitive wording, FAIL clearly manipulative repetition."),
+    ("Repetition", "REVIEW/FAIL when sentences or paragraphs are unnecessarily repeated."),
+    ("Generic / Filler Content", "REVIEW when a high share of text adds little topic specific information."),
+    ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
+    ("H1 vs Content", "PASS when H1 accurately represents the main body."),
+    ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
+    ("Introduction Quality", "PASS when the opening quickly establishes the promised topic."),
+    ("FAQ Quality", "Extract question and answer pairs from the FAQ hierarchy. REVIEW empty or very short answers, heavy answer duplication or a predominantly unrelated FAQ section."),
+    ("Unsupported Superlatives", "Evaluate the exact claim context. Objective ranking claims such as cheapest, highest, lowest or most popular require nearby attribution or a source link. Editorial soft wording such as best is not automatically treated as an unsupported factual claim."),
+    ("Source Quality", "Judge support at the claim level using nearby attribution and source links, not raw external link count. REVIEW poorly supported quantitative or regulatory claims where sourcing is reasonably expected."),
+    ("Data Accuracy", "Check internal numeric consistency by finding substantially repeated statements with conflicting values. PASS when no internal contradiction is detected. External truth verification remains part of Factual Accuracy."),
+    ("Entity Accuracy", "Normalize generic property wording and leading prepositions around entity names, merge exact normalized duplicates, and compare only materially different spellings for suspicious near duplicates. REVIEW remaining entities that need external verification or possible inconsistent naming. FAIL only when a connected verification source confirms an entity is incorrect."),
+    ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
+    ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
+]
 
 
-<!-- This site is optimized with the Yoast SEO Premium plugin v12.9.2 - https://yoast.com/wordpress/plugins/seo/ -->
-<meta name="description" content="Discover prime areas with apartments for rent near the Dubai Metro, offering quick commutes, modern buildings and access to popular city hotspots."/>
-<meta name="robots" content="max-snippet:-1, max-image-preview:large, max-video-preview:-1"/>
-<link rel="canonical" href="https://www.bayut.com/mybayut/affordable-apartments-near-metro-stations-in-dubai/" />
-<meta property="og:locale" content="en_US" />
-<meta property="og:locale:alternate" content="ar_AR" />
-<meta property="og:type" content="article" />
-<meta property="og:title" content="Top Areas With Apartments for Rent Near the Dubai Metro – MyBayut" />
-<meta property="og:description" content="Discover prime areas with apartments for rent near the Dubai Metro, offering quick commutes, modern buildings and access to popular city hotspots." />
-<meta property="og:url" content="https://www.bayut.com/mybayut/affordable-apartments-near-metro-stations-in-dubai/" />
-<meta property="og:site_name" content="A blog about homes, trends, tips &amp; life in the UAE | MyBayut" />
-<meta property="article:publisher" content="https://www.facebook.com/bayutuae" />
-<meta property="article:tag" content="affordable apartments in Dubai" />
-<meta property="article:tag" content="Apartments for rent in Dubai" />
-<meta property="article:tag" content="dubai" />
-<meta property="article:tag" content="Dubai Metro" />
-<meta property="article:tag" content="dubai real estate" />
-<meta property="article:tag" content="Flats near Dubai Metro" />
-<meta property="article:tag" content="Market Trends" />
-<meta property="article:tag" content="renting in Dubai" />
-<meta property="article:section" content="Market Trends" />
-<meta property="og:image" content="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2.jpg" />
-<meta property="og:image:secure_url" content="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2.jpg" />
-<meta property="og:image:width" content="1440" />
-<meta property="og:image:height" content="625" />
-<meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:description" content="Discover prime areas with apartments for rent near the Dubai Metro, offering quick commutes, modern buildings and access to popular city hotspots." />
-<meta name="twitter:title" content="Top Areas With Apartments for Rent Near the Dubai Metro – MyBayut" />
-<meta name="twitter:site" content="@bayut" />
-<meta name="twitter:image" content="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2.jpg" />
-<meta name="twitter:creator" content="@bayut" />
-<script type='application/ld+json' class='yoast-schema-graph yoast-schema-graph--main'>{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://www.bayut.com/mybayut/#website","url":"https://www.bayut.com/mybayut/","name":"A blog about homes, trends, tips &amp; life in the UAE | MyBayut","description":"A guide about real estate trends, property market analysis, lifestyle content, home decor tips, and expert opinions from all genres of life.","potentialAction":{"@type":"SearchAction","target":"https://www.bayut.com/mybayut/?s={search_term_string}","query-input":"required name=search_term_string"}},{"@type":"ImageObject","@id":"https://www.bayut.com/mybayut/affordable-apartments-near-metro-stations-in-dubai/#primaryimage","url":"https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2.jpg","width":1440,"height":625,"caption":"Rent apartments near metro stations"},{"@type":"WebPage","@id":"https://www.bayut.com/mybayut/affordable-apartments-near-metro-stations-in-dubai/#webpage","url":"https://www.bayut.com/mybayut/affordable-apartments-near-metro-stations-in-dubai/","inLanguage":"en-US","name":"Top Areas With Apartments for Rent Near the Dubai Metro \u2013 MyBayut","isPartOf":{"@id":"https://www.bayut.com/mybayut/#website"},"primaryImageOfPage":{"@id":"https://www.bayut.com/mybayut/affordable-apartments-near-metro-stations-in-dubai/#primaryimage"},"datePublished":"2025-11-24T15:22:00+00:00","dateModified":"2025-11-24T15:23:25+00:00","author":{"@id":"https://www.bayut.com/mybayut/#/schema/person/34cb5e2948d3ce163907da41debb9925"},"description":"Discover prime areas with apartments for rent near the Dubai Metro, offering quick commutes, modern buildings and access to popular city hotspots."},{"@type":["Person"],"@id":"https://www.bayut.com/mybayut/#/schema/person/34cb5e2948d3ce163907da41debb9925","name":"FK","image":{"@type":"ImageObject","@id":"https://www.bayut.com/mybayut/#authorlogo","url":"https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Fatima-Khanum-avatar-96x96.jpg","caption":"FK"},"description":"FK is a passionate writer who is constantly working to make her writing more engaging. During her leisure time, you'll find her binge-watching on-the-edge-of-the-seat true crime shows or reading an equally gripping suspense/thriller novel.","sameAs":[]}]}</script>
-<!-- / Yoast SEO Premium plugin. -->
+SYSTEM_USES = {
+    # Spam
+    "Cloaking": "Desktop User Agent, Googlebot User Agent, final URL comparison, main content extraction, text similarity",
+    "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
+    "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
+    "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
+    "Hidden Links": "Fetched HTML <a href> elements, per-element occurrence counting, same-page exclusion, empty anchors and HTML/CSS hiding signals",
+    "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
+    "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
+    "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
+    "Spam JavaScript": "Inline JavaScript, redirect patterns, obfuscation patterns, location functions, encoded script indicators",
+    "Spam Iframes": "Iframe elements, iframe visibility, CSS hiding rules, iframe source information",
+    "User Generated Spam": "Comment and user content containers, DOM class and ID patterns, links inside user content areas",
+    "Back Button Hijacking": "JavaScript history functions, popstate, pushState, replaceState, redirect and location logic",
+    "Malware / Scam Behaviour": "JavaScript source, script obfuscation patterns, script injection patterns, suspicious redirect behaviour",
 
-<link rel='dns-prefetch' href='//stackpath.bootstrapcdn.com' />
-<link rel='dns-prefetch' href='//fonts.googleapis.com' />
-<link rel='dns-prefetch' href='//s.w.org' />
-		<script type="text/javascript">
-			window._wpemojiSettings = {"baseUrl":"https:\/\/s.w.org\/images\/core\/emoji\/12.0.0-1\/72x72\/","ext":".png","svgUrl":"https:\/\/s.w.org\/images\/core\/emoji\/12.0.0-1\/svg\/","svgExt":".svg","source":{"concatemoji":"https:\/\/www.bayut.com\/mybayut\/wp-includes\/js\/wp-emoji-release.min.js?ver=5.4"}};
-			/*! This file is auto-generated */
-			!function(e,a,t){var r,n,o,i,p=a.createElement("canvas"),s=p.getContext&&p.getContext("2d");function c(e,t){var a=String.fromCharCode;s.clearRect(0,0,p.width,p.height),s.fillText(a.apply(this,e),0,0);var r=p.toDataURL();return s.clearRect(0,0,p.width,p.height),s.fillText(a.apply(this,t),0,0),r===p.toDataURL()}function l(e){if(!s||!s.fillText)return!1;switch(s.textBaseline="top",s.font="600 32px Arial",e){case"flag":return!c([127987,65039,8205,9895,65039],[127987,65039,8203,9895,65039])&&(!c([55356,56826,55356,56819],[55356,56826,8203,55356,56819])&&!c([55356,57332,56128,56423,56128,56418,56128,56421,56128,56430,56128,56423,56128,56447],[55356,57332,8203,56128,56423,8203,56128,56418,8203,56128,56421,8203,56128,56430,8203,56128,56423,8203,56128,56447]));case"emoji":return!c([55357,56424,55356,57342,8205,55358,56605,8205,55357,56424,55356,57340],[55357,56424,55356,57342,8203,55358,56605,8203,55357,56424,55356,57340])}return!1}function d(e){var t=a.createElement("script");t.src=e,t.defer=t.type="text/javascript",a.getElementsByTagName("head")[0].appendChild(t)}for(i=Array("flag","emoji"),t.supports={everything:!0,everythingExceptFlag:!0},o=0;o<i.length;o++)t.supports[i[o]]=l(i[o]),t.supports.everything=t.supports.everything&&t.supports[i[o]],"flag"!==i[o]&&(t.supports.everythingExceptFlag=t.supports.everythingExceptFlag&&t.supports[i[o]]);t.supports.everythingExceptFlag=t.supports.everythingExceptFlag&&!t.supports.flag,t.DOMReady=!1,t.readyCallback=function(){t.DOMReady=!0},t.supports.everything||(n=function(){t.readyCallback()},a.addEventListener?(a.addEventListener("DOMContentLoaded",n,!1),e.addEventListener("load",n,!1)):(e.attachEvent("onload",n),a.attachEvent("onreadystatechange",function(){"complete"===a.readyState&&t.readyCallback()})),(r=t.source||{}).concatemoji?d(r.concatemoji):r.wpemoji&&r.twemoji&&(d(r.twemoji),d(r.wpemoji)))}(window,document,window._wpemojiSettings);
-		</script>
-		<style type="text/css">
-img.wp-smiley,
-img.emoji {
-	display: inline !important;
-	border: none !important;
-	box-shadow: none !important;
-	height: 1em !important;
-	width: 1em !important;
-	margin: 0 .07em !important;
-	vertical-align: -0.1em !important;
-	background: none !important;
-	padding: 0 !important;
+    # SEO
+    "HTTP Status": "HTTP request and returned response status code",
+    "Indexability": "Meta robots directive, Googlebot meta directive, noindex detection",
+    "Robots": "Meta robots and Googlebot directives, robots.txt HTTP response, robots.txt parsing and Googlebot URL fetch permission",
+    "Canonical": "Canonical link element, canonical destination, current final URL, URL path comparison",
+    "Title Tag": "HTML title element, character count as an advisory signal, Focus Keyword exact or semantic term overlap, title to article topic overlap, repeated title terms",
+    "Meta Description": "Meta description element, advisory length, semantic topic agreement and Focus Keyword meaning rather than exact phrase requirement",
+    "H1": "Full page H1 elements including article header H1, H1 count, Focus Keyword exact match, semantic concept overlap and article topic relationship",
+    "Heading Structure": "Primary page H1 plus isolated editorial H2 through H6 headings, empty headings, duplicate headings and hierarchy level jumps",
+    "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
+    "Internal Links": "Only inline editorial text hyperlinks inside paragraph, list and table text in the isolated article body; non-editorial cards, banners, CTA, image links, social sharing and widgets are excluded before same-domain validation, HTTP checks and anchor relevance analysis",
+    "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
+    "Images": "Isolated article images, known TruBroker asset exclusion, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
+    "Structured Data": "JSON LD parsing, Article BlogPosting or NewsArticle type detection, schema headline, schema URL and mainEntityOfPage comparison with the visible preferred page",
+    "datePublished": "Schema datePublished, article published metadata, visible time elements and date consistency comparison",
+    "dateModified": "Schema dateModified, article modified metadata, visible time elements, sitemap lastmod, HTTP Last Modified and date consistency comparison",
+    "Sitemap": "robots.txt sitemap declarations, common sitemap locations, recursive sitemap index traversal, editorial post and article sitemap prioritisation, preferred URL lookup, lastmod extraction, caching and bounded parallel requests",
+    "Mobile Content": "Desktop User Agent, Mobile User Agent, extracted main content, text similarity",
+    "JavaScript Rendering": "Extracted article word count, script count, initial HTML content availability",
+    "HTTPS": "Final URL scheme and HTTPS detection",
+    "Broken Resources": "Render relevant image, stylesheet, font preload and JavaScript resource URLs, HTTP response codes, final destinations and request errors while excluding API discovery and metadata links",
+
+    # Content
+    "Search Intent": "Focus Keyword when provided, otherwise title and H1, article body, topic keyword overlap",
+    "Content Relevance": "Focus Keyword or main topic, hierarchical H2 through H4 sections, FAQ parent and child content, entity heading recognition, semantic heading overlap and section context",
+    "Thin Content": "Main content extraction and meaningful article word count",
+    "Original Value": "Main content word count, tables, lists, numeric references, useful information signals",
+    "Factual Accuracy": "Isolated article sentences, numeric and date claims, visible external source links and claim examples that require verification",
+    "Outdated Information": "Old year context, time sensitive claim detection, schema and visible editorial dates, and age of the latest editorial freshness signal",
+    "Keyword Use": "Focus Keyword, Secondary Keywords, exact phrase counts, semantic topic representation, repetition per 1,000 words, N gram frequency and primary topic phrase detection",
+    "Repetition": "Normalised sentences, normalised paragraphs, duplicate counts, repetition ratio",
+    "Generic / Filler Content": "Substantial paragraphs, Focus Keyword or main topic, paragraph topic overlap",
+    "Title vs Content": "HTML title text, main article body, topic keyword overlap",
+    "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
+    "Heading Relevance": "Hierarchical H2 through H4 relationships, Focus Keyword or main topic, FAQ child content, entity heading recognition, semantic concept overlap and section context",
+    "Introduction Quality": "First section of the article, approximately the first 140 words, Focus Keyword or main topic, topic overlap",
+    "FAQ Quality": "FAQ heading hierarchy, extracted question and answer pairs, answer word count, duplicate answers and topic relevance",
+    "Unsupported Superlatives": "Exact superlative claim blocks, hard versus editorial soft superlatives, nearby attribution, local source links and section context",
+    "Source Quality": "Concrete factual claim extraction, nearby visible attribution, local source links, regulatory claim detection and claim level support ratio",
+    "Data Accuracy": "Repeated numeric statement templates, conflicting value tuples, percentages and internal consistency signals",
+    "Entity Accuracy": "Normalized entity candidates from proper noun headings, anchor text and proper noun phrases, property wording and preposition removal, exact normalized de duplication, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
+    "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
+    "Broken Content": "Placeholder terms, unfinished content indicators, empty headings, repeated paragraphs"
 }
-</style>
-	<link rel='stylesheet' id='social-warfare-block-css-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/social-warfare/assets/js/post-editor/dist/blocks.style.build.css?ver=5.4' type='text/css' media='all' />
-<link rel='stylesheet' id='dashicons-css'  href='https://www.bayut.com/mybayut/wp-includes/css/dashicons.min.css?ver=5.4' type='text/css' media='all' />
-<link rel='stylesheet' id='admin-bar-css'  href='https://www.bayut.com/mybayut/wp-includes/css/admin-bar.min.css?ver=5.4' type='text/css' media='all' />
-<style id='admin-bar-inline-css' type='text/css'>
 
-			@font-face {
-				font-family: 'w3tc';
-			src: url('https://www.bayut.com/mybayut/wp-content/plugins/w3-total-cache/pub/fonts/w3tc.eot');
-			src: url('https://www.bayut.com/mybayut/wp-content/plugins/w3-total-cache/pub/fonts/w3tc.eot?#iefix') format('embedded-opentype'),
-				 url('https://www.bayut.com/mybayut/wp-content/plugins/w3-total-cache/pub/fonts/w3tc.woff') format('woff'),
-				 url('https://www.bayut.com/mybayut/wp-content/plugins/w3-total-cache/pub/fonts/w3tc.ttf') format('truetype'),
-				 url('https://www.bayut.com/mybayut/wp-content/plugins/w3-total-cache/pub/fonts/w3tc.svg#w3tc') format('svg');
-			font-weight: normal;
-			font-style: normal;
-		}
-		.w3tc-icon:before{
-			content:'\0041'; top: 2px;
-			font-family: 'w3tc';
-		}
-</style>
-<link rel='stylesheet' id='sbi_styles-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/instagram-feed/css/sbi-styles.min.css?ver=6.6.1' type='text/css' media='all' />
-<link rel='stylesheet' id='wp-block-library-css'  href='https://www.bayut.com/mybayut/wp-includes/css/dist/block-library/style.min.css?ver=5.4' type='text/css' media='all' />
-<link rel='stylesheet' id='mpp_gutenberg-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/metronet-profile-picture/dist/blocks.style.build.css?ver=2.3.11' type='text/css' media='all' />
-<link rel='stylesheet' id='algolia-property-shortcode-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/algolia-property-shortcode/assets/css/property-plugin-style.css?ver=1.0.5.61' type='text/css' media='all' />
-<link rel='stylesheet' id='algolia-property-widget-jquery-ui-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/algolia-property-shortcode/assets/css/jquery-ui.min.css?ver=1' type='text/css' media='all' />
-<link rel='stylesheet' id='bayut-article-rating-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/bayut-article-rating/assets/css/article-rating-styles.css?ver=1.0.2.2' type='text/css' media='all' />
-<link rel='stylesheet' id='bayut-banner-ad-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/bayut-banner-ad/assets/css/banner-ad.css?ver=1.0.2' type='text/css' media='all' />
-<link rel='stylesheet' id='bayut-core-topic-pages-plugin-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/bayut-core/includes/modules/topics/assets/css/topic-pages.css?ver=1.2.0' type='text/css' media='all' />
-<link rel='stylesheet' id='bayut-dubai-transactions-banner-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/bayut-dubai-transactions-banner/assets/css/dubai-transactions-banner.css?ver=1.0.3' type='text/css' media='all' />
-<link rel='stylesheet' id='bayut-opular-post-viewed-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/bayut-popular-posts-viewed/assets/css/mybayut-popular-posts.css?ver=1.0.1.4' type='text/css' media='all' />
-<link rel='stylesheet' id='bayut-theme-core-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/bayut-theme-core/assets/css/style.css?ver=1.0.8.6' type='text/css' media='all' />
-<link rel='stylesheet' id='bayut-weather-widget-style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/bayut-weather-widget/assets/css/weather-widget-style.css?ver=1.0.1' type='text/css' media='all' />
-<link rel='stylesheet' id='social_warfare-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/social-warfare/assets/css/style.min.css?ver=4.4.5.1' type='text/css' media='all' />
-<link rel='stylesheet' id='font-awesome-css'  href='https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css?ver=5.4' type='text/css' media='all' />
-<link rel='stylesheet' id='alia-parent-style-css'  href='https://www.bayut.com/mybayut/wp-content/themes/alia/style.css?ver=5.4' type='text/css' media='all' />
-<link rel='stylesheet' id='alia-child-style-css'  href='https://www.bayut.com/mybayut/wp-content/themes/alia-child/style.css?ver=3.0.7.5.14' type='text/css' media='all' />
-<link rel='stylesheet' id='yoast-seo-adminbar-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/wordpress-seo-premium/css/dist/adminbar-1292.css?ver=12.9.2' type='text/css' media='all' />
-<link rel='stylesheet' id='alia-fonts-css'  href='https://fonts.googleapis.com/css?family=Lato%3A400%2C400i%2C700%2C700i%7CLato%3A400%2C400i%2C700%2C700i&#038;subset=latin%2Clatin-ext' type='text/css' media='all' />
-<link rel='stylesheet' id='alia-customstyle-css'  href='https://www.bayut.com/mybayut/wp-content/themes/alia/assets/css/customstyle.css?ver=5.4' type='text/css' media='all' />
-<style id='alia-customstyle-inline-css' type='text/css'>
-body { font-family: 'Lato', sans-serif; }h1, h2, h3, h4, h5, h6, .title, .text_logo, .comment-reply-title, .header_square_logo a.square_letter_logo { font-family: 'Lato', sans-serif; }a { color: #28b16d; }input[type='submit']:hover { background-color: #28b16d; }.main_color_bg { background-color: #28b16d; }.main_color_text { color: #28b16d; }.social_icons_list.header_social_icons .social_icon:hover { color: #28b16d; }.header_square_logo a.square_letter_logo { background-color: #28b16d; }.header_nav .text_logo a span.logo_dot { background-color: #28b16d; }.header_nav .main_menu .menu_mark_circle { background-color: #28b16d; }.full_width_list .post_title a:hover:before { background-color: #28b16d; }.full_width_list .post_title a:hover:after { background: linear-gradient(to right,#28b16d 0,#28b16d 35%,#28b16d 65%,#FFF 100%);
-	  background: -ms-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -o-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -webkit-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#FFF 100%); background: -moz-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -webkit-gradient(linear,left top,right top,color-stop(0%,#28b16d),color-stop(35%,#28b16d),color-stop(65%,#28b16d),color-stop(100%,#FFF));; }.grid_list .post_title a:hover:before { background-color: #28b16d; }.grid_list .post_title a:hover:after { background: linear-gradient(to right,#28b16d 0,#28b16d 35%,#28b16d 65%,#FFF 100%);
-	  background: -ms-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -o-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -webkit-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#FFF 100%); background: -moz-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -webkit-gradient(linear,left top,right top,color-stop(0%,#28b16d),color-stop(35%,#28b16d),color-stop(65%,#28b16d),color-stop(100%,#FFF));; }.two_coloumns_list .post_title a:hover:before { background-color: #28b16d; }.two_coloumns_list .post_title a:hover:after { background: linear-gradient(to right,#28b16d 0,#28b16d 35%,#28b16d 65%,#FFF 100%);
-	 background: -ms-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -o-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -webkit-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#FFF 100%); background: -moz-linear-gradient(left,#28b16d 0,#28b16d 35%,#28b16d 65%,#fff 100%); background: -webkit-gradient(linear,left top,right top,color-stop(0%,#28b16d),color-stop(35%,#28b16d),color-stop(65%,#28b16d),color-stop(100%,#FFF));; }.post_meta_container a:hover { color: #28b16d; }.post.sticky .blog_meta_item.sticky_post { color: #28b16d; }.blog_post_readmore a:hover .continue_reading_dots .continue_reading_squares > span { background-color: #28b16d; }.blog_post_readmore a:hover .continue_reading_dots .readmore_icon { color: #28b16d; }.comment-list .reply a:hover { color: #28b16d; }.comment-list .reply a:hover .comments_reply_icon { color: #28b16d; }form.comment-form .form-submit input:hover { background-color: #28b16d; }.comment-list .comment.bypostauthor .comment-content:before { border-top-color: #28b16d; border-left-color: #28b16d; }.comments-area a:hover { color: #28b16d; }.newsletter_susbcripe_form label .asterisk { color: #28b16d; }.newsletter_susbcripe_form .mce_inline_error { color: #28b16d!important; }.newsletter_susbcripe_form input[type='submit']:hover { background-color: #28b16d; }.widget_content #mc_embed_signup input[type='submit']:hover { background-color: #28b16d; }.social_icons_list .social_icon:hover { color: #28b16d; }.alia_post_list_widget .post_info_wrapper .title a:hover { color: #28b16d; }.tagcloud a:hover { color: #28b16d; }.navigation.pagination .nav-links .page-numbers.current { background-color: #28b16d; }.navigation_links a:hover { background-color: #28b16d; }.page-links > a:hover, .page-links > span { background-color: #28b16d; }.story_circle:hover { border-color: #28b16d; }.see_more_circle:hover { border-color: #28b16d; }.main_content_area.not-found .search-form .search_submit { background-color: #28b16d; }.blog_list_share_container .social_share_item_wrapper a.share_item:hover { color: #28b16d; }.widget_content ul li a:hover { color: #28b16d; }.footer_widgets_container .social_icons_list .social_icon:hover { color: #28b16d; }.footer_widgets_container .widget_content ul li a:hover { color: #28b16d; }.cookies_accept_button { background-color: #28b16d; }.alia_gototop_button > i { background-color: #28b16d; }
-</style>
-<link rel='stylesheet' id='__EPYT__style-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/youtube-embed-plus/styles/ytprefs.min.css?ver=13.3.1' type='text/css' media='all' />
-<style id='__EPYT__style-inline-css' type='text/css'>
+# -----------------------------
+# Helpers
+# -----------------------------
 
-                .epyt-gallery-thumb {
-                        width: 33.333%;
-                }
-                
-</style>
-		<script type="text/javascript">
-			function w3tc_popupadmin_bar(url) {
-				return window.open(url, '', 'width=800,height=600,status=no,toolbar=no,menubar=no,scrollbars=yes');
-			}
-		</script>
-		<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-includes/js/jquery/jquery.js?ver=1.12.4-wp'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-includes/js/jquery/jquery-migrate.min.js?ver=1.4.1'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/algolia-property-shortcode/assets/js/jquery-ui.min.js?ver=1'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/bayut-article-rating/assets/js/article-rating-scripts.js?ver=1.0.2.2'></script>
-<script type='text/javascript'>
-/* <![CDATA[ */
-var preRegisterUploader = {"ajax_url":"https:\/\/www.bayut.com\/mybayut\/wp-admin\/admin-ajax.php"};
-/* ]]> */
-</script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/bayut-theme-core/assets/js/common-script.js?ver=1.0.8.6'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/bayut-weather-widget/assets/js/weather-widget-scripts.js?ver=1.0.1'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/wp-ajaxify-comments/js/wp-ajaxify-comments.min.js?ver=1.6.2'></script>
-<!--[if lt IE 9]>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/themes/alia/assets/js/html5.js?ver=3.7.3'></script>
-<![endif]-->
-<script type='text/javascript'>
-/* <![CDATA[ */
-var _EPYT_ = {"ajaxurl":"https:\/\/www.bayut.com\/mybayut\/wp-admin\/admin-ajax.php","security":"2a07c15fae","gallery_scrolloffset":"20","eppathtoscripts":"https:\/\/www.bayut.com\/mybayut\/wp-content\/plugins\/youtube-embed-plus\/scripts\/","eppath":"https:\/\/www.bayut.com\/mybayut\/wp-content\/plugins\/youtube-embed-plus\/","epresponsiveselector":"[\"iframe.__youtube_prefs_widget__\"]","epdovol":"1","version":"13.3.1","evselector":"iframe.__youtube_prefs__[src], iframe[src*=\"youtube.com\/embed\/\"], iframe[src*=\"youtube-nocookie.com\/embed\/\"]","ajax_compat":"","ytapi_load":"light","pause_others":"","stopMobileBuffer":"1","vi_active":"","vi_js_posttypes":[]};
-/* ]]> */
-</script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/youtube-embed-plus/scripts/ytprefs.min.js?ver=13.3.1'></script>
-<link rel='https://api.w.org/' href='https://www.bayut.com/mybayut/wp-json/' />
-<link rel="alternate" type="application/json+oembed" href="https://www.bayut.com/mybayut/wp-json/oembed/1.0/embed?url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F" />
-<link rel="alternate" type="text/xml+oembed" href="https://www.bayut.com/mybayut/wp-json/oembed/1.0/embed?url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F&#038;format=xml" />
-<script type="text/javascript">
-	window._wp_rp_static_base_url = 'https://wprp.zemanta.com/static/';
-	window._wp_rp_wp_ajax_url = "https://www.bayut.com/mybayut/wp-admin/admin-ajax.php";
-	window._wp_rp_plugin_version = '3.6.4';
-	window._wp_rp_post_id = '47854';
-	window._wp_rp_num_rel_posts = '3';
-	window._wp_rp_thumbnails = true;
-	window._wp_rp_post_title = 'Affordable+areas+to+rent+apartments+near+the+Dubai+Metro';
-	window._wp_rp_post_tags = ['dubai+metro', 'dubai+real+estate', 'flats+near+dubai+metro', 'market+trends', 'affordable+apartments+in+dubai', 'renting+in+dubai', 'apartments+for+rent+in+dubai', 'dubai', 'market+trends', 'dubai', 'mall', 'network', 'metro', 'transport', 'citi', 'kickstart', 'station', 'green', 'h2', 'red', 'top', 'rent', 'daili', 'life'];
-	window._wp_rp_promoted_content = true;
-	window._wp_rp_admin_ajax_url = 'https://www.bayut.com/mybayut/wp-admin/admin-ajax.php';
-	window._wp_rp_plugin_static_base_url = 'https://www.bayut.com/mybayut/wp-content/plugins/wordpress-23-related-posts-plugin/static/';
-	window._wp_rp_ajax_nonce = '70641114bd';
-	window._wp_rp_erp_search = true;
-</script>
-<link rel="stylesheet" href="https://www.bayut.com/mybayut/wp-content/plugins/wordpress-23-related-posts-plugin/static/themes/vertical.css?version=3.6.4" />
-<script type="text/javascript">/* <![CDATA[ */if (!window["WPAC"]) var WPAC = {};WPAC._Options = {debug:false,selectorCommentForm:"#commentform",selectorCommentsContainer:"#comments",selectorCommentPagingLinks:"#comments [class^='nav-'] a",selectorCommentLinks:"#comments a[href*=\"/comment-page-\"]",selectorRespondContainer:"#respond",selectorErrorContainer:"p:parent",popupCornerRadius:5,popupMarginTop:10,popupWidth:30,popupPadding:5,popupFadeIn:400,popupFadeOut:400,popupTimeout:3000,popupBackgroundColorLoading:"#000",popupTextColorLoading:"#fff",popupBackgroundColorSuccess:"#008000",popupTextColorSuccess:"#fff",popupBackgroundColorError:"#f00",popupTextColorError:"#fff",popupOpacity:70,popupTextAlign:"center",popupTextFontSize:"Default font size",popupZindex:1000,scrollSpeed:500,autoUpdateIdleTime:0,textPosted:"Your comment has been posted. Thank you!",textPostedUnapproved:"Your comment has been posted and is awaiting moderation. Thank you!",textReloadPage:"Reloading page. Please wait&hellip;",textPostComment:"Posting your comment. Please wait&hellip;",textRefreshComments:"Loading comments. Please wait&hellip;",textUnknownError:"Something went wrong, your comment has not been posted.",selectorPostContainer:"",commentPagesUrlRegex:"",asyncLoadTrigger:"DomReady",disableUrlUpdate:false,disableScrollToAnchor:false,disableCache:false,enableByQuery:false,commentsEnabled:true,version:"1.6.2"};WPAC._Callbacks = {"beforeSelectElements": function(dom) {},"beforeUpdateComments": function(newDom, commentUrl) {},"afterUpdateComments": function(newDom, commentUrl) {},"beforeSubmitComment": function() {},"afterPostComment": function(commentUrl, unapproved) {}};/* ]]> */</script><link rel="alternate" href="https://www.bayut.com/mybayut/affordable-apartments-near-metro-stations-in-dubai/" hreflang="en" />
-<link rel="alternate" href="https://www.bayut.com/mybayut/ar/%D8%B4%D9%82%D9%82-%D9%84%D9%84%D8%A7%D9%8A%D8%AC%D8%A7%D8%B1-%D9%82%D8%B1%D8%A8-%D9%85%D8%AA%D8%B1%D9%88-%D8%AF%D8%A8%D9%8A-%D8%A8%D8%B3%D8%B9%D8%B1-%D9%85%D9%86%D8%AE%D9%81%D8%B6/" hreflang="ar" />
-<!-- Instagram Feed CSS -->
-<style type="text/css">
-#sbi_mod_link, #sbi_mod_error{ display: block !important; width: 100%; float: left; box-sizing: border-box; }
-</style>
-        <script type="text/javascript">
-            dataLayer = window.dataLayer || [];
-            dataLayer.push({
-                'website_section': 'blog', 'pagetype': 'Post', 'blog_category': 'Market Trends', 'blog_sub_category': '', 'language': 'en'
-                            , 'author_name': 'FK', 'article_date': '2025-11-24 19:22:00', 'aud_1': '124194', 'aud_2': '123318', 'aud_3': '117390', 
-                        });</script>
-        <!-- Google Tag Manager -->
-		
-        <script>
-			
-			(function (w, d, s, l, i) {
-                w[l] = w[l] || [];
-                w[l].push({'gtm.start':
-                            new Date().getTime(), event: 'gtm.js'});
-                var f = d.getElementsByTagName(s)[0],
-                        j = d.createElement(s), dl = l != 'dataLayer' ? '&l=' + l : '';
-                j.async = true;
-                j.src = '//www.googletagmanager.com/gtm.js?id=' + i + dl;
-                f.parentNode.insertBefore(j, f);
-				
-				//*****GTM Code for Live*****//
-            //})(window, document, 'script', 'dataLayer', 'GTM-NBM8W2N');
-				
-			})(window, document, 'script', 'dataLayer', 'GTM-NBM8W2N' );
-		</script>
-        <!-- End Google Tag Manager -->
-                <link rel="icon" href="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/favicon.ico.gzip" type="image/ico" sizes="16x16">
-        <link rel="pingback" href="https://www.bayut.com/mybayut/xmlrpc.php">
-		 <!-- Load facebook SDK -->
-		 <script>
-
-		 	(function(d, s, id){
-		  var js, fjs = d.getElementsByTagName(s)[0];
-		  if (d.getElementById(id)) {return;}
-		  js = d.createElement(s); js.id = id;
-		  js.src = "//connect.facebook.net/en_US/sdk.js#xfbml=1&version=v2.11";
-		  fjs.parentNode.insertBefore(js, fjs);
-		 }(document, 'script', 'facebook-jssdk'));
-		 </script>
-		 <!-- End Load facebook SDK -->
-		<style type="text/css" media="print">#wpadminbar { display:none; }</style>
-	<style type="text/css" media="screen">
-	html { margin-top: 32px !important; }
-	* html body { margin-top: 32px !important; }
-	@media screen and ( max-width: 782px ) {
-		html { margin-top: 46px !important; }
-		* html body { margin-top: 46px !important; }
-	}
-</style>
-	<link rel="icon" href="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/favicon.ico.gzip" sizes="32x32" />
-<link rel="icon" href="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/favicon.ico.gzip" sizes="192x192" />
-<link rel="apple-touch-icon" href="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/favicon.ico.gzip" />
-<meta name="msapplication-TileImage" content="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/favicon.ico.gzip" />
-		<style type="text/css" id="wp-custom-css">
-			@media screen and (max-width: 670px) {
-.postid-59269 .featured-single-post .post_banner img {
-    min-height: 170px;
+UA_DESKTOP = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36"
 }
-	.article-waiting-border-iframe {height: 550px;}
-	iframe.bayut-ad {width:400px; height: 230px;}
+UA_MOBILE = {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/151.0 Mobile Safari/537.36"
 }
-@media screen and (min-width: 670px) {
-.postid-59269 .featured-single-post .single_post_body .post_title {display: none;}
+UA_GOOGLEBOT = {
+    "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 }
 
-.full_width_post_single .newsletter {width: 100%;}
-.postid-77970 .post_related { display: none;}
+def normalize_url(url):
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if not re.match(r"^https?://", url, re.I):
+        url = "https://" + url
+    return url
 
-@media screen and (max-width: 670px) {
-	iframe.bayut-ad {width:320px; height: 190px;}
-	
-	figure.size-full { width: 100% }
-	figure.size-full img { width: 100% }
-	.entry-content img {
-		 width: 100%;
-	}
-	footer .property-dropdown .sub-menu li a {
-		display: block;
-	}
-	.entry-content figure {
-		width: 100%;
-	}
-}
+def fetch(url, headers, timeout=PAGE_FETCH_TIMEOUT):
+    start = time.time()
+    r = requests.get(
+        url,
+        headers=headers,
+        timeout=timeout,
+        allow_redirects=True,
+    )
+    elapsed = time.time() - start
+    return r, elapsed
 
-footer .menu-bayut-footer-property-menu-container, footer .menu-bayut-footer-property-menu-ar-container {
-	height: 220px;
-}
-
-footer .menu-bayut-footer-property-menu-container.expanded, footer .menu-bayut-footer-property-menu-ar-container.expanded {
-	height: 300px;
-}
-
-body.rtl footer .property-dropdown > a {
-	width: 140px;
-}
-
-.ad-banner-space {
-	margin-bottom: 20px;
-}
-
-@media screen and (max-width: 910px) {
-    .ad-banner-space {
-        margin-bottom: 0;
+def fetch_page_variants(url):
+    """
+    Fetch desktop, mobile and Googlebot variants in parallel.
+    This replaces three sequential network waits with one parallel stage.
+    """
+    jobs = {
+        "desktop": UA_DESKTOP,
+        "mobile": UA_MOBILE,
+        "googlebot": UA_GOOGLEBOT,
     }
-    
-    .ad-banner-space .container {
-        padding: 0;
-        margin: 10px 0;
+    output = {}
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(fetch, url, headers, PAGE_FETCH_TIMEOUT): label
+            for label, headers in jobs.items()
+        }
+        for future in as_completed(futures):
+            label = futures[future]
+            output[label] = future.result()
+
+    return (
+        output["desktop"][0],
+        output["desktop"][1],
+        output["mobile"][0],
+        output["mobile"][1],
+        output["googlebot"][0],
+        output["googlebot"][1],
+    )
+
+def soup_of(html):
+    return BeautifulSoup(html or "", "html.parser")
+
+def clean_text(soup):
+    clone = BeautifulSoup(str(soup), "html.parser")
+    for tag in clone(["script", "style", "noscript", "svg", "template"]):
+        tag.decompose()
+    text = " ".join(clone.stripped_strings)
+    return re.sub(r"\s+", " ", text).strip()
+
+ARTICLE_BODY_SELECTORS = [
+    "[itemprop='articleBody']",
+    ".entry-content",
+    ".post-content",
+    ".article-content",
+    ".post-body",
+    ".article-body",
+    ".single-post-content",
+    ".td-post-content",
+    "article",
+    "main",
+    "[role='main']",
+]
+
+ARTICLE_REMOVE_SELECTORS = [
+    "script", "style", "noscript", "svg", "template",
+    "nav", "footer", "aside",
+    "#comments", ".comments", ".comments-area", ".comment-area",
+    "#respond", ".comment-respond", ".comment-form", ".comment-list",
+    ".related-posts", ".related-articles", ".related-content",
+    ".recommended-posts", ".recommended-articles", ".recommendations",
+    ".popular-posts", ".popular-articles", ".most-popular",
+    ".sidebar", ".widget-area", ".side-bar",
+    ".newsletter", ".subscribe", ".subscription",
+    ".social-share", ".share-buttons", ".sharing",
+    ".author-box", ".author-bio",
+    ".breadcrumb", ".breadcrumbs",
+    ".post-navigation", ".pagination",
+]
+
+ARTICLE_BOILERPLATE_PATTERNS = [
+    "comment", "respond", "reply",
+    "related-post", "related_post", "related article", "related-article",
+    "recommended", "recommendation",
+    "popular-post", "popular_post", "most-popular",
+    "sidebar", "widget-area", "widget_area",
+    "newsletter", "subscribe", "subscription",
+    "social-share", "share-button",
+    "post-navigation", "breadcrumb",
+]
+
+ARTICLE_BOILERPLATE_CONTAINER_TAGS = {
+    "div",
+    "section",
+    "aside",
+    "nav",
+    "footer",
+    "form",
+    "header",
+}
+
+ARTICLE_BOUNDARY_HEADINGS = {
+    "leave a reply",
+    "leave a comment",
+    "comments",
+    "related posts",
+    "related articles",
+    "recommended",
+    "recommended articles",
+    "recommended posts",
+    "you may also like",
+    "popular",
+    "popular posts",
+    "most popular",
+    "recent posts",
+    "subscribe",
+    "اشترك",
+    "اترك تعليق",
+    "اترك تعليقا",
+    "مقالات ذات صلة",
+    "مقالات مقترحة",
+    "الأكثر قراءة",
+    "الاكثر قراءة",
+}
+
+def node_signature(node):
+    if node is None or not getattr(node, "name", None):
+        return ""
+    values = [
+        node.name,
+        node.get("id") or "",
+        " ".join(node.get("class") or []),
+        node.get("role") or "",
+        node.get("aria-label") or "",
+    ]
+    return " ".join(values).lower()
+
+def looks_like_boilerplate_container(node):
+    """
+    Identify non-editorial UI containers only.
+
+    Important:
+    Do NOT classify headings, paragraphs, anchors, list items or other
+    editorial elements as boilerplate merely because their id/class contains
+    words such as "most-popular", "related" or "comment".
+
+    Example that must remain:
+      <h2 id="Which-are-the-most-popular-areas-...">...</h2>
+    """
+    if node is None or not getattr(node, "name", None):
+        return False
+
+    if node.name.lower() not in ARTICLE_BOILERPLATE_CONTAINER_TAGS:
+        return False
+
+    sig = node_signature(node)
+    return any(
+        pattern in sig
+        for pattern in ARTICLE_BOILERPLATE_PATTERNS
+    )
+
+def prune_article_fragment(node):
+    """
+    Clone and isolate editorial article content.
+    Navigation, comments, sidebars, related content, popular widgets,
+    subscriptions and other page chrome are removed before content QA.
+    """
+    fragment = BeautifulSoup(str(node), "html.parser")
+
+    for selector in ARTICLE_REMOVE_SELECTORS:
+        for found in fragment.select(selector):
+            found.decompose()
+
+    # Remove only true UI containers whose IDs/classes strongly identify non article UI.
+    # Never remove editorial headings just because their IDs contain words such as most-popular.
+    for found in list(fragment.find_all(True)):
+        if looks_like_boilerplate_container(found):
+            found.decompose()
+
+    # Remove a boundary heading and the siblings after it inside the same widget/container.
+    for heading in list(fragment.find_all(re.compile(r"^h[2-6]$"))):
+        label = re.sub(r"\s+", " ", heading.get_text(" ", strip=True)).strip().lower()
+        if label in ARTICLE_BOUNDARY_HEADINGS:
+            current = heading
+            while current is not None:
+                nxt = current.next_sibling
+                try:
+                    current.decompose()
+                except Exception:
+                    pass
+                current = nxt
+
+    return fragment
+
+def article_candidate_score(node, selector_bonus=0):
+    fragment = prune_article_fragment(node)
+    text_value = clean_text(fragment)
+    if len(text_value) < 200:
+        return -10_000, fragment
+
+    paragraphs = [
+        p.get_text(" ", strip=True)
+        for p in fragment.find_all("p")
+        if len(p.get_text(" ", strip=True)) >= 40
+    ]
+    headings = [
+        h.get_text(" ", strip=True)
+        for h in fragment.find_all(re.compile(r"^h[1-4]$"))
+        if h.get_text(" ", strip=True)
+    ]
+    links = fragment.find_all("a", href=True)
+
+    # Prefer editorial prose and specific article body selectors.
+    score = (
+        selector_bonus
+        + len(text_value)
+        + len(paragraphs) * 180
+        + len(headings) * 60
+        - max(0, len(links) - len(paragraphs) * 3) * 20
+    )
+    return score, fragment
+
+def article_content_node(soup):
+    """
+    Select the most likely editorial article body and return a pruned clone.
+    Specific article body selectors are preferred over broad main containers.
+    """
+    selector_weights = {
+        "[itemprop='articleBody']": 9000,
+        ".entry-content": 8500,
+        ".post-content": 8200,
+        ".article-content": 8200,
+        ".post-body": 8000,
+        ".article-body": 8000,
+        ".single-post-content": 7800,
+        ".td-post-content": 7800,
+        "article": 5500,
+        "main": 1500,
+        "[role='main']": 1500,
     }
-}
 
-.site_footer .widget_content .menu-bayut-footer-social-container ul li a, .site_footer .widget_content .menu-bayut-footer-social-container ul li a:hover {
-	display: block;
-	height: inherit;
-	width: inherit;
-}
+    candidates = []
+    seen = set()
 
-.widget_content ul {
-	list-style: none !important;
-	padding: 0 !important;
-}
+    for selector in ARTICLE_BODY_SELECTORS:
+        for node in soup.select(selector):
+            identity = id(node)
+            if identity in seen:
+                continue
+            seen.add(identity)
 
-figcaption {
-  font-size: 12px;
-  font-style: italic;
-}
+            score, fragment = article_candidate_score(
+                node,
+                selector_weights.get(selector, 0),
+            )
+            if score > 0:
+                candidates.append((score, fragment))
 
-body.single .sidebar_post_content_col .full_width_post_single > .col12 > article.blog_post_container > .post_body .twitter_widget_wrapper { width: fit-content; }
-.entry-content h4 {
-	font-size: 16px;
-}
-.entry-content h5 {
-	font-size: 15px;
-}
-h4, h5, h6 { font-weight: 600; }
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
 
-ul {
-	list-style: initial;
-	margin-block-start: 1em;
-  margin-block-end: 1em;
-}
+    return prune_article_fragment(soup.body or soup)
 
-.desktop {
-	display: contents;
-}
+def main_content_node(soup):
+    return article_content_node(soup)
 
-.newsletter-mobile-listing-wrapper.article-wrap .newsletter {
-	display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-#default_sidebar_widget .property-search-widget .wrapper {
-		overflow: initial !important;
-	}
-@media screen and (max-width: 670px) {
-	.area-property-details {
-		overflow: hidden;
-	}
-	
-		footer .menu-bayut-footer-property-menu-container, footer .menu-bayut-footer-property-menu-ar-container {
-		height: 300px;
-	}
+def main_content_text(soup):
+    return clean_text(article_content_node(soup))
 
-	footer .menu-bayut-footer-property-menu-container.expanded, footer .menu-bayut-footer-property-menu-ar-container.expanded {
-		height: 460px;
-	}
-	
-	body.rtl footer .property-dropdown > a {
-		width: 100%;
-	}
-}
-@media screen and (min-width: 670px) {
-#sally-g-ads-right-rail {
-	width: 350px !important;
-}
-}
+def similarity(a, b):
+    a, b = (a or "")[:40000], (b or "")[:40000]
+    if not a and not b:
+        return 1.0
+    return SequenceMatcher(None, a, b).ratio()
 
-.entry-content ul.post-jumplink {
-	width: initial;
-	list-style: initial;
-	margin: 0 0 20px 19px;
-	padding: 0 0 0 20px;
-}
+def tokenize(text):
+    return re.findall(r"[A-Za-zÀ-ÿ\u0600-\u06FF0-9']+", (text or "").lower())
 
-.entry-content ul.post-jumplink li {
-	border: none;
-	margin-bottom: 14px;
-}
+def word_count(text):
+    return len(tokenize(text))
 
-.blog_post_container .entry-content ul.post-jumplink li a {
-	display: inline;
-	padding: initial;
-	font-weight: initial;
-}
+def top_ngram_density(text, n=2):
+    words = [w for w in tokenize(text) if len(w) > 2]
+    if len(words) < n:
+        return ("", 0.0, 0)
+    grams = [" ".join(words[i:i+n]) for i in range(len(words)-n+1)]
+    counts = Counter(grams)
+    gram, count = counts.most_common(1)[0]
+    return gram, count / max(1, len(grams)), count
 
-.navigation.pagination .nav-links .page-numbers:last-of-type {
-	margin-right: 10px;
-}
+def title_text(soup):
+    return soup.title.get_text(" ", strip=True) if soup.title else ""
 
-.navigation.pagination .nav-links .page-numbers.next {
-	margin-right: 0;
-}
+def meta_content(soup, name=None, prop=None):
+    if name:
+        tag = soup.find("meta", attrs={"name": re.compile(f"^{re.escape(name)}$", re.I)})
+    else:
+        tag = soup.find("meta", attrs={"property": re.compile(f"^{re.escape(prop)}$", re.I)})
+    return (tag.get("content") or "").strip() if tag else ""
 
-body.rtl .navigation.pagination .nav-links .page-numbers:last-of-type {
-	margin-left: 10px;
-	margin-right: 0;
-}
+def first_h1(soup):
+    h = soup.find("h1")
+    return h.get_text(" ", strip=True) if h else ""
 
-body.rtl .navigation.pagination .nav-links .page-numbers.next {
-	margin-left: 0;
-}
+def canonical_href(soup):
+    tag = soup.find("link", rel=lambda x: x and "canonical" in [str(i).lower() for i in (x if isinstance(x, list) else [x])])
+    return (tag.get("href") or "").strip() if tag else ""
 
-.homepage-featured-posts.trending-section .post-title {
-	text-overflow: ellipsis;
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-@media screen and (max-width: 600px) {
-	.homepage-featured-posts.trending-section .post-title {
-		text-overflow: initial;
-  	white-space: initial;
-  	overflow: initial;
-	}
-}
-@media screen and (min-width: 600px) {
-	body.home .property-search-widget .wrapper.fixed, body.category .property-search-widget .wrapper.fixed, body.postid-285789 .property-search-widget .wrapper.fixed {
-		position: initial;
-		margin-top: 0 !important;
-	}
-}
-
-@media screen and (max-width: 670px) {
-    .owl-carousel .owl-stage-outer {
-        overflow: hidden; !important;
+def keyword_overlap(a, b):
+    stop = {
+        "the","and","for","with","from","this","that","your","you","are","our","in","on","of","to","a","an","is",
+        "في","من","على","إلى","الى","عن","هذا","هذه","مع","و","أو","او","ما","هو","هي","التي","الذي"
     }
-	.homepage-featured-posts .owl-carousel {
-		overflow: hidden;
-	}
+    aa = {x for x in tokenize(a) if len(x) > 2 and x not in stop}
+    bb = {x for x in tokenize(b) if len(x) > 2 and x not in stop}
+    if not aa:
+        return 0.0
+    return len(aa & bb) / len(aa)
+
+
+SEMANTIC_CONCEPTS = {
+    # Real estate and housing concepts
+    "property": {
+        "property", "properties", "apartment", "apartments", "flat", "flats",
+        "villa", "villas", "townhouse", "townhouses", "house", "houses",
+        "home", "homes", "residence", "residences", "unit", "units",
+        "عقار", "عقارات", "شقة", "شقق", "فيلا", "فلل", "منزل", "منازل",
+        "وحدة", "وحدات", "سكن", "سكنية"
+    },
+    "rent": {
+        "rent", "rents", "rental", "rentals", "renting", "lease", "leasing",
+        "إيجار", "ايجار", "استئجار", "للإيجار", "للايجار", "تأجير", "تاجير"
+    },
+    "sale": {
+        "sale", "sales", "sell", "selling", "buy", "buying", "purchase",
+        "بيع", "للبيع", "شراء", "للشراء"
+    },
+    "price": {
+        "price", "prices", "cost", "costs", "rate", "rates",
+        "سعر", "أسعار", "اسعار", "تكلفة", "تكاليف"
+    },
+    "location": {
+        "area", "areas", "community", "communities", "neighbourhood",
+        "neighborhood", "district", "location", "locations",
+        "منطقة", "مناطق", "مجمع", "أحياء", "احياء", "حي", "موقع"
+    },
+    "popular": {
+        "popular", "top", "best", "preferred", "favourite", "favorite",
+        "الأكثر", "الاكثر", "أفضل", "افضل", "شهرة", "شعبية"
+    },
 }
 
-body.rtl .tru-estimate-link {
-	direction: ltr;
-	font-family: Lato;
+SEMANTIC_TOKEN_MAP = {}
+for _concept, _terms in SEMANTIC_CONCEPTS.items():
+    for _term in _terms:
+        SEMANTIC_TOKEN_MAP[_term.casefold()] = _concept
+
+SEMANTIC_STOP_WORDS = {
+    "the","and","for","with","from","this","that","your","you","are","our",
+    "in","on","of","to","a","an","is","can","where","what","which","how",
+    "في","من","على","إلى","الى","عن","هذا","هذه","مع","و","أو","او","ما",
+    "هو","هي","التي","الذي","أين","اين","كيف","يمكن"
 }
 
-.header_nav .new-link::after {
-	margin-left: 40px;
+def semantic_tokens(text):
+    out = []
+    for token in tokenize(text):
+        token = token.casefold()
+        if len(token) <= 2 or token in SEMANTIC_STOP_WORDS:
+            continue
+
+        # Light English plural normalization for terms not already in the map.
+        canonical = SEMANTIC_TOKEN_MAP.get(token)
+        if canonical:
+            out.append(canonical)
+            continue
+
+        if token.endswith("ies") and len(token) > 5:
+            token = token[:-3] + "y"
+        elif token.endswith("s") and len(token) > 4 and not token.endswith("ss"):
+            token = token[:-1]
+
+        out.append(SEMANTIC_TOKEN_MAP.get(token, token))
+    return out
+
+def semantic_overlap(a, b):
+    """
+    Lightweight semantic concept overlap.
+    This intentionally does not require a large language model or embedding package.
+    It normalises common concepts and then measures how much of A is represented in B.
+    """
+    aa = set(semantic_tokens(a))
+    bb = set(semantic_tokens(b))
+    if not aa:
+        return 0.0
+    return len(aa & bb) / len(aa)
+
+
+def page_primary_h1(soup):
+    """
+    Return the primary visible H1 for the article.
+    The H1 may sit in the article header outside the isolated article body,
+    so this deliberately checks the full page before falling back to the body.
+    """
+    # Prefer H1s near article/main containers.
+    preferred = []
+    for selector in [
+        "article h1",
+        "main h1",
+        "[role='main'] h1",
+        ".entry-title",
+        ".post-title",
+        ".article-title",
+        "header h1",
+        "h1",
+    ]:
+        for node in soup.select(selector):
+            value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+            if value and value not in preferred:
+                preferred.append(value)
+        if preferred:
+            break
+
+    return preferred[0] if preferred else ""
+
+def page_h1s(soup):
+    """
+    Collect unique H1 values from the full page, because the article header
+    is often outside .entry-content or itemprop=articleBody.
+    """
+    values = []
+    for node in soup.find_all("h1"):
+        value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+FAQ_HEADING_LABELS = {
+    "faq", "faqs", "frequently asked questions",
+    "frequently asked question",
+    "أسئلة شائعة", "الأسئلة الشائعة", "الاسئلة الشائعة",
 }
 
-.header_nav .new-link > a {
- position: relative;
+def is_faq_heading(text):
+    label = re.sub(r"\s+", " ", (text or "").strip()).lower()
+    return label in FAQ_HEADING_LABELS or "frequently asked" in label
+
+def faq_section_relevant(section_text, target_topic):
+    """
+    FAQ is structural. Judge the answers inside the FAQ section rather than
+    comparing the literal word FAQ with the Focus Keyword.
+    """
+    if not section_text or len(section_text.strip()) < 40:
+        return False
+
+    semantic = semantic_overlap(target_topic, section_text)
+    lexical = keyword_overlap(target_topic, section_text)
+
+    target_concepts = set(semantic_tokens(target_topic))
+    section_concepts = set(semantic_tokens(section_text))
+    shared_concepts = target_concepts & section_concepts
+
+    # FAQ answers do not have to repeat the full Focus Keyword.
+    return (
+        semantic >= 0.20
+        or lexical >= 0.10
+        or len(shared_concepts) >= 2
+    )
+
+def heading_level(node):
+    if not getattr(node, "name", None):
+        return None
+    match = re.match(r"^h([1-6])$", node.name)
+    return int(match.group(1)) if match else None
+
+def heading_sections(soup):
+    """
+    Return H2 to H4 headings with hierarchical section content.
+
+    H2 includes its child H3 and H4 content until the next H2.
+    H3 includes its child H4 content until the next H2 or H3.
+    H4 stops at the next H2, H3 or H4.
+
+    This is important for FAQ sections where the FAQ label is an H2 and
+    individual questions are H3 headings.
+    """
+    container = main_content_node(soup)
+    headings = container.find_all(re.compile(r"^h[2-4]$"))
+    output = []
+
+    for heading in headings:
+        heading_text = re.sub(
+            r"\s+",
+            " ",
+            heading.get_text(" ", strip=True),
+        ).strip()
+        if not heading_text:
+            continue
+
+        current_level = heading_level(heading) or 4
+        parts = []
+
+        for node in heading.find_all_next():
+            if node is heading:
+                continue
+
+            node_level = heading_level(node)
+            if node_level is not None and 2 <= node_level <= current_level:
+                break
+
+            if node.name in {"p", "li", "td", "th", "figcaption"}:
+                value = re.sub(
+                    r"\s+",
+                    " ",
+                    node.get_text(" ", strip=True),
+                ).strip()
+                if value:
+                    parts.append(value)
+
+            if sum(len(x) for x in parts) >= 1800:
+                break
+
+        output.append({
+            "heading": heading_text,
+            "level": current_level,
+            "section": " ".join(parts)[:2200],
+        })
+
+    return output
+
+def primary_topic_phrase(gram, title, h1, focus_keyword, url):
+    """
+    Treat a repeated phrase as a primary topic phrase when it is strongly represented
+    in the page identity itself. This prevents location/entity names from being treated
+    as keyword stuffing by frequency alone.
+    """
+    gram = (gram or "").strip().lower()
+    if not gram:
+        return False, []
+
+    evidence = []
+    if phrase_count(title, gram):
+        evidence.append("Title")
+    if phrase_count(h1, gram):
+        evidence.append("H1")
+    if focus_keyword and phrase_count(focus_keyword, gram):
+        evidence.append("Focus Keyword")
+
+    path_words = " ".join(tokenize(urlparse(url).path.replace("-", " ")))
+    if phrase_count(path_words, gram):
+        evidence.append("URL")
+
+    # Require at least two independent page identity signals.
+    return len(evidence) >= 2, evidence
+
+def keyword_repetition_assessment(body_text, focus_keyword, secondary_keywords, title="", h1="", url=""):
+    wc = max(1, word_count(body_text))
+    gram, density, count = top_ngram_density(body_text, 2)
+    is_primary_topic, topic_evidence = primary_topic_phrase(gram, title, h1, focus_keyword, url)
+
+    target_rows = []
+    strongest_per_1000 = 0.0
+    strongest_keyword = ""
+    for kw in ([focus_keyword] if focus_keyword else []) + list(secondary_keywords or []):
+        exact = phrase_count(body_text, kw)
+        per_1000 = exact * 1000 / wc
+        target_rows.append((kw, exact, per_1000))
+        if per_1000 > strongest_per_1000:
+            strongest_per_1000 = per_1000
+            strongest_keyword = kw
+
+    status = PASS
+    reasons = []
+
+    # Exact multiword query repetition is the strongest signal.
+    if strongest_per_1000 >= 25:
+        status = FAIL
+        reasons.append(
+            f"Target phrase '{strongest_keyword}' appears {strongest_per_1000:.1f} times per 1,000 words."
+        )
+    elif strongest_per_1000 >= 15:
+        status = REVIEW
+        reasons.append(
+            f"Target phrase '{strongest_keyword}' appears {strongest_per_1000:.1f} times per 1,000 words and should be reviewed for natural wording."
+        )
+
+    # N gram density only matters when the phrase is not clearly the page's primary entity/topic.
+    if not is_primary_topic:
+        if count >= 20 and density >= 0.035:
+            status = FAIL
+            reasons.append(
+                f"The repeated phrase '{gram}' is not identified as the primary page topic and represents {density:.1%} of two word phrases."
+            )
+        elif count >= 12 and density >= 0.022 and status == PASS:
+            status = REVIEW
+            reasons.append(
+                f"The repeated phrase '{gram}' is not identified as the primary page topic and represents {density:.1%} of two word phrases."
+            )
+    elif count:
+        reasons.append(
+            f"The repeated phrase '{gram}' is treated as a primary topic or entity phrase because it appears in {', '.join(topic_evidence)}. Its frequency alone does not trigger REVIEW."
+        )
+
+    if not reasons:
+        reasons.append("No unusually repetitive target phrase pattern was detected.")
+
+    return {
+        "status": status,
+        "gram": gram,
+        "density": density,
+        "count": count,
+        "primary_topic": is_primary_topic,
+        "topic_evidence": topic_evidence,
+        "targets": target_rows,
+        "reason": " ".join(reasons),
+    }
+
+def normalise_url_for_sitemap(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    scheme = parsed.scheme.lower()
+    host = parsed.netloc.lower()
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+    return f"{scheme}://{host}{path}"
+
+def sitemap_xml_root(response):
+    content = response.content or b""
+    if not content:
+        return None
+
+    # A .gz sitemap can be a gzip file even when the HTTP response is not using Content Encoding.
+    if content[:2] == b"\x1f\x8b":
+        try:
+            content = gzip.decompress(content)
+        except Exception:
+            return None
+
+    if len(content) > 12_000_000:
+        return None
+
+    try:
+        return ET.fromstring(content)
+    except Exception:
+        return None
+
+def xml_local_name(tag):
+    return str(tag).split("}")[-1].lower()
+
+def parse_sitemap_document(response):
+    root = sitemap_xml_root(response)
+    if root is None:
+        return None, []
+
+    root_type = xml_local_name(root.tag)
+    entries = []
+
+    if root_type == "sitemapindex":
+        for item in list(root):
+            loc = ""
+            lastmod = ""
+            for child in list(item):
+                name = xml_local_name(child.tag)
+                if name == "loc":
+                    loc = (child.text or "").strip()
+                elif name == "lastmod":
+                    lastmod = (child.text or "").strip()
+            if loc:
+                entries.append({"loc": loc, "lastmod": lastmod})
+        return "index", entries
+
+    if root_type == "urlset":
+        for item in list(root):
+            loc = ""
+            lastmod = ""
+            for child in list(item):
+                name = xml_local_name(child.tag)
+                if name == "loc":
+                    loc = (child.text or "").strip()
+                elif name == "lastmod":
+                    lastmod = (child.text or "").strip()
+            if loc:
+                entries.append({"loc": loc, "lastmod": lastmod})
+        return "urlset", entries
+
+    return None, []
+
+def cache_bucket(seconds=600):
+    return int(time.time() // seconds)
+
+@lru_cache(maxsize=128)
+def _robots_sitemaps_cached(origin, _bucket):
+    found = []
+    try:
+        rr = requests.get(
+            urljoin(origin, "/robots.txt"),
+            headers=UA_DESKTOP,
+            timeout=SITEMAP_REQUEST_TIMEOUT,
+        )
+        if rr.status_code == 200:
+            for line in rr.text.splitlines():
+                if line.lower().strip().startswith("sitemap:"):
+                    value = line.split(":", 1)[1].strip()
+                    if value.startswith(("http://", "https://")):
+                        found.append(value)
+    except Exception:
+        pass
+
+    return tuple(dict.fromkeys(found))
+
+def robots_sitemaps(origin):
+    # Refresh robots sitemap declarations every 10 minutes.
+    return _robots_sitemaps_cached(origin, cache_bucket(600))
+
+@lru_cache(maxsize=1024)
+def _fetch_sitemap_document_cached(sitemap_url, _bucket):
+    """
+    Cached sitemap request.
+    Returns parsed data rather than a requests.Response so repeated URL audits
+    on the same host do not download the same sitemap again.
+    """
+    record = {
+        "url": sitemap_url,
+        "status": None,
+        "type": "",
+        "entries": (),
+        "error": "",
+    }
+
+    try:
+        rr = requests.get(
+            sitemap_url,
+            headers=UA_DESKTOP,
+            timeout=SITEMAP_REQUEST_TIMEOUT,
+        )
+        record["status"] = rr.status_code
+
+        if rr.status_code != 200:
+            return record
+
+        doc_type, entries = parse_sitemap_document(rr)
+        if not doc_type:
+            return record
+
+        record["type"] = doc_type
+        record["entries"] = tuple(
+            (entry.get("loc", ""), entry.get("lastmod", ""))
+            for entry in entries
+            if entry.get("loc")
+        )
+        return record
+
+    except Exception as exc:
+        record["error"] = str(exc)
+        return record
+
+def fetch_sitemap_document(sitemap_url):
+    # Refresh parsed sitemap documents every 10 minutes.
+    return _fetch_sitemap_document_cached(sitemap_url, cache_bucket(600))
+
+def sitemap_priority(sitemap_url, page_url):
+    """
+    Rank likely child sitemaps first.
+
+    Editorial article sitemaps receive a stronger priority than generic page,
+    category, tag, author or media sitemaps. This makes the result less likely
+    to alternate between PASS and REVIEW because of the time budget.
+    """
+    sm = (sitemap_url or "").lower()
+    path = urlparse(page_url).path.lower()
+    score = 0
+
+    target_tokens = [
+        t for t in re.findall(r"[a-z0-9]+", path)
+        if len(t) >= 4
+    ]
+
+    for token in target_tokens:
+        if token in sm:
+            score += 5
+
+    # Strong editorial sitemap preferences.
+    if "post-sitemap" in sm:
+        score += 30
+    if "article-sitemap" in sm or "articles-sitemap" in sm:
+        score += 26
+    if "blog-sitemap" in sm:
+        score += 22
+
+    # MyBayut article URLs should strongly prefer MyBayut post sitemaps.
+    if "/mybayut/" in path and "mybayut" in sm:
+        score += 18
+    if "/mybayut/" in path and "post-sitemap" in sm:
+        score += 18
+
+    # Lower priority for non-editorial sitemap families.
+    for low_priority in (
+        "category-sitemap",
+        "tag-sitemap",
+        "author-sitemap",
+        "attachment-sitemap",
+        "media-sitemap",
+        "image-sitemap",
+    ):
+        if low_priority in sm:
+            score -= 20
+
+    if "page-sitemap" in sm:
+        score -= 4
+
+    for useful in ("post", "posts", "article", "articles", "blog"):
+        if useful in sm:
+            score += 3
+
+    if sm.endswith(".xml.gz"):
+        score += 1
+
+    return score
+
+@lru_cache(maxsize=512)
+def _find_url_in_sitemaps_cached(
+    page_url,
+    max_sitemaps,
+    max_depth,
+    _bucket,
+):
+    """
+    Fast recursive sitemap inspection.
+
+    Improvements:
+    1. robots.txt and sitemap documents are cached
+    2. child sitemap files are fetched in parallel
+    3. likely sitemap files are checked first
+    4. a strict wall clock budget prevents long UI freezes
+    5. incomplete traversal is reported as incomplete rather than pretending
+       the URL is absent
+    """
+    started = time.time()
+
+    parsed = urlparse(page_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    target = normalise_url_for_sitemap(page_url)
+
+    seeds = list(robots_sitemaps(origin))
+    seeds += [
+        urljoin(origin, "/sitemap.xml"),
+        urljoin(origin, "/sitemap_index.xml"),
+    ]
+    seeds = list(dict.fromkeys(seed for seed in seeds if seed))
+
+    frontier = [(seed, 0) for seed in seeds]
+    seen = set()
+    checked = []
+    accessible = 0
+    child_count = 0
+    stopped_by_budget = False
+    stopped_by_limit = False
+
+    while frontier:
+        if time.time() - started >= SITEMAP_TIME_BUDGET:
+            stopped_by_budget = True
+            break
+
+        remaining_capacity = max_sitemaps - len(checked)
+        if remaining_capacity <= 0:
+            stopped_by_limit = True
+            break
+
+        # Rank the current level and only submit as many files as the configured
+        # audit limit allows.
+        frontier = sorted(
+            frontier,
+            key=lambda item: sitemap_priority(item[0], page_url),
+            reverse=True,
+        )
+
+        current_batch = []
+        next_frontier = []
+
+        while frontier and len(current_batch) < min(SITEMAP_WORKERS, remaining_capacity):
+            sitemap_url, depth = frontier.pop(0)
+            if sitemap_url in seen:
+                continue
+            seen.add(sitemap_url)
+            current_batch.append((sitemap_url, depth))
+
+        if not current_batch:
+            # Continue with any unprocessed items if duplicates consumed the batch.
+            if frontier:
+                continue
+            break
+
+        with ThreadPoolExecutor(max_workers=min(SITEMAP_WORKERS, len(current_batch))) as executor:
+            future_map = {
+                executor.submit(fetch_sitemap_document, sitemap_url): (sitemap_url, depth)
+                for sitemap_url, depth in current_batch
+            }
+
+            for future in as_completed(future_map):
+                sitemap_url, depth = future_map[future]
+                record = future.result()
+
+                checked.append({
+                    "url": sitemap_url,
+                    "status": record.get("status"),
+                    "type": record.get("type", ""),
+                    "entries": len(record.get("entries") or ()),
+                    "error": record.get("error", ""),
+                })
+
+                if record.get("status") != 200 or not record.get("type"):
+                    continue
+
+                accessible += 1
+                entries = record.get("entries") or ()
+
+                if record["type"] == "urlset":
+                    for loc, lastmod in entries:
+                        if normalise_url_for_sitemap(loc) == target:
+                            return {
+                                "found": True,
+                                "accessible": accessible,
+                                "checked": checked,
+                                "found_in": sitemap_url,
+                                "lastmod": lastmod or "",
+                                "child_count": child_count,
+                                "complete": True,
+                                "stopped_by_budget": False,
+                                "stopped_by_limit": False,
+                                "elapsed": time.time() - started,
+                            }
+
+                elif record["type"] == "index" and depth < max_depth:
+                    children = []
+                    for loc, _lastmod in entries:
+                        if loc and loc not in seen:
+                            children.append((loc, depth + 1))
+
+                    children.sort(
+                        key=lambda item: sitemap_priority(item[0], page_url),
+                        reverse=True,
+                    )
+                    next_frontier.extend(children)
+                    child_count += len(children)
+
+        # Keep unprocessed items from this level, then append newly discovered
+        # children. This avoids losing files while still checking likely ones first.
+        frontier = frontier + next_frontier
+
+    complete = not frontier and not stopped_by_budget and not stopped_by_limit
+
+    return {
+        "found": False,
+        "accessible": accessible,
+        "checked": checked,
+        "found_in": "",
+        "lastmod": "",
+        "child_count": child_count,
+        "complete": complete,
+        "stopped_by_budget": stopped_by_budget,
+        "stopped_by_limit": stopped_by_limit,
+        "elapsed": time.time() - started,
+    }
+
+def find_url_in_sitemaps(
+    page_url,
+    max_sitemaps=SITEMAP_MAX_FILES,
+    max_depth=SITEMAP_MAX_DEPTH,
+):
+    # Cache the completed sitemap result for 10 minutes.
+    return _find_url_in_sitemaps_cached(
+        page_url,
+        max_sitemaps,
+        max_depth,
+        cache_bucket(600),
+    )
+
+def parse_keywords(raw):
+    """Parse comma/semicolon/newline/pipe-separated secondary keywords and de-duplicate them."""
+    if not raw:
+        return []
+    parts = re.split(r"[,;\n|]+", raw)
+    out = []
+    seen = set()
+    for part in parts:
+        kw = re.sub(r"\s+", " ", part).strip()
+        key = kw.casefold()
+        if kw and key not in seen:
+            seen.add(key)
+            out.append(kw)
+    return out
+
+def phrase_count(text, phrase):
+    """Count exact keyword-phrase occurrences on normalized token text."""
+    phrase_tokens = tokenize(phrase)
+    if not phrase_tokens:
+        return 0
+    hay = " ".join(tokenize(text))
+    needle = " ".join(phrase_tokens)
+    return len(re.findall(r"(?<!\w)" + re.escape(needle) + r"(?!\w)", hay, flags=re.I))
+
+def keyword_in_text(keyword, text, min_overlap=0.8):
+    if not keyword:
+        return True
+    if phrase_count(text, keyword) > 0:
+        return True
+    return keyword_overlap(keyword, text) >= min_overlap
+
+def keyword_summary(body_text, focus_keyword, secondary_keywords):
+    kws = ([focus_keyword] if focus_keyword else []) + list(secondary_keywords or [])
+    return [(kw, phrase_count(body_text, kw)) for kw in kws]
+
+def status_class(s):
+    return {"PASS":"status-pass","REVIEW":"status-review","FAIL":"status-fail"}.get(s, "")
+
+
+DEFAULT_ACTIONS = {
+    "Cloaking": "Serve the same primary editorial content and destination to normal users and Googlebot. Remove crawler specific SEO content or redirects.",
+    "Sneaky Redirect": "Remove deceptive or crawler specific redirects. Keep legitimate redirects consistent for users and crawlers.",
+    "Device Spam Redirect": "Use the same relevant destination and primary content for desktop and mobile users.",
+    "Hidden Text": "Make editorial text visible unless it is legitimately hidden for interface, responsive or accessibility reasons.",
+    "Hidden Links": "Remove deliberately concealed links. Keep hidden interface links only when their UI or accessibility purpose is clear.",
+    "Keyword Stuffing": "Reduce repeated query phrases that read unnaturally. Keep necessary location and entity names when editorially justified.",
+    "Link Spam": "Remove or rewrite manipulative keyword rich links and repeated commercial anchor patterns. Keep editorial links relevant and natural.",
+    "Hacked Content": "Remove injected spam content, secure the CMS and plugins, rotate credentials and verify the clean page after remediation.",
+    "Spam JavaScript": "Review suspicious redirect or obfuscation scripts. Remove scripts that inject spam, links or deceptive redirects.",
+    "Spam Iframes": "Remove unauthorized or unexplained hidden iframes. Keep only legitimate embeds with a clear visible purpose.",
+    "User Generated Spam": "Remove spam comments or profile links, strengthen moderation and apply appropriate UGC or nofollow treatment where needed.",
+    "Back Button Hijacking": "Remove browser history logic that traps users or forces redirects when they try to return to the previous page.",
+    "Malware / Scam Behaviour": "Remove malicious or deceptive scripts and downloads, secure the site and run a security review before republishing.",
+
+    "HTTP Status": "Make the preferred live article return HTTP 200. Fix 404 or 5xx responses and unnecessary redirect chains.",
+    "Indexability": "Remove unintended noindex from an article that should appear in search. Keep noindex only when it is intentional.",
+    "Robots": "Allow Googlebot to fetch the intended article in robots.txt and remove unintended restrictive page level robots directives.",
+    "Canonical": "Point the canonical to the correct preferred live URL and ensure that canonical target returns a successful response.",
+    "Title Tag": "Rewrite the title so it clearly represents the page topic without unnecessary repetition or verbosity.",
+    "Meta Description": "Add or rewrite a useful description that accurately represents the page. Exact Focus Keyword wording is not required.",
+    "H1": "Add one clear editorial H1 that accurately represents the page topic. Exact Focus Keyword matching is not required.",
+    "Heading Structure": "Fix empty, duplicated or skipped heading levels in the editorial article structure.",
+    "URL Structure": "Use a clean readable preferred URL and remove unnecessary or misleading parameters.",
+    "Internal Links": "Fix only the internal hyperlinks reported inside the article content. Correct broken destinations, replace empty or generic anchors with descriptive text and rewrite spammy or misleading anchor text.",
+    "External Links": "Fix, replace or remove each confirmed problematic external destination. Social platform anti bot responses do not need fixing by themselves.",
+    "Images": "For each meaningful image reported, add useful alt text or fix the broken image resource. Decorative images can use empty alt treatment.",
+    "Structured Data": "Fix JSON LD parsing or add a valid Article or BlogPosting object. Align schema headline and page identity with the visible article.",
+    "datePublished": "Add or correct the editorial publication date so schema and visible metadata agree.",
+    "dateModified": "Align editorial modification signals. Fix the backend HTTP Last Modified source if it changes without a real editorial update. Do not change schema dates only to match a server cache date.",
+    "Sitemap": "Ensure the preferred canonical URL is included in an accessible editorial sitemap and that the sitemap can be completed within the audit.",
+    "Mobile Content": "Restore any primary article content missing from mobile so desktop and mobile present materially equivalent information.",
+    "JavaScript Rendering": "Ensure important article content is present in initial HTML or reliably server rendered, not dependent on client JavaScript alone.",
+    "HTTPS": "Serve the preferred page and render resources over HTTPS and remove mixed HTTP resources.",
+    "Broken Resources": "Fix, replace or remove every reported broken image, CSS, font preload or JavaScript resource.",
+
+    "Search Intent": "Rewrite the article so it directly answers the search topic promised by the title, H1 and Focus Keyword meaning.",
+    "Content Relevance": "Remove unrelated sections or rewrite them so each H2 to H4 section clearly serves the page topic.",
+    "Thin Content": "Add useful information, data, examples, comparisons or guidance. Do not add filler simply to increase word count.",
+    "Original Value": "Add original Bayut value such as first party data, useful analysis, comparisons, tables, examples or practical guidance.",
+    "Factual Accuracy": "Verify the exact factual statements reported by the system against first party or authoritative sources and correct any value or statement that cannot be confirmed.",
+    "Outdated Information": "Refresh time sensitive prices, rents, ROI, fees, laws, routes or project status, then update the editorial modification date only after the content is actually updated.",
+    "Keyword Use": "Reduce unnatural repeated target phrases while keeping necessary topic and entity wording.",
+    "Repetition": "Remove or consolidate repeated sentences and paragraphs.",
+    "Generic / Filler Content": "Replace weak generic paragraphs with topic specific information, data, examples or useful guidance.",
+    "Title vs Content": "Align the title with what the article actually covers, or update the article so it fulfils the title.",
+    "H1 vs Content": "Align the H1 with the actual article body.",
+    "Heading Relevance": "Rename, remove or rewrite weak headings and their sections so they clearly belong to the main topic.",
+    "Introduction Quality": "Rewrite the opening so it establishes the main topic and user need quickly.",
+    "FAQ Quality": "Add complete useful answers, remove duplicate answers and keep FAQ questions relevant to the article topic.",
+    "Unsupported Superlatives": "For every objective ranking claim reported, add nearby attribution or a supporting source. Otherwise soften or remove the claim.",
+    "Source Quality": "Add an authoritative or first party source beside each important unsupported quantitative, ranking, regulatory or fee claim reported by the system.",
+    "Data Accuracy": "Correct the specific conflicting numeric statements reported so the same fact does not appear with different values.",
+    "Entity Accuracy": "Verify the exact entity names reported. Standardize possible typo variants to the official project, company, place or building name.",
+    "Grammar / Readability": "Rewrite the reported difficult or malformed sentences for clarity and readability.",
+    "Broken Content": "Remove placeholders, fill empty headings and remove duplicated unfinished content blocks.",
 }
 
-.header_nav .new-link > a::before, .mobile_menu_opened .new-link > a::before {
-	content: 'new';
-	position: absolute;
-	top: -5px;
-	right: -40px;
-	left: initial;
-	font-size: 10px;
-	text-transform: uppercase;
-	background-color: red;
-	line-height: 10px;
-	padding: 3px 6px;
-	color: white;
-	border-radius: 16px;
+def suggested_source_for_claim(claim):
+    low = (claim or "").lower()
+
+    if any(term in low for term in [
+        "rent", "rental", "price", "aed", "roi", "yield",
+        "average rent", "average price",
+        "إيجار", "ايجار", "سعر", "أسعار", "اسعار", "عائد",
+    ]):
+        return "Bayut first party data or the approved internal property data source used for this article"
+
+    if any(term in low for term in [
+        "most popular", "most searched", "draws the most interest",
+        "ranked", "top spot", "الأكثر بحث", "الاكثر بحث",
+    ]):
+        return "Bayut first party search, views or demand data that supports the ranking"
+
+    if any(term in low for term in [
+        "developed by", "developer", "completed", "launched", "opened",
+        "المطور", "طورته", "اكتمل", "افتتح",
+    ]):
+        return "the developer official website or another authoritative first party project source"
+
+    if any(term in low for term in [
+        "minute", "minutes", "km", "kilomet", "distance",
+        "metro", "bus", "route", "دقيقة", "دقائق", "كيلومتر", "مترو", "حافلة",
+    ]):
+        return "an authoritative transport, map or official location source"
+
+    if any(term in low for term in [
+        "law", "regulation", "fee", "fees", "visa", "rule",
+        "قانون", "قوانين", "رسوم", "تأشيرة", "تاشيرة",
+    ]):
+        return "the relevant government or regulatory authority"
+
+    return "a first party or authoritative source that directly supports this statement"
+
+def compact_claim_action(claim, prefix="Verify"):
+    clean = re.sub(r"\s+", " ", claim or "").strip()
+    if len(clean) > 260:
+        clean = clean[:257].rstrip() + "..."
+    return f'{prefix}: "{clean}" | Needed source: {suggested_source_for_claim(clean)}'
+
+def action_for(name, status, specific_action=""):
+    if status == PASS:
+        return "No action required."
+    if specific_action:
+        return specific_action
+    return DEFAULT_ACTIONS.get(
+        name,
+        "Review the reported issue, correct the affected page element and rerun the audit."
+    )
+
+def result(name, status, finding, rule, action_needed=""):
+    method = SYSTEM_USES.get(name, "Rule based page analysis")
+
+    if name == "Hidden Links":
+        why_text = (
+            "Checked the fetched HTML for empty <a href> links "
+            "and links hidden by HTML/CSS."
+        )
+    else:
+        why_text = (
+            f"The system used {method}. "
+            f"The fixed rule applied is: {rule}"
+        )
+
+    return {
+        "Check": name,
+        "Status": status,
+        "Result": finding,
+        "Action Needed": action_for(name, status, action_needed),
+        "Why": why_text,
+        "_internal_status": status,
+        "_rule": rule,
+        "_system_uses": method,
+    }
+
+def robots_directives(soup):
+    values = []
+    for tag in soup.find_all("meta"):
+        n = (tag.get("name") or "").lower()
+        if n in {"robots", "googlebot"}:
+            values.append((tag.get("content") or "").lower())
+    return ", ".join(values)
+
+def parse_jsonld(soup):
+    parsed, errors = [], 0
+    for tag in soup.find_all("script", attrs={"type": re.compile("ld\\+json", re.I)}):
+        raw = tag.string or tag.get_text()
+        if not raw.strip():
+            continue
+        try:
+            parsed.append(json.loads(raw))
+        except Exception:
+            errors += 1
+    return parsed, errors
+
+def walk_json(obj):
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from walk_json(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from walk_json(v)
+
+def get_schema_values(jsonld, key):
+    vals = []
+    for root in jsonld:
+        for obj in walk_json(root):
+            if isinstance(obj, dict) and key in obj:
+                vals.append(obj[key])
+    return vals
+
+
+def obvious_hidden(node):
+    """
+    Static fallback only.
+    aria hidden by itself is not treated as visually hidden because it affects
+    the accessibility tree and does not necessarily hide content on screen.
+    """
+    style = (node.get("style") or "").replace(" ", "").lower()
+    hidden_attr = node.has_attr("hidden")
+    inert_attr = node.has_attr("inert")
+    bad_style = any(x in style for x in [
+        "display:none",
+        "visibility:hidden",
+        "visibility:collapse",
+        "opacity:0",
+        "font-size:0",
+        "height:0",
+        "width:0",
+        "max-height:0",
+        "left:-9999",
+        "right:-9999",
+        "top:-9999",
+        "text-indent:-9999",
+        "clip:rect(0",
+        "clip-path:inset(50",
+        "content-visibility:hidden",
+        "transform:scale(0"
+    ])
+    closed_details = node.name == "details" and not node.has_attr("open")
+    return hidden_attr or inert_attr or bad_style or closed_details
+
+def hidden_reasons(node):
+    reasons = []
+    style = (node.get("style") or "").replace(" ", "").lower()
+
+    if node.has_attr("hidden"):
+        value = node.get("hidden")
+        if str(value).lower() == "until-found":
+            reasons.append("hidden until found")
+        else:
+            reasons.append("hidden attribute")
+
+    if node.has_attr("inert"):
+        reasons.append("inert inactive interface region")
+
+    if node.name == "details" and not node.has_attr("open"):
+        reasons.append("closed details disclosure")
+
+    checks = [
+        ("display:none", "display none"),
+        ("visibility:hidden", "visibility hidden"),
+        ("visibility:collapse", "visibility collapse"),
+        ("opacity:0", "opacity zero"),
+        ("font-size:0", "font size zero"),
+        ("height:0", "height zero"),
+        ("width:0", "width zero"),
+        ("max-height:0", "maximum height zero"),
+        ("left:-9999", "positioned outside the visible screen"),
+        ("right:-9999", "positioned outside the visible screen"),
+        ("top:-9999", "positioned outside the visible screen"),
+        ("text-indent:-9999", "text indented outside the visible screen"),
+        ("clip:rect(0", "visually clipped"),
+        ("clip-path:inset(50", "visually clipped"),
+        ("content-visibility:hidden", "content visibility hidden"),
+        ("transform:scale(0", "scaled to zero"),
+    ]
+    for pattern, label in checks:
+        if pattern in style:
+            reasons.append(label)
+
+    return reasons
+
+def element_label(node):
+    if node is None:
+        return "Unknown element"
+
+    parts = [node.name or "element"]
+    node_id = node.get("id")
+    if node_id:
+        parts.append(f"id {node_id}")
+
+    classes = node.get("class") or []
+    if classes:
+        parts.append("class " + " ".join(str(c) for c in classes[:8]))
+
+    role = node.get("role")
+    if role:
+        parts.append(f"role {role}")
+
+    return ", ".join(parts)
+
+def _token_string(*parts):
+    return " ".join(str(p or "") for p in parts).lower()
+
+LEGITIMATE_UI_PATTERNS = {
+    "WordPress comment reply control": [
+        "cancel-comment-reply-link",
+        "cancel reply"
+    ],
+    "Accordion or collapsible content": [
+        "accordion", "collapse", "collapsible", "expandable", "faq-item", "faq_item"
+    ],
+    "Tab panel": [
+        "tabpanel", "tab-panel", "tabcontent", "tab-content", "tabs-panel"
+    ],
+    "Modal dialog or popup": [
+        "modal", "dialog", "popup", "pop-up", "lightbox", "overlay", "drawer", "offcanvas", "off-canvas"
+    ],
+    "Responsive navigation": [
+        "mobile-menu", "mobile_menu", "mobile-nav", "mobile_nav", "hamburger",
+        "responsive-menu", "responsive_menu", "desktop-nav", "desktop_nav"
+    ],
+    "Dropdown or submenu": [
+        "dropdown", "sub-menu", "submenu", "mega-menu", "megamenu", "flyout"
+    ],
+    "Slider or carousel": [
+        "slider", "carousel", "slideshow", "swiper", "slick", "splide", "glide", "slide"
+    ],
+    "Tooltip or popover": [
+        "tooltip", "popover", "tippy", "hint", "help-tip"
+    ],
+    "Accessibility only content": [
+        "screen-reader", "screen_reader", "sr-only", "sr_only", "visually-hidden",
+        "visually_hidden", "a11y", "accessible-only", "accessibility"
+    ],
+    "Cookie or consent interface": [
+        "cookie", "consent", "privacy-banner", "privacy_banner", "cmp"
+    ],
+    "Search or filter panel": [
+        "search-overlay", "search_panel", "search-panel", "filter-panel", "filter_panel",
+        "filter-drawer", "filter_drawer", "sort-panel", "sort_panel"
+    ],
+    "Form status or validation message": [
+        "validation", "error-message", "error_message", "form-message", "form_message",
+        "success-message", "success_message", "alert"
+    ],
+    "Loading or deferred interface": [
+        "loading", "loader", "spinner", "skeleton", "lazy", "placeholder"
+    ],
 }
 
-body.rtl .header_nav .new-link::after {
-	margin-left: initial;
-	margin-right: 36px;
+SUSPICIOUS_HIDE_REASONS = {
+    "opacity zero",
+    "font size zero",
+    "positioned outside the visible screen",
+    "text indented outside the visible screen",
+    "scaled to zero",
 }
 
-body.rtl .header_nav .new-link > a::before, body.rtl .mobile_menu_opened .new-link > a::before {
-	content: 'جديد';
-	right: initial;
-	left: -36px;
-	top: 0;
+def known_ui_reason_from_text(context_text):
+    context = (context_text or "").lower()
+    for label, patterns in LEGITIMATE_UI_PATTERNS.items():
+        if any(pattern in context for pattern in patterns):
+            return label
+    return ""
+
+
+VISIBLE_ANCHOR_CHILD_TAGS = {
+    "img", "svg", "picture", "video", "audio",
+    "canvas", "object", "embed", "iframe",
 }
 
-.mobile_menu_opened .new-link > a::before {
-	top: 16px;
-	right: 20px;
+def anchor_has_visible_html_content(anchor):
+    """
+    HTML-source test for whether an anchor contains any content that could
+    normally be visible to the user.
+
+    Text counts as visible content.
+    Common visual media descendants count as visible content.
+
+    aria-label/title do not count as visible page content.
+    """
+    text_value = re.sub(
+        r"\s+",
+        " ",
+        anchor.get_text(" ", strip=True),
+    ).strip()
+
+    if text_value:
+        return True
+
+    for tag_name in VISIBLE_ANCHOR_CHILD_TAGS:
+        if anchor.find(tag_name) is not None:
+            return True
+
+    return False
+
+def nearest_editorial_context(anchor, max_chars=140):
+    """
+    Return a short nearby text label so the editor can locate the empty
+    anchor in the article, e.g. the project paragraph immediately before it.
+    """
+    # First prefer the closest previous paragraph/list/heading/table text.
+    previous = anchor.find_previous(
+        ["p", "li", "h2", "h3", "h4", "td", "th"]
+    )
+
+    if previous is not None:
+        value = re.sub(
+            r"\s+",
+            " ",
+            previous.get_text(" ", strip=True),
+        ).strip()
+
+        if value:
+            if len(value) > max_chars:
+                value = value[: max_chars - 3].rstrip() + "..."
+            return value
+
+    parent = anchor.parent
+    if parent is not None:
+        value = re.sub(
+            r"\s+",
+            " ",
+            parent.get_text(" ", strip=True),
+        ).strip()
+
+        if value:
+            if len(value) > max_chars:
+                value = value[: max_chars - 3].rstrip() + "..."
+            return value
+
+    return ""
+
+def is_empty_href_anchor(anchor, base_url):
+    """
+    Detect an effectively invisible HTML hyperlink:
+    an actual HTTP(S) href with no visible text/media content inside <a>.
+    """
+    href = normalized_link_url(
+        anchor.get("href"),
+        base_url,
+    )
+
+    if not href:
+        return False
+
+    if urlparse(href).scheme not in {"http", "https"}:
+        return False
+
+    return not anchor_has_visible_html_content(anchor)
+
+
+def source_hidden_reasons(node):
+    """
+    Return source-level hiding reasons found directly on one HTML element.
+
+    This intentionally uses fetched HTML attributes and inline styles only.
+    It does not depend on browser rendering.
+    """
+    reasons = []
+
+    if node is None or not getattr(node, "attrs", None):
+        return reasons
+
+    if node.has_attr("hidden"):
+        reasons.append("hidden attribute")
+
+    if node.has_attr("inert"):
+        reasons.append("inert attribute")
+
+    style = str(node.get("style") or "").lower()
+    style_compact = re.sub(r"\s+", "", style)
+
+    if "display:none" in style_compact:
+        reasons.append("display none")
+
+    if (
+        "visibility:hidden" in style_compact
+        or "visibility:collapse" in style_compact
+    ):
+        reasons.append("visibility hidden")
+
+    if re.search(r"opacity\s*:\s*0(?:[;}]|$)", style, flags=re.I):
+        reasons.append("opacity zero")
+
+    if re.search(r"font-size\s*:\s*0(?:px|em|rem|%|;|$)", style, flags=re.I):
+        reasons.append("font size zero")
+
+    width_zero = bool(
+        re.search(r"(?:^|;)\s*width\s*:\s*0(?:px|em|rem|%|;|$)", style, flags=re.I)
+    )
+    height_zero = bool(
+        re.search(r"(?:^|;)\s*height\s*:\s*0(?:px|em|rem|%|;|$)", style, flags=re.I)
+    )
+    if width_zero or height_zero:
+        reasons.append("zero dimensions")
+
+    if (
+        re.search(r"(?:left|right|top|bottom)\s*:\s*-\d{3,}(?:px|em|rem)", style, flags=re.I)
+        or re.search(r"text-indent\s*:\s*-\d{3,}(?:px|em|rem)", style, flags=re.I)
+    ):
+        reasons.append("offscreen positioning")
+
+    if (
+        "clip:rect(0,0,0,0)" in style_compact
+        or "clip-path:inset(50%)" in style_compact
+    ):
+        reasons.append("clipped")
+
+    if "content-visibility:hidden" in style_compact:
+        reasons.append("content visibility hidden")
+
+    if (
+        "transform:scale(0)" in style_compact
+        or "transform:scalex(0)" in style_compact
+        or "transform:scaley(0)" in style_compact
+    ):
+        reasons.append("scale zero")
+
+    return reasons
+
+def hidden_ancestor_info(anchor):
+    """
+    Walk the actual fetched-HTML ancestry for an anchor.
+
+    Returns:
+      (hidden_element, reasons)
+
+    hidden_element is the first anchor/ancestor that contains a supported
+    source-level hiding signal.
+    """
+    node = anchor
+
+    while node is not None:
+        reasons = source_hidden_reasons(node)
+
+        if reasons:
+            return node, reasons
+
+        # Stop once we leave the document tree.
+        node = getattr(node, "parent", None)
+
+    return None, []
+
+
+def is_same_page_link(url, base_url):
+    """
+    Treat links back to the current article as self-links and ignore them
+    in Hidden Links.
+
+    Fragments and query strings do not make the same article a different
+    destination for this rule.
+
+    Examples ignored:
+      #respond
+      current-article-url
+      current-article-url#comments
+      current-article-url?replytocom=123
+    """
+    try:
+        target = urlparse(url)
+        base = urlparse(base_url)
+
+        target_host = target.netloc.lower().replace("www.", "")
+        base_host = base.netloc.lower().replace("www.", "")
+
+        target_path = re.sub(r"/+$", "", target.path or "/")
+        base_path = re.sub(r"/+$", "", base.path or "/")
+
+        if not target_path:
+            target_path = "/"
+        if not base_path:
+            base_path = "/"
+
+        return (
+            target_host == base_host
+            and target_path == base_path
+        )
+    except Exception:
+        return False
+
+def static_hidden_link_details(soup, base_url):
+    """
+    Detect hidden/effectively invisible links directly from fetched HTML.
+
+    IMPORTANT:
+    Each actual <a href> element is counted separately.
+
+    Four empty anchors pointing to the same URL = four hidden-link instances.
+
+    A single anchor may have more than one issue, e.g.
+    "Empty anchor, Hidden HTML link", but it is still counted as one HTML
+    link instance.
+    """
+    details = []
+
+    for occurrence_index, anchor in enumerate(
+        soup.find_all("a", href=True),
+        start=1,
+    ):
+        href = normalized_link_url(
+            anchor.get("href"),
+            base_url,
+        )
+
+        if not href:
+            continue
+
+        # Ignore links back to the current article, including fragments.
+        if is_same_page_link(href, base_url):
+            continue
+
+        anchor_text = re.sub(
+            r"\s+",
+            " ",
+            anchor.get_text(" ", strip=True),
+        ).strip()
+
+        anchor_html = re.sub(
+            r"\s+",
+            " ",
+            str(anchor),
+        ).strip()
+
+        issues = []
+        reasons = []
+        hidden_element = None
+
+        # Case 1: empty <a href="..."></a>
+        if is_empty_href_anchor(anchor, base_url):
+            issues.append("Empty anchor")
+            reasons.append("no visible text or media inside the anchor")
+
+        # Case 2: anchor or ancestor hidden by source-level HTML/CSS
+        detected_hidden_element, hidden_reasons = hidden_ancestor_info(anchor)
+
+        if detected_hidden_element is not None:
+            hidden_element = detected_hidden_element
+            issues.append("Hidden HTML link")
+            reasons.extend(hidden_reasons)
+
+        if not issues:
+            continue
+
+        context = nearest_editorial_context(anchor)
+
+        details.append({
+            "occurrence": occurrence_index,
+            "url": href,
+            "anchor_text": anchor_text or "(empty)",
+            "hidden_element": element_label(hidden_element or anchor),
+            "hidden_because": ", ".join(reasons),
+            "status": FAIL,
+            "source": "Fetched HTML source",
+            "anchor_html": anchor_html[:500],
+            "context": context,
+            "issue_type": ", ".join(issues),
+        })
+
+    return details
+
+def hidden_link_details(soup, base_url):
+    """
+    Hidden Links uses fetched HTML source only.
+
+    A link is reported only when an actual <a href> exists in the fetched
+    HTML and that anchor or one of its HTML ancestors contains a supported
+    source-level hiding signal.
+
+    Rendered browser state is intentionally NOT used for this rule.
+    """
+    details = static_hidden_link_details(
+        soup,
+        base_url,
+    )
+
+    return details, {
+        "available": True,
+        "source": "Fetched HTML source only",
+        "error": "",
+    }
+
+def classify_hidden_text_static(node):
+    reasons = hidden_reasons(node)
+    context = _token_string(
+        element_label(node),
+        node.get("aria-label"),
+        node.get("role"),
+        node.get("data-state"),
+    )
+    known_reason = known_ui_reason_from_text(context)
+
+    if known_reason:
+        return PASS, known_reason, f"The hidden text belongs to a recognised {known_reason.lower()} pattern."
+
+    if node.name == "details" and not node.has_attr("open"):
+        return PASS, "Native disclosure control", "The text is inside a closed details element."
+
+    if node.has_attr("inert"):
+        return PASS, "Inactive interface region", "The text is inside an inert inactive interface region."
+
+    if str(node.get("hidden") or "").lower() == "until-found":
+        return PASS, "Hidden until found", "The text uses the browser hidden until found state."
+
+    if any(r in SUSPICIOUS_HIDE_REASONS for r in reasons):
+        return FAIL, "Unexplained concealed text", "The text uses a strongly concealed method and no legitimate interface reason was detected."
+
+    return REVIEW, "Unconfirmed hidden interface text", "The text is hidden, but the system could not determine a recognised interface or accessibility purpose."
+
+def hidden_text_details(soup):
+    """
+    Static text reason classification. We intentionally avoid counting every
+    nested descendant as a separate issue by keeping only top level hidden
+    blocks with substantial text.
+    """
+    items = []
+    seen_text = set()
+
+    for node in soup.find_all(True):
+        if not obvious_hidden(node):
+            continue
+
+        text_value = re.sub(r"\s+", " ", node.get_text(" ", strip=True))
+        if len(text_value) < 40:
+            continue
+
+        # Skip nested hidden elements when their parent is already hidden.
+        parent = node.parent
+        if parent is not None and getattr(parent, "name", None) and obvious_hidden(parent):
+            continue
+
+        normalized = text_value.lower()[:500]
+        if normalized in seen_text:
+            continue
+        seen_text.add(normalized)
+
+        status, purpose, explanation = classify_hidden_text_static(node)
+        items.append({
+            "text": text_value[:240],
+            "hidden_element": element_label(node),
+            "hidden_because": ", ".join(hidden_reasons(node)) or "hidden element rule matched",
+            "purpose": purpose,
+            "status": status,
+            "explanation": explanation,
+        })
+
+    return items
+
+def unique_http_urls(urls):
+    return list(dict.fromkeys(
+        u for u in urls
+        if isinstance(u, str) and u.startswith(("http://", "https://"))
+    ))
+
+@lru_cache(maxsize=4096)
+def _probe_http_url_cached(url, timeout, _bucket):
+    started = time.time()
+    result_data = {
+        "url": url,
+        "status": None,
+        "final_url": url,
+        "error": "",
+        "elapsed": 0.0,
+    }
+
+    try:
+        response = requests.head(
+            url,
+            headers=UA_DESKTOP,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+
+        # Some sites do not support HEAD correctly. Use a lightweight GET fallback.
+        if response.status_code in {400, 403, 405, 406, 429}:
+            response = requests.get(
+                url,
+                headers=UA_DESKTOP,
+                timeout=timeout,
+                allow_redirects=True,
+                stream=True,
+            )
+            response.close()
+
+        result_data["status"] = response.status_code
+        result_data["final_url"] = response.url
+    except Exception as exc:
+        result_data["error"] = str(exc)
+
+    result_data["elapsed"] = time.time() - started
+    return result_data
+
+def probe_http_url(url, timeout=LINK_CHECK_TIMEOUT):
+    # Network validation refreshes every 10 minutes.
+    return _probe_http_url_cached(url, timeout, cache_bucket(600))
+
+def validate_url_set(urls, timeout=LINK_CHECK_TIMEOUT, workers=LINK_CHECK_WORKERS):
+    urls = unique_http_urls(urls)
+    if not urls:
+        return {
+            "checked": [],
+            "working": [],
+            "redirected": [],
+            "broken": [],
+            "restricted": [],
+            "server_errors": [],
+            "unreachable": [],
+        }
+
+    checked = []
+    with ThreadPoolExecutor(max_workers=min(workers, len(urls))) as executor:
+        futures = {
+            executor.submit(probe_http_url, url, timeout): url
+            for url in urls
+        }
+        for future in as_completed(futures):
+            checked.append(future.result())
+
+    working = []
+    redirected = []
+    broken = []
+    restricted = []
+    server_errors = []
+    unreachable = []
+
+    for item in checked:
+        status = item.get("status")
+        if status is None:
+            unreachable.append(item)
+        elif 200 <= status < 300:
+            working.append(item)
+            if item.get("final_url") and item["final_url"] != item["url"]:
+                redirected.append(item)
+        elif status in {401, 403, 429}:
+            restricted.append(item)
+        elif status in {404, 410} or 400 <= status < 500:
+            broken.append(item)
+        elif status >= 500:
+            server_errors.append(item)
+
+    return {
+        "checked": checked,
+        "working": working,
+        "redirected": redirected,
+        "broken": broken,
+        "restricted": restricted,
+        "server_errors": server_errors,
+        "unreachable": unreachable,
+    }
+
+
+def normalized_link_url(value, base_url=""):
+    if not value:
+        return ""
+    resolved = urljoin(base_url, value) if base_url else value
+    parsed = urlparse(resolved)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    # Fragments do not change the fetched document and should not create
+    # duplicate link validation requests.
+    return parsed._replace(fragment="").geturl()
+
+
+SPAMMY_ANCHOR_TERMS = {
+    "click here", "read more", "learn more", "more", "here",
+    "buy now", "cheap", "best price", "free money",
+    "casino", "betting", "viagra", "cialis", "loan",
+    "اضغط هنا", "اقرأ المزيد", "المزيد",
 }
 
-body.rtl .mobile_menu_opened .new-link > a::before {
-	top: 16px;
-	left: 20px;
+BODY_LINK_EXCLUDE_PATTERNS = [
+    "share", "sharing", "social", "facebook", "twitter", "linkedin",
+    "whatsapp", "pinterest", "google-news", "google_source",
+    "banner", "advert", "ad-", "promo", "promotion",
+    "property-card", "listing-card", "property-listing", "listing",
+    "recommended", "related", "widget", "sidebar",
+    "agent", "broker-card", "find-agent", "find_an_agent",
+    "cta", "button", "btn", "carousel", "slider",
+    "author", "comment", "newsletter", "subscribe",
+]
+
+BODY_LINK_EXCLUDE_HREF_PATTERNS = [
+    "facebook.com/share",
+    "twitter.com/intent",
+    "linkedin.com/cws/share",
+    "linkedin.com/share",
+    "google.com/preferences/source",
+    "/brokers/?utm_source=organic",
+    "/property/details-",
+]
+
+def body_link_has_excluded_container(anchor):
+    """
+    Exclude links that visually live inside non-editorial modules even when
+    those modules are nested inside the article content container.
+    """
+    node = anchor
+
+    while node is not None:
+        if getattr(node, "name", None) in {
+            "nav", "aside", "footer", "form", "button",
+        }:
+            return True
+
+        attrs = " ".join([
+            str(node.get("id") or ""),
+            " ".join(node.get("class") or []),
+            str(node.get("role") or ""),
+        ]).casefold()
+
+        if any(pattern in attrs for pattern in BODY_LINK_EXCLUDE_PATTERNS):
+            return True
+
+        node = getattr(node, "parent", None)
+
+    return False
+
+def is_inline_editorial_anchor(anchor):
+    """
+    A body link must be an actual text hyperlink inside editorial copy.
+
+    Accepted parent content:
+    paragraph, list item or table text.
+
+    Excluded:
+    image links, cards, banners, buttons, social sharing, agent CTA,
+    property listing modules and other widgets.
+    """
+    if body_link_has_excluded_container(anchor):
+        return False
+
+    if anchor.find("img") is not None:
+        return False
+
+    # Must live inside actual editorial text, not only inside a generic div.
+    textual_parent = anchor.find_parent(["p", "li", "td", "th"])
+    if textual_parent is None:
+        return False
+
+    anchor_text = re.sub(
+        r"\s+",
+        " ",
+        anchor.get_text(" ", strip=True),
+    ).strip()
+
+    if not anchor_text:
+        return False
+
+    href = str(anchor.get("href") or "").casefold()
+    if any(pattern in href for pattern in BODY_LINK_EXCLUDE_HREF_PATTERNS):
+        return False
+
+    return True
+
+def content_internal_link_inventory(article_soup, base_url):
+    """
+    Inspect only real inline editorial hyperlinks inside the article copy.
+
+    Not included:
+    banners, property cards, Find An Agent CTA, social share links,
+    image links, broker modules, widgets, related content and other
+    non-editorial elements that happen to sit inside the article container.
+    """
+    base_host = urlparse(base_url).netloc.lower().replace("www.", "")
+    base_identity = normalized_destination(base_url)
+    inventory = []
+
+    for anchor in article_soup.find_all("a", href=True):
+        if not is_inline_editorial_anchor(anchor):
+            continue
+
+        href = normalized_link_url(anchor.get("href"), base_url)
+        if not href:
+            continue
+
+        # Self links are not useful editorial internal-link candidates.
+        if normalized_destination(href) == base_identity:
+            continue
+
+        parsed = urlparse(href)
+        host = parsed.netloc.lower().replace("www.", "")
+        is_internal = host == base_host
+
+        anchor_text = re.sub(
+            r"\s+",
+            " ",
+            anchor.get_text(" ", strip=True),
+        ).strip()
+
+        low_anchor = anchor_text.casefold()
+        anchor_words = tokenize(anchor_text)
+
+        generic_anchor = low_anchor in SPAMMY_ANCHOR_TERMS
+
+        suspicious_anchor = (
+            generic_anchor
+            or len(anchor_text) > 180
+            or (
+                len(anchor_words) >= 7
+                and repeated_phrase_signal(anchor_text)
+            )
+        )
+
+        slug_text = " ".join(
+            token
+            for token in re.findall(
+                r"[a-zA-Z0-9]+",
+                parsed.path.replace("-", " "),
+            )
+            if len(token) > 2
+        )
+
+        if anchor_text and slug_text:
+            anchor_slug_overlap = max(
+                keyword_overlap(anchor_text, slug_text),
+                semantic_overlap(anchor_text, slug_text),
+            )
+        else:
+            anchor_slug_overlap = 0.0
+
+        inventory.append({
+            "url": href,
+            "anchor_text": anchor_text,
+            "is_internal": is_internal,
+            "empty_anchor": False,
+            "generic_anchor": generic_anchor,
+            "suspicious_anchor": suspicious_anchor,
+            "anchor_slug_overlap": anchor_slug_overlap,
+        })
+
+    unique = []
+    seen = set()
+
+    for item in inventory:
+        key = (
+            item["url"],
+            item["anchor_text"].casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    return unique
+
+def repeated_phrase_signal(text):
+    tokens = [t for t in tokenize(text) if len(t) > 2]
+    if len(tokens) < 6:
+        return False
+    counts = Counter(tokens)
+    return max(counts.values(), default=0) >= 3
+
+def content_internal_link_urls(article_soup, base_url):
+    return unique_http_urls([
+        item["url"]
+        for item in content_internal_link_inventory(article_soup, base_url)
+        if item.get("is_internal")
+    ])
+
+def internal_link_issues(inventory, validation):
+    """
+    Return only actionable issues for inline editorial body links.
+
+    Automated HTTP 401, 403 and 429 responses are ignored because they can
+    reflect bot restrictions rather than a broken user-facing destination.
+    """
+    validation_by_url = {
+        item.get("url"): item
+        for item in validation.get("checked", [])
+    }
+
+    issues = []
+
+    for item in inventory:
+        reasons = []
+
+        if not item.get("is_internal"):
+            reasons.append("External link")
+        else:
+            checked = validation_by_url.get(item["url"])
+
+            if checked:
+                status = checked.get("status")
+
+                if status in {404, 410}:
+                    reasons.append(f"Broken link HTTP {status}")
+                elif status is not None and status >= 500:
+                    reasons.append(f"Server error HTTP {status}")
+                elif status is None:
+                    reasons.append("Link could not be reached")
+
+                # 401 / 403 / 429 are intentionally not treated as broken.
+
+        if item["generic_anchor"]:
+            reasons.append("Generic anchor text")
+        elif item["suspicious_anchor"]:
+            reasons.append("Spammy or over optimised anchor text")
+
+        if (
+            item["anchor_text"]
+            and len(tokenize(item["anchor_text"])) >= 2
+            and item["anchor_slug_overlap"] < 0.12
+        ):
+            reasons.append("Anchor text may not match the linked page")
+
+        if reasons:
+            issues.append({
+                "url": item["url"],
+                "anchor_text": item["anchor_text"],
+                "reasons": reasons,
+            })
+
+    return issues
+
+def internal_link_issue_text(issues, limit=20):
+    if not issues:
+        return "No internal linking issues found inside the article body."
+
+    lines = []
+
+    for item in issues[:limit]:
+        lines.append(
+            f'{item["url"]} | Anchor: "{item["anchor_text"]}" | '
+            f'Issue: {", ".join(item["reasons"])}'
+        )
+
+    if len(issues) > limit:
+        lines.append(
+            f"{len(issues) - limit} additional issue(s) not shown."
+        )
+
+    return "\n".join(lines)
+
+def extract_page_links(soup, base_url):
+    parsed = urlparse(base_url)
+    host = parsed.netloc.lower().replace("www.", "")
+    internal = []
+    external = []
+
+    for anchor in soup.find_all("a", href=True):
+        href = normalized_link_url(anchor.get("href"), base_url)
+        if not href:
+            continue
+
+        target_host = urlparse(href).netloc.lower().replace("www.", "")
+        if target_host == host:
+            internal.append(href)
+        else:
+            external.append(href)
+
+    return unique_http_urls(internal), unique_http_urls(external)
+
+
+def image_source_url(node, base_url):
+    candidates = [
+        node.get("src"),
+        node.get("data-src"),
+        node.get("data-lazy-src"),
+        node.get("data-original"),
+    ]
+    srcset = node.get("srcset") or node.get("data-srcset")
+    if srcset:
+        first = srcset.split(",")[0].strip().split(" ")[0]
+        candidates.append(first)
+
+    for value in candidates:
+        if not value or str(value).startswith("data:"):
+            continue
+        resolved = normalized_link_url(str(value), base_url)
+        if resolved:
+            return resolved
+    return ""
+
+def extract_resource_urls(soup, base_url):
+    """
+    Extract only resources that materially participate in page rendering.
+    """
+    urls = []
+
+    for node in soup.find_all("script", src=True):
+        resolved = normalized_link_url(node.get("src"), base_url)
+        if resolved:
+            urls.append(resolved)
+
+    for node in soup.find_all("img"):
+        resolved = image_source_url(node, base_url)
+        if resolved:
+            urls.append(resolved)
+
+    for node in soup.find_all("source"):
+        value = node.get("src")
+        if not value and node.get("srcset"):
+            value = node.get("srcset").split(",")[0].strip().split(" ")[0]
+        resolved = normalized_link_url(value, base_url) if value else ""
+        if resolved:
+            urls.append(resolved)
+
+    for node in soup.find_all("link", href=True):
+        rel = {str(x).lower() for x in (node.get("rel") or [])}
+        as_value = (node.get("as") or "").lower()
+
+        is_stylesheet = "stylesheet" in rel
+        is_preload_resource = (
+            "preload" in rel
+            and as_value in {"style", "script", "font", "image"}
+        )
+
+        if not (is_stylesheet or is_preload_resource):
+            continue
+
+        resolved = normalized_link_url(node.get("href"), base_url)
+        if resolved:
+            urls.append(resolved)
+
+    filtered = []
+    for url in unique_http_urls(urls):
+        low = url.lower()
+        if any(fragment in low for fragment in [
+            "/xmlrpc.php",
+            "/wp-json/",
+            "/oembed/",
+            "api.w.org",
+        ]):
+            continue
+        filtered.append(url)
+
+    return filtered
+
+
+SOCIAL_DOMAINS = {
+    "facebook.com", "m.facebook.com",
+    "instagram.com",
+    "linkedin.com",
+    "twitter.com",
+    "x.com",
+    "tiktok.com",
+    "pinterest.com",
+    "youtube.com",
+    "whatsapp.com", "wa.me",
+    "threads.net",
 }
 
-html[dir="rtl"] .subscription-full-form .newsletter ul.interest {
-	display: flex;
-	flex-wrap: wrap;
-}		</style>
-		</head>
-
-<body class="post-template-default single single-post postid-47854 single-format-standard logged-in admin-bar no-customize-support topic-market-trends body-class-market-trends text_posts_unbordered no_sitetitle_in_menu show_menu_circle_idicator sliding_sidebar_inactive">
-<div id="page" class="site">
-	<div class="site_main_container">
-
-		<header class="site_header">
-
-			
-			<div class="header_nav_wrapper">
-				<div class="header_nav">
-					<!-- Bayut Top Navigation Start -->
-					<div class="bayut_top_nav">
-						<div class="container">
-														<div class="bayut_logo"><a href="https://www.bayut.com/" rel="bayut">Bayut</a></div>
-							<div class="menu-bayut-property-menu-container"><ul id="menu-bayut-property-menu" class="menu"><li id="menu-item-747434" class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-747434"><a href="#">Guides</a>
-<ul class="sub-menu">
-	<li id="menu-item-747435" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-747435"><a href="https://www.bayut.com/area-guides/">Area Guides</a></li>
-	<li id="menu-item-747436" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-747436"><a href="https://www.bayut.com/buildings/">Building Guides</a></li>
-	<li id="menu-item-747437" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-747437"><a href="https://www.bayut.com/schools/">School Guides</a></li>
-</ul>
-</li>
-<li id="menu-item-816593" class="property-dropdown new-link menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-816593"><a href="#">Market Intelligence</a>
-<ul class="sub-menu">
-	<li id="menu-item-816594" class="tru-estimate-link menu-item menu-item-type-custom menu-item-object-custom menu-item-816594"><a target="_blank" rel="noopener noreferrer" href="https://www.bayut.com/property-market-analysis/tru-estimate/">Tru<strong>Estimate</strong>™</a></li>
-	<li id="menu-item-816595" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-816595"><a target="_blank" rel="noopener noreferrer" href="https://www.bayut.com/property-market-analysis/transactions/sale/property/">Dubai Transactions</a></li>
-	<li id="menu-item-816596" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-816596"><a href="https://www.bayut.com/floorplans/">Floor Plans</a></li>
-</ul>
-</li>
-</ul></div>							<div class="brand"><a href="https://www.bayut.com/mybayut/" rel="home">blog</a></div>
-							<div class="menu-bayut-product-menu-container"><ul id="menu-bayut-product-menu" class="menu"><li id="menu-item-100424" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-100424"><a href="https://www.bayut.com/new-projects/uae/">New Projects</a></li>
-<li id="menu-item-100425" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-100425"><a href="https://www.bayut.com/brokers/">Find my Agent</a></li>
-<li id="menu-item-747440" class="get-in-touch-modal menu-item menu-item-type-custom menu-item-object-custom menu-item-747440"><a href="#">Get in Touch</a></li>
-<li id="menu-item-100426-ar" class="lang-item lang-item-8187 lang-item-ar lang-item-first menu-item menu-item-type-custom menu-item-object-custom menu-item-100426-ar"><a href="https://www.bayut.com/mybayut/ar/%D8%B4%D9%82%D9%82-%D9%84%D9%84%D8%A7%D9%8A%D8%AC%D8%A7%D8%B1-%D9%82%D8%B1%D8%A8-%D9%85%D8%AA%D8%B1%D9%88-%D8%AF%D8%A8%D9%8A-%D8%A8%D8%B3%D8%B9%D8%B1-%D9%85%D9%86%D8%AE%D9%81%D8%B6/" hreflang="ar" lang="ar">العربية</a></li>
-</ul></div>						</div>
-						
-					</div>
-					<!-- Bayut Top Navigation End -->
-					<div class="container">
-						
-
-						<!-- Place header control before main menu if site title is enabled -->
-						
-
-													<div class="main_menu">
-								<ul id="top-menu" class="navbar"><li id="menu-item-11952" class="tips-menu menu-item menu-item-type-custom menu-item-object-custom menu-item-11952 default_menu"><a href="/mybayut/tips/">Tips</a></li>
-<li id="menu-item-11953" class="pulse-menu menu-item menu-item-type-custom menu-item-object-custom menu-item-11953 default_menu"><a href="/mybayut/pulse/">Pulse</a></li>
-<li id="menu-item-11993" class="my-home-menu menu-item menu-item-type-custom menu-item-object-custom menu-item-11993 default_menu"><a href="/mybayut/my-home/">My Home</a></li>
-<li id="menu-item-61607" class="genz-menu menu-item menu-item-type-taxonomy menu-item-object-category menu-item-61607 default_menu"><a href="https://www.bayut.com/mybayut/gen-z/">Gen Z</a></li>
-<li id="menu-item-61606" class="rules-menu menu-item menu-item-type-taxonomy menu-item-object-category menu-item-61606 default_menu"><a href="https://www.bayut.com/mybayut/rules-regulations/">Laws</a></li>
-<li id="menu-item-11954" class="market-trends-menu menu-item menu-item-type-custom menu-item-object-custom menu-item-11954 default_menu"><a href="/mybayut/market-trends/">Market Trends</a></li>
-<li id="menu-item-61608" class="partners-menu menu-item menu-item-type-taxonomy menu-item-object-category menu-item-61608 default_menu"><a href="https://www.bayut.com/mybayut/our-partners/">Partners</a></li>
-<li id="menu-item-12598" class="bayut-after-hours-menu menu-item menu-item-type-taxonomy menu-item-object-category menu-item-12598 default_menu"><a href="https://www.bayut.com/mybayut/bayut-after-hours/">Life at Bayut</a></li>
-</ul>								<span class="menu_mark_circle hidden_mark_circle"></span>
-							</div>
-						
-						<!-- Place header control after main menu if site title is enabled -->
-													<div class="header_controls">
-
-								<!-- start search box -->
-								<div class="header_search header_control_wrapper">
-										<form class="search clearfix animated searchHelperFade" method="get" id="searchform" action="https://www.bayut.com/mybayut/">
-	<input class="col-md-12 search_text" id="appendedInputButton" placeholder="Hit enter to search" type="text" name="s" autocomplete="off">
-	<div class="search_form_icon">
-		<i class="fa fa-search header_control_icon"></i>
-		<input type="hidden" name="post_type" value="post" />
-		<input type="submit" class="search_submit" id="searchsubmit" value="" />
-	</div>
-</form>
-								</div>
-								<!-- end search box -->
-																	<a href="https://www.bayut.com/mybayut/" class="header_control_wrapper blog-link">blog</a>
-								
-																<div class="header_sliding_sidebar_control header_control_wrapper">
-									<a id="user_control_icon" class="sliding_sidebar_button" href="#">
-										<i class="fas fa fa-bars header_control_icon"></i>
-									</a>
-								</div>
-								
-							</div>
-						
-					</div><!-- end .container -->
-					
-					<div class="weather-date-widget">
-                    <div class="container">
-                        <div class="location">Dubai, UAE</div>
-                        <div class="weather weather-en"></div>
-                        <div class="time"></div>
-                        <div class="date date-en"></div>
-                    </div>
-            </div>				</div><!-- end .header_nav -->
-			</div><!-- end .header_nav_wrapper -->
-		</header>
-
-		<main id="content" class="site-content">
-<section id="primary" class="container main_content_area">
-    <!-- open row and col in case of sidebar layout -->
-    
-                    <div class="row post_width_sidebar_row post-category-market-trends">
-            <div class="col12 featured-single-post">
-                                            <figure class="post_banner">
-
-                                                                <img width="1440" height="625" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2.jpg" class="attachment-full size-full wp-post-image" alt="Rent apartments near metro stations" srcset="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2.jpg 1440w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2-300x130.jpg 300w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2-1024x444.jpg 1024w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2-768x333.jpg 768w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2-1170x508.jpg 1170w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-C-2-880x382.jpg 880w" sizes="(min-width: 1035px) 375w, 70vw" />                                                        </figure>
-                                            
-                        <div class="single_post_body overlay has_post_banner">
-                            
-                                                                    <div class="post_meta_container clearfix market-trends">
-                                            <div class="post_meta_info post_meta_row clearfix"><span class="post_meta_item meta_item_category"><a href="https://www.bayut.com/mybayut/market-trends/" rel="category tag">Market Trends</a><div class="article-rating 47854"><div class="likes rated"><div class="icon"></div><div class="number"></div></div><div class="seperater">|</div><div class="dislikes rated"><div class="icon"></div><div class="number"></div></div></div></span></div>                                    </div>
-                                                                
-                            </div>
-
-                                        </div>
-                <div class="col8 sidebar_post_content_col">
-                				 <!-- end check for post layout -->
-                                <div class="row full_width_post_single sidebar_post_single">
-
-                    <div class="col12">
-                        <div class="post_header post_header_single">
-                            <h1 class="entry-title title post_title">Affordable areas to rent apartments near the Dubai Metro</h1>                        </div>
-                        
-                        <div class="post_meta_wrap">
-                            <div class="blog-reading-time">7 min read</div>
-                                                                <svg xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 512 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z"/></svg>
-                                    <div class="publishing-date">Published: 24 Nov, 2025</div>                                <svg xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 512 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z"/></svg>
-                                <div class="article-rating 47854">                        <div class="likes" onclick="article_rating('like',47854, 'article', 'top', 'en', 'Market Trends')">
-                        <div class="icon"></div><div class="number"></div></div><div class="seperater">|</div>                            <div class="dislikes" onclick="article_rating('dislike',47854, 'article', 'top', 'en', 'Market Trends')">
-                            <div class="icon"></div><div class="number"></div></div></div>                        </div>
-                        
-                            <article id="post-47854" class="blog_post_container customhentry post-47854 post type-post status-publish format-standard has-post-thumbnail hentry category-market-trends tag-affordable-apartments-in-dubai tag-apartments-for-rent-in-dubai tag-dubai tag-dubai-metro tag-dubai-real-estate-2 tag-flats-near-dubai-metro tag-market-trends tag-renting-in-dubai bayut_topics-apartment bayut_topics-property bayut_topics-renting-property mybayut-article-heatmap-clarity persona-dubai persona-market-trends persona-rta">
-
-                                
-                                <div class="post_body has_post_banner">
-                                    
-                                    <div class="post_info_wrapper">
-                                        <div class="entry-content blog_post_text blog_post_description clearfix">
-<ul><li><a href="#Which-are-the-most-popular-areas-to-rent-apartments-near-the-Dubai-metro">Rent Apartments near Dubai Metro</a></li><li><a href="#FAQS">FAQs</a></li></ul>
-
-
-
-<p>Living close to reliable transport makes daily life far easier in a fast-paced city like Dubai. The metro has been a solid choice since 2009 for residents who prefer not to drive or want to skip the traffic rush. Rents can be higher around stations, yet there are areas with apartments for rent near the Dubai Metro that remain surprisingly affordable. Here’s a quick look at neighbourhoods where you can find budget-friendly flats without losing the convenience of metro access.</p>
-
-
-
-<h2 id="Which-are-the-most-popular-areas-to-rent-apartments-near-the-Dubai-metro"><strong>List of Affordable Areas with Apartments to Rent Near the Dubai Metro</strong></h2>
-
-
-
-<p>Searching for affordable apartments for rent near the Dubai Metro? The following list can help kickstart your research!</p>
-
-
-
-<h3><strong>Bur Dubai</strong></h3>
-
-
-
-<p>If you want to rent in affordable areas to live in Dubai near the metro, Bur Dubai is one of the top choices. Burjuman Metro Station, near the popular BurJuman Mall, is one of the busiest in the <a rel="noreferrer noopener" href="https://www.bayut.com/mybayut/dubai-metro-timings-cost-stations/" target="_blank">Dubai Metro</a> network as it connects the Red and Green lines. Besides this station, Sharaf DG on the Green Line is another popular option in <a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/bur-dubai/" target="_blank">Bur Dubai</a>.</p>
-
-
-
-<p>Want to <a href="https://www.bayut.com/to-rent/apartments/dubai/bur-dubai/" target="_blank" rel="noreferrer noopener">rent an apartment in Bur Dubai</a>? Here are your options:</p>
-
-
-
-<ul><li>Rental studios in Bur Dubai are available for AED 43k.</li><li>1-bedroom flats on average cost AED 82k and larger 2-bedroom apartments average at AED 116k. </li><li>If you are looking for a 3-bed flat, the average rent goes up to AED 148k.</li></ul>
-
-
-
-<figure class="wp-block-image alignnone size-large"><a href="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai.jpg"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai-1024x640.jpg" alt="Apartments near Burjuman metro station" class="wp-image-48015" srcset="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai-1024x640.jpg 1024w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai-300x188.jpg 300w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai-270x169.jpg 270w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai-24x15.jpg 24w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai-36x23.jpg 36w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai-48x30.jpg 48w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Bur-Dubai.jpg 1440w" sizes="(min-width: 768px) 60vw, (min-width: 375px) 30vw" /></a><figcaption><em>Looking to rent apartments near the Dubai metro at affordable prices? Consider Bur Dubai</em></figcaption></figure>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/bur-dubai/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/bur-dubai/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Bur Dubai                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Zohaib Nadeem">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/759894499/c7340aee4c4249d1ba05bfadc2f23c4b" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Zohaib Nadeem                                    </div>
-
-                                    <div class="location">
-                                        T A N Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Ali Nawaz">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/435243014/58cf1c8fc4f24c0fba77198dc28746d5" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Ali Nawaz                                    </div>
-
-                                    <div class="location">
-                                        T A N Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Rauf Sattar">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/757297896/6642203201f34389a37b958fdfd5f03b" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Rauf Sattar                                    </div>
-
-                                    <div class="location">
-                                        T A N Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Muhammad Naeem Zafar">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/229612399/a40e9ef3da3f42ab82787721bf6fb92e" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Muhammad Naeem Zafar                                    </div>
-
-                                    <div class="location">
-                                        Royal Jubilant Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Muhammad Javed">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/229612396/d935769a70ff499bbe3d9e0eca8d8d72" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Muhammad Javed                                    </div>
-
-                                    <div class="location">
-                                        Royal Jubilant Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h3><strong>Deira</strong></h3>
-
-
-
-<p><a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/deira/" target="_blank">Deira </a>is one of the best areas to rent apartments near the Dubai Metro at an affordable price. It is well connected to many metro stations in Dubai, including Union, which is an interchange station between the red and green lines. Other popular stations near the <a href="https://www.bayut.com/to-rent/apartments/dubai/deira/" target="_blank" rel="noreferrer noopener">rental apartments in Deira</a> include Al Rigga, Abu Hail, Al Qiyada and City Centre Deira Metro Station.</p>
-
-
-
-<ul><li>The average rent for studios in Deira is AED 32k. </li><li>1 BHK units are available for an average rent of AED 61k. </li><li>Spacious 2-bedroom apartments average at AED 125k.</li><li>For 3-bed flats, the average rent stands at AED 159k.</li></ul>
-
-
-
-<figure class="wp-block-image alignnone size-large"><a href="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1.jpg"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1-1024x640.jpg" alt="Apartments near Union metro in Deira" class="wp-image-47982" srcset="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1-1024x640.jpg 1024w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1-300x188.jpg 300w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1-270x169.jpg 270w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1-24x15.jpg 24w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1-36x23.jpg 36w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1-48x30.jpg 48w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/union1.jpg 1440w" sizes="(min-width: 768px) 60vw, (min-width: 375px) 30vw" /></a><figcaption><em>Deira is an ideal location to rent affordable apartments in Dubai</em></figcaption></figure>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/deira/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/deira/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Deira                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Mohammed Nouman">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/805035911/573b11ed8b874dc396015a23c2334e61" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Mohammed Nouman                                    </div>
-
-                                    <div class="location">
-                                        SBK Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Shadaan Farees">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/846317341/1acff63605684d3493440af6e818df83" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Shadaan Farees                                    </div>
-
-                                    <div class="location">
-                                        Abdulwahed Bin Shabib Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Manish Adnani">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/778804036/43e7b844f35646e5aa246aa3f00d04d2" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Manish Adnani                                    </div>
-
-                                    <div class="location">
-                                        Rocky Real Estate - Head Office                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Basith Ali">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/428478912/569b18812a65415f85ce968833bd9fef" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Basith Ali                                    </div>
-
-                                    <div class="location">
-                                        SBK Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Talha Maqbool">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/438645595/8a9b64351e4e456ab7a326cddaec0a6f" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Talha Maqbool                                    </div>
-
-                                    <div class="location">
-                                        Al Koukh Al Sagheer Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h3><strong>Al Furjan</strong></h3>
-
-
-
-<p><a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/al-furjan/" target="_blank">Al Furjan </a>is next on our list of areas with apartments for rent near the Dubai Metro. Residents travel via the Al Furjan Metro Station&nbsp;on <a rel="noreferrer noopener" href="https://www.bayut.com/mybayut/route-2020-dubai-metro-extension/" target="_blank">Route 2020</a>. The gated community is also close to many other metro stations, including Discovery Gardens,&nbsp;Ibn Battuta and&nbsp;Jabal Ali Metro Station.</p>
-
-
-
-<p>If you are interested in <a href="https://www.bayut.com/to-rent/apartments/dubai/al-furjan/" target="_blank" rel="noreferrer noopener">renting an apartment in Al Furjan</a>, these are the bed types available:</p><div class="mobile-grid-newsletter-subscription"><a href="https://google.com/preferences/source?q=https://www.bayut.com/" class="google-preferred-source-btn" title="Google Preferred Source"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/bayut-google-preferred-source-btn-en-05062026.png" alt="Google Preferred Source" /></a></div>
-
-
-
-<ul><li>To rent a studio in Al Furjan, your annual outlay would be AED 50k, on average.</li><li>It jumps to AED 78k and AED 114k for 1 and 2-bed flats.</li><li>Whereas a 3-bed unit is available for AED 165k, on average.</li></ul>
-
-
-
-<figure class="wp-block-image size-large"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-1024x640.jpg" alt="Cars near a metro station" class="wp-image-572550" srcset="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-1024x640.jpg 1024w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-300x188.jpg 300w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-768x480.jpg 768w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023-640x400.jpg 640w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-2023.jpg 1440w" sizes="(min-width: 768px) 60vw, (min-width: 375px) 30vw" /><figcaption><em>Al Furjan is another popular area to search for affordable flats near the Dubai metro</em></figcaption></figure>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/al-furjan/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/al-furjan/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Al Furjan                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Sami Ullah Muhammad Hussain">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/730900002/99bcb0310e534ab9b3dd2cf4ff052f73" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Sami Ullah Muhammad Hussain                                    </div>
-
-                                    <div class="location">
-                                        Highway Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Yasir Saeed">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/762013044/64930d5163cc4d19a51158b39bdcec45" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Yasir Saeed                                    </div>
-
-                                    <div class="location">
-                                        J A S Vision Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Alex Dalton">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/802471314/6c46ec77fddc409081aa77b3328cdc8a" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Alex Dalton                                    </div>
-
-                                    <div class="location">
-                                        Stage Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Joshua Vardy">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/813510394/4e13765a5918455a802f1f1b68107f1e" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Joshua Vardy                                    </div>
-
-                                    <div class="location">
-                                        ENGEL & VÖLKERS Dubai - L2                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Fakhar Farid">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/775616149/ce76523956dc4d6ba3e13db79ec6a71d" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Fakhar Farid                                    </div>
-
-                                    <div class="location">
-                                        Abdulla Alsaffar Real Estate Broker                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h3><strong>Al Nahda</strong></h3>
-
-
-
-<p>Searching for&nbsp;affordable apartments for rent near the Dubai Metro? <a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/al-nahda-dubai/" target="_blank">Al Nahda </a>is one of the most popular areas. Located close to both the Stadium and Al Nahda Metro Station on the Green Line, this area is perfect for those looking for budget-friendly flats near the metro in Dubai. </p>
-
-
-
-<p>Remember that not all <a rel="noopener noreferrer" href="https://www.bayut.com/to-rent/apartments/dubai/al-nahda/" target="_blank">flats for rent in Al Nahda, Dubai</a>, are within walking distance of the metro station. However, you can easily spot buses that connect to these stations, making the area a good choice for those relying on public transportation in Dubai. It&#8217;s also a popular area with families because of its proximity to the <a rel="noopener noreferrer" href="https://www.bayut.com/mybayut/5-best-schools-near-al-nahda/" target="_blank">schools near Al Nahda</a>.</p>
-
-
-
-<ul><li>The average rent for a studio in Al Nahda is AED 47k.</li><li>The average financial outlay for a 1-bedroom flat stands at AED 54k </li><li>The 2-bed units average at AED 72k.</li><li>Similarly, you would have to pay AED 88k on average for a 3-bed flat.</li></ul>
-
-
-
-<figure class="wp-block-image alignnone size-large"><a href="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2.jpg"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2-1024x640.jpg" alt="Affordable apartments near metro stations in Dubai" class="wp-image-47976" srcset="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2-1024x640.jpg 1024w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2-300x188.jpg 300w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2-270x169.jpg 270w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2-24x15.jpg 24w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2-36x23.jpg 36w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2-48x30.jpg 48w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/stadium2.jpg 1440w" sizes="(min-width: 768px) 60vw, (min-width: 375px) 30vw" /></a><figcaption><em>Flats near Dubai metro stations are always in demand</em></figcaption></figure>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/al-nahda-dubai/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/al-nahda-dubai/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Al Nahda (Dubai)                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Abaid Ur Rehman">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/387105184/707543f230fd40ddad2f08e5ee102b48" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Abaid Ur Rehman                                    </div>
-
-                                    <div class="location">
-                                        Pacific Homes Property                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Ahmad Raza Ashraf">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/181849316/ea07ef1a05a7444181eeb2992b7355d3" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Ahmad Raza Ashraf                                    </div>
-
-                                    <div class="location">
-                                        Abdulla Alsaffar Real Estate Broker                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Yasir Ali  Rao">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/756941953/67c89e60cd0b408ab8be7d7b8adaf7d7" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Yasir Ali  Rao                                    </div>
-
-                                    <div class="location">
-                                        Highway Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Irfan Sabir">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/811207008/343cedff7c814fb79ecf4e7cc387b759" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Irfan Sabir                                    </div>
-
-                                    <div class="location">
-                                        Creative Lines Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Kashif Nazir">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/374022478/36aceae73fc44315b29ba76fd5aa166e" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Kashif Nazir                                    </div>
-
-                                    <div class="location">
-                                        Abdulla Alsaffar Real Estate Broker                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h3><strong>Al Barsha</strong></h3>
-
-
-
-<p><a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/al-barsha/" target="_blank">Al Barsha</a> is a top residential area close to the newer parts of Dubai. Its quick access to the InsuranceMarket Metro Station and the Mall of the Emirates Metro Station makes it one of the popular areas to rent flats near <a href="https://www.bayut.com/mybayut/red-line-metro-stations-dubai/" target="_blank" rel="noreferrer noopener">Red Line Metro stations</a>. Al Barsha 1 residents can also use the Dubai Internet City&nbsp;Metro Station.</p>
-
-
-
-<p><a href="https://www.bayut.com/to-rent/apartments/dubai/al-barsha/" target="_blank" rel="noreferrer noopener">Renting an apartment in Al Barsha</a> is convenient for those working on Sheikh Zayed Road, Al Quoz and Barsha Heights. This locality is also popular for its wide collection of&nbsp;affordable apartments for rent near the metro in Dubai.</p>
-
-
-
-<ul><li>The cost of renting studios in Al Barsha is AED 46k.</li><li>You can rent 1-bedroom apartments for AED 75k and 2 BHK units for AED 99k.</li><li>Looking for a more spacious unit? Consider 3-bed flats, which average at AED 143k.</li></ul>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/al-barsha/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/al-barsha/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Al Barsha                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Attaullah Muhammad Raqeeb">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/790215327/a47d208f2e854102bbaf3970e2f8998c" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Attaullah Muhammad Raqeeb                                    </div>
-
-                                    <div class="location">
-                                        Gold Mile Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Shunaid Ahmed Qureshi Anees">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/403216088/9e00707c68084613b8eb4d04b2231dd4" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Shunaid Ahmed Qureshi Anees                                    </div>
-
-                                    <div class="location">
-                                        Gold Mile Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Ali Hayder">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/761603590/c38622fb733240c789c23460596e8cfb" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Ali Hayder                                    </div>
-
-                                    <div class="location">
-                                        Gold Mile Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Muhammad Rehman">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/773440925/c8de430c7edc4f2cbd08455a86e2cb22" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Muhammad Rehman                                    </div>
-
-                                    <div class="location">
-                                        Umer Al Sahab Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Maaz Ali">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/416929288/fd67726defcc431b88e3f5ff9cc04cfa" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Maaz Ali                                    </div>
-
-                                    <div class="location">
-                                        Gold Mile Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h3><strong>Discovery Gardens</strong></h3>
-
-
-
-<p><a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/discovery-gardens/" target="_blank">Discovery Gardens</a> is one of the best areas to live in Dubai near the metro. Home to the Discovery Garden Metro Station, residents can easily commute to other areas of Dubai. Similarly, residents can travel to Ibn Battuta Metro Station via feeder buses.</p>
-
-
-
-<p>Here are the averages for <a href="https://www.bayut.com/to-rent/apartments/dubai/discovery-gardens/" target="_blank" rel="noreferrer noopener">rental flats in Discovery Gardens</a>:</p>
-
-
-
-<ul><li>You find a studio for rent in Discovery Gardens at an average price of AED 48k.</li><li>The average rent rises to AED 70k and AED 106k for 1 and 2-bed flats.</li></ul>
-
-
-
-<figure class="wp-block-image size-large"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-1024x640.jpg" alt="affordable apartments for rent in dubai near the metro" class="wp-image-572527" srcset="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-1024x640.jpg 1024w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-300x188.jpg 300w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-768x480.jpg 768w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-640x400.jpg 640w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March.jpg 1440w" sizes="(min-width: 768px) 60vw, (min-width: 375px) 30vw" /><figcaption><em>Discovery Gardens is another top area to rent apartments near the Dubai metro at reasonable rates</em></figcaption></figure>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/discovery-gardens/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/discovery-gardens/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Discovery Gardens                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Francis Ebyneel Jayasekar">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/763565676/771068af3cd64b498119824b1c524cb4" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Francis Ebyneel Jayasekar                                    </div>
-
-                                    <div class="location">
-                                        Property Concierge Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Danial Raza">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/765675906/8cbe8278dbd24bbab1f1b811ea4c13a3" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Danial Raza                                    </div>
-
-                                    <div class="location">
-                                        Property Concierge Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Mohd Abdul lateef">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/769090319/4ccc57af180842c795a0ccc85e36e230" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Mohd Abdul lateef                                    </div>
-
-                                    <div class="location">
-                                        Creative Solutions Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Daniyal Khan">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/365621379/41e98a08d6f94287aab836c122640e74" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Daniyal Khan                                    </div>
-
-                                    <div class="location">
-                                        One Link Estates Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Salman Qayyum">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/370466868/6d0e1915c8ab4f1f95ac18a9fd008aa3" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Salman Qayyum                                    </div>
-
-                                    <div class="location">
-                                        Taher Bin Naiser Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h3><strong>Al Qusais</strong></h3>
-
-
-
-<p>An extremely popular residential area for those looking at&nbsp;affordable apartments for rent near the metro in Dubai on the green line, <a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/al-qusais/" target="_blank">Al Qusais </a>is ideally located near the <a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/dubai-airport-freezone/" target="_blank">Dubai Airport Free Zone</a> (DAFZA) Metro station and Al Qusais Metro Station.</p><div class="newsletter-mobile-listing-wrapper article-wrap">            <form id="news_letter_form" class="news_letter_form">
-                <div class='newsletter'>
-                    <div class='heading'>Subscribe to</div>
-                    <!--<p></p>-->
-                    <div class="message-container"></div>  
-                                        <input placeholder='Email*' type='email' name='email' id='user_email' value='' required/>
-                                        <input type='hidden' name='style' id='style' value='default'/>
-					<input type='hidden' name='position' id='position' value='article'/>
-                    <input type='hidden' name='name_field_switch' id='name_field_switch' value='false'/>
-					<input type='hidden' name='user_lang' id='user_lang' value='en'/>
-                    <div class="clearfix section-border"></div>
-					<button name="imzee_subscribe_form" id="subscribe_button" onclick="event.preventDefault();
-                            submitSubscribeButton(this)">Subscribe</button>
-                </div>
-            </form>
-            </div><div class="dubai-transations-banner article">                    
-            <div class="banner-wrapper">
-                 <a id="dubai-transations-banner-anchor" href="https://www.bayut.com/brokers/?utm_source=organic&utm_medium=nexus&utm_campaign=Bayut-Website-Banners-English" title="TruBroker™" target="_blank;">                     <div class="mweb-banner">
-                        <img alt="" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/EN_Trubroker-GIF-Mobile@2x.png" />
-                    </div>
-                
-                    <div class="desktop-banner">
-                        <img alt="TruBroker™" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Trubroker-banner-desktop-en-21052025.jpg" />
-                    </div>
-                                </a>
-                            </div>
-                    
+def is_social_domain(url):
+    host = urlparse(url or "").netloc.lower().split("@")[-1].split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+
+    return (
+        host in SOCIAL_DOMAINS
+        or any(host.endswith("." + domain) for domain in SOCIAL_DOMAINS)
+    )
+
+def social_platform_expected_block(item):
+    """
+    Some social platforms return login pages, 400/401/403 or anti-bot responses
+    to automated requests even when the user-facing link is valid.
+    These should not be classified as broken by status alone.
+    """
+    url = item.get("url", "")
+    final_url = item.get("final_url", "")
+    status = item.get("status")
+
+    if not is_social_domain(url):
+        return False
+
+    if status in {400, 401, 403, 429}:
+        return True
+
+    final_low = (final_url or "").lower()
+    if any(part in final_low for part in ["/login", "/checkpoint", "/signin", "/auth"]):
+        return True
+
+    return False
+
+def classify_link_validation(validation):
+    """
+    Separate genuinely broken links from expected automated access restrictions.
+    """
+    working = []
+    broken = []
+    restricted = []
+    expected_platform = []
+    unreachable = []
+    server_errors = []
+    redirected = []
+
+    for item in validation.get("checked", []):
+        status = item.get("status")
+
+        if social_platform_expected_block(item):
+            expected_platform.append(item)
+            continue
+
+        if status is None:
+            unreachable.append(item)
+        elif 200 <= status < 300:
+            working.append(item)
+            if item.get("final_url") and item["final_url"] != item["url"]:
+                redirected.append(item)
+        elif status in {401, 403, 429}:
+            restricted.append(item)
+        elif status in {404, 410}:
+            broken.append(item)
+        elif 400 <= status < 500:
+            broken.append(item)
+        elif status >= 500:
+            server_errors.append(item)
+
+    return {
+        "checked": validation.get("checked", []),
+        "working": working,
+        "broken": broken,
+        "restricted": restricted,
+        "expected_platform": expected_platform,
+        "unreachable": unreachable,
+        "server_errors": server_errors,
+        "redirected": redirected,
+    }
+
+def validation_problem_examples(validation, limit=6):
+    items = (
+        validation.get("broken", [])
+        + validation.get("server_errors", [])
+        + validation.get("restricted", [])
+        + validation.get("unreachable", [])
+    )
+    examples = []
+
+    for item in items[:limit]:
+        if item.get("status") is not None:
+            examples.append(
+                f"{item['url']} returned HTTP {item['status']}"
+                + (
+                    f" and ended at {item['final_url']}"
+                    if item.get("final_url") and item["final_url"] != item["url"]
+                    else ""
+                )
+            )
+        else:
+            examples.append(
+                f"{item['url']} could not be verified: {item.get('error') or 'request error'}"
+            )
+
+    return examples
+
+
+def response_redirect_chain(response):
+    chain = []
+    for item in list(getattr(response, "history", []) or []) + [response]:
+        chain.append({
+            "status": getattr(item, "status_code", None),
+            "url": getattr(item, "url", ""),
+        })
+    return chain
+
+def normalized_destination(url):
+    p = urlparse(url or "")
+    scheme = (p.scheme or "").lower()
+    host = (p.netloc or "").lower().replace(":80", "").replace(":443", "")
+    path = re.sub(r"/+$", "", p.path or "/") or "/"
+    return (scheme, host, path, p.query or "")
+
+def redirect_chain_summary(response):
+    chain = response_redirect_chain(response)
+    return " → ".join(
+        f"{item['status']} {item['url']}"
+        for item in chain
+        if item.get("url")
+    )
+
+@lru_cache(maxsize=512)
+def _robots_access_cached(page_url, _bucket):
+    parsed = urlparse(page_url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    result_data = {
+        "robots_url": robots_url,
+        "status": None,
+        "googlebot_allowed": None,
+        "wildcard_allowed": None,
+        "error": "",
+    }
+
+    try:
+        response = requests.get(
+            robots_url,
+            headers=UA_DESKTOP,
+            timeout=ROBOTS_REQUEST_TIMEOUT,
+            allow_redirects=True,
+        )
+        result_data["status"] = response.status_code
+
+        if response.status_code == 200:
+            parser = urllib.robotparser.RobotFileParser()
+            parser.set_url(robots_url)
+            parser.parse(response.text.splitlines())
+            result_data["googlebot_allowed"] = parser.can_fetch("Googlebot", page_url)
+            result_data["wildcard_allowed"] = parser.can_fetch("*", page_url)
+        elif response.status_code in {404, 410}:
+            result_data["googlebot_allowed"] = True
+            result_data["wildcard_allowed"] = True
+    except Exception as exc:
+        result_data["error"] = str(exc)
+
+    return result_data
+
+def robots_access_result(page_url):
+    return _robots_access_cached(page_url, cache_bucket(600))
+
+
+def image_should_be_ignored(node, base_url=""):
+    """
+    Ignore known Bayut TruBroker promotional/interface assets from the
+    article image quality audit.
+
+    This covers English and Arabic variants, mobile and desktop, because
+    matching is based on 'trubroker' in the resolved image URL/file name.
+    """
+    src = image_source_url(node, base_url) if base_url else (
+        node.get("src")
+        or node.get("data-src")
+        or node.get("data-lazy-src")
+        or node.get("data-original")
+        or ""
+    )
+
+    low = str(src).lower()
+
+    return (
+        "trubroker" in low
+        or "tru-broker" in low
+        or "tru_broker" in low
+    )
+
+def image_is_decorative(node):
+    role = (node.get("role") or "").lower()
+    aria_hidden = (node.get("aria-hidden") or "").lower()
+    alt = node.get("alt")
+    signature = node_signature(node)
+    src = " ".join([
+        str(node.get("src") or ""),
+        str(node.get("data-src") or ""),
+        str(node.get("class") or ""),
+    ]).lower()
+
+    try:
+        width = int(re.sub(r"[^\d]", "", str(node.get("width") or "0")) or 0)
+        height = int(re.sub(r"[^\d]", "", str(node.get("height") or "0")) or 0)
+    except Exception:
+        width = height = 0
+
+    if role in {"presentation", "none"} or aria_hidden == "true":
+        return True
+    if width and height and width <= 4 and height <= 4:
+        return True
+
+    decorative_markers = [
+        "icon", "sprite", "spacer", "tracking", "pixel",
+        "avatar", "emoji", "badge", "loader", "spinner",
+    ]
+    if any(marker in signature or marker in src for marker in decorative_markers):
+        if not node.find_parent("figure"):
+            return True
+
+    # Empty alt is a valid decorative treatment when the image also has
+    # an explicit decorative signal.
+    if alt == "" and (
+        role in {"presentation", "none"}
+        or aria_hidden == "true"
+        or any(marker in signature or marker in src for marker in decorative_markers)
+    ):
+        return True
+
+    return False
+
+def meaningful_image_inventory(soup, base_url, resource_validation=None):
+    article = main_content_node(soup)
+    meaningful = []
+    decorative = []
+    issues = []
+
+    validation_by_url = {}
+    if resource_validation:
+        for item in resource_validation.get("checked", []):
+            validation_by_url[item.get("url", "")] = item
+
+    for node in article.find_all("img"):
+        src = image_source_url(node, base_url)
+
+        # Known Bayut TruBroker promotional/interface images are excluded
+        # entirely from the editorial image quality check.
+        if image_should_be_ignored(node, base_url):
+            continue
+
+        alt_present = node.has_attr("alt")
+        alt_value = (node.get("alt") or "").strip()
+
+        if image_is_decorative(node):
+            decorative.append(src or "(inline image)")
+            continue
+
+        item = {
+            "src": src,
+            "alt_present": alt_present,
+            "alt": alt_value,
+        }
+        meaningful.append(item)
+
+        if not alt_present:
+            issues.append(f"Meaningful image missing alt attribute: {src or '(source unavailable)'}")
+        elif not alt_value:
+            issues.append(f"Meaningful image has empty alt text: {src or '(source unavailable)'}")
+
+        if src and src in validation_by_url:
+            checked = validation_by_url[src]
+            status = checked.get("status")
+            if status is None or status >= 400:
+                issues.append(
+                    f"Meaningful image resource problem: {src} "
+                    f"returned {status if status is not None else 'request error'}"
+                )
+
+    return {
+        "meaningful": meaningful,
+        "decorative": decorative,
+        "issues": issues,
+    }
+
+ARTICLE_SCHEMA_TYPES = {
+    "article", "blogposting", "newsarticle",
+    "report", "analysisnewsarticle",
+}
+
+def article_schema_objects(jsonld):
+    objects = []
+    for root in jsonld:
+        for obj in walk_json(root):
+            if not isinstance(obj, dict):
+                continue
+            raw_type = obj.get("@type")
+            types = raw_type if isinstance(raw_type, list) else [raw_type]
+            normalized = {
+                str(t).split("/")[-1].lower()
+                for t in types
+                if t
+            }
+            if normalized & ARTICLE_SCHEMA_TYPES:
+                objects.append(obj)
+    return objects
+
+def schema_object_urls(obj):
+    values = []
+    for key in ["url", "@id"]:
+        value = obj.get(key)
+        if isinstance(value, str):
+            values.append(value)
+
+    main_entity = obj.get("mainEntityOfPage")
+    if isinstance(main_entity, str):
+        values.append(main_entity)
+    elif isinstance(main_entity, dict):
+        for key in ["@id", "url"]:
+            value = main_entity.get(key)
+            if isinstance(value, str):
+                values.append(value)
+
+    return values
+
+def latest_editorial_datetime(soup):
+    jsonld, _ = parse_jsonld(soup)
+    modified = [
+        parse_datetime_value(v)
+        for v in get_schema_values(jsonld, "dateModified")
+        if isinstance(v, (str, int, float))
+    ]
+    published = [
+        parse_datetime_value(v)
+        for v in get_schema_values(jsonld, "datePublished")
+        if isinstance(v, (str, int, float))
+    ]
+    visible = visible_date_signals(soup)
+    modified.extend(parse_datetime_value(v) for v in visible["modified"])
+    published.extend(parse_datetime_value(v) for v in visible["published"])
+
+    valid_modified = [d for d in modified if d is not None]
+    valid_published = [d for d in published if d is not None]
+
+    chosen = max(valid_modified) if valid_modified else max(valid_published) if valid_published else None
+    if chosen and chosen.tzinfo is None:
+        chosen = chosen.replace(tzinfo=timezone.utc)
+    return chosen
+
+ATTRIBUTION_TERMS = [
+    "according to", "according to our data", "data experts",
+    "based on our data", "bayut data", "our data", "research shows",
+    "data shows", "as per", "source:", "sources:",
+    "وفقا لبيانات", "وفقاً لبيانات", "بحسب البيانات", "وفق بيانات",
+    "استنادا إلى", "استناداً إلى", "المصدر", "بيانات بيوت",
+]
+
+def has_attribution(text):
+    low = (text or "").lower()
+    return any(term.lower() in low for term in ATTRIBUTION_TERMS)
+
+def nearby_support_context(node):
+    parts = [node.get_text(" ", strip=True)]
+    prev = node.find_previous_sibling()
+    steps = 0
+    while prev is not None and steps < 2:
+        if getattr(prev, "name", None) in {"p", "li", "figcaption", "h2", "h3", "h4"}:
+            parts.append(prev.get_text(" ", strip=True))
+            steps += 1
+        prev = prev.find_previous_sibling()
+    return " ".join(parts)
+
+def node_http_links(node, base_url):
+    links = []
+    for anchor in node.find_all("a", href=True):
+        resolved = normalized_link_url(anchor.get("href"), base_url)
+        if resolved:
+            links.append(resolved)
+    return unique_http_urls(links)
+
+def faq_question_answer_pairs(article_soup):
+    pairs = []
+    for q in article_soup.find_all(re.compile(r"^h[2-4]$")):
+        qtext = re.sub(r"\s+", " ", q.get_text(" ", strip=True)).strip()
+        if not qtext.endswith(("?", "؟")):
+            continue
+
+        level = heading_level(q) or 4
+        answer_parts = []
+        for node in q.find_all_next():
+            if node is q:
+                continue
+            node_level = heading_level(node)
+            if node_level is not None and node_level <= level:
+                break
+            if node.name in {"p", "li", "td"}:
+                value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+                if value:
+                    answer_parts.append(value)
+            if sum(len(x) for x in answer_parts) > 1200:
+                break
+
+        pairs.append({
+            "question": qtext,
+            "answer": " ".join(answer_parts)[:1600],
+        })
+    return pairs
+
+SUPERLATIVE_TERMS = [
+    "most popular", "cheapest", "highest", "lowest", "number one", "#1",
+    "best", "top choice",
+    "الأكثر شعبية", "الأرخص", "الأعلى", "الاعلى", "الأفضل", "افضل",
+]
+
+HARD_SUPERLATIVE_TERMS = {
+    "most popular", "cheapest", "highest", "lowest", "number one", "#1",
+    "الأكثر شعبية", "الأرخص", "الأعلى", "الاعلى",
+}
+
+def superlative_claim_assessment(article_soup, base_url):
+    claims = []
+    section_map = {
+        item["heading"]: item["section"]
+        for item in heading_sections(article_soup)
+    }
+
+    for node in article_soup.find_all(["p", "li", "h2", "h3", "h4", "td"]):
+        value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        if not value:
+            continue
+        low = value.lower()
+        terms = [term for term in SUPERLATIVE_TERMS if term.lower() in low]
+        if not terms:
+            continue
+
+        context = nearby_support_context(node)
+        if node.name in {"h2", "h3", "h4"}:
+            context += " " + section_map.get(value, "")[:700]
+
+        links = node_http_links(node, base_url)
+        supported = bool(links) or has_attribution(context)
+        hard = any(term.lower() in HARD_SUPERLATIVE_TERMS for term in terms)
+
+        claims.append({
+            "text": value[:300],
+            "terms": terms,
+            "supported": supported,
+            "hard": hard,
+            "links": links,
+            "attributed": has_attribution(context),
+        })
+
+    # De duplicate repeated DOM text.
+    unique = []
+    seen = set()
+    for item in claims:
+        key = item["text"].casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+def numeric_statement_conflicts(article_soup):
+    """
+    Detect internal contradictions where essentially the same statement appears
+    more than once with different numeric values.
+    """
+    templates = {}
+    conflicts = []
+
+    number_pattern = re.compile(
+        r"(?:AED\s*)?\b\d+(?:[.,]\d+)?(?:\s*[KMB])?%?\b",
+        flags=re.I,
+    )
+
+    for node in article_soup.find_all(["p", "li", "td", "th"]):
+        value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        numbers = number_pattern.findall(value)
+        if not numbers or len(value) < 35:
+            continue
+
+        template = number_pattern.sub("<num>", value.lower())
+        template = re.sub(r"\s+", " ", template).strip()
+
+        if len(template) < 25:
+            continue
+
+        normalized_numbers = tuple(
+            re.sub(r"\s+", "", n.lower())
+            for n in numbers
+        )
+
+        if template in templates and templates[template] != normalized_numbers:
+            conflicts.append({
+                "statement": value[:300],
+                "previous_values": templates[template],
+                "current_values": normalized_numbers,
+            })
+        else:
+            templates[template] = normalized_numbers
+
+    return conflicts[:8]
+
+def parse_datetime_value(value):
+    if not value:
+        return None
+    if isinstance(value, (list, dict)):
+        return None
+
+    raw = str(value).strip()
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        pass
+
+    try:
+        return parsedate_to_datetime(raw)
+    except Exception:
+        return None
+
+def datetime_difference_hours(a, b):
+    da = parse_datetime_value(a)
+    db = parse_datetime_value(b)
+    if da is None or db is None:
+        return None
+
+    if da.tzinfo is None:
+        da = da.replace(tzinfo=timezone.utc)
+    if db.tzinfo is None:
+        db = db.replace(tzinfo=timezone.utc)
+
+    return abs((da - db).total_seconds()) / 3600
+
+def visible_date_signals(soup):
+    published = []
+    modified = []
+
+    meta_map = [
+        ("article:published_time", published),
+        ("article:modified_time", modified),
+        ("og:updated_time", modified),
+    ]
+
+    for prop, bucket in meta_map:
+        value = meta_content(soup, prop=prop)
+        if value:
+            bucket.append(value)
+
+    for node in soup.find_all("time"):
+        value = node.get("datetime") or node.get_text(" ", strip=True)
+        context = node_signature(node)
+        if any(x in context for x in ["modified", "updated", "update"]):
+            modified.append(value)
+        elif any(x in context for x in ["published", "publish", "date"]):
+            published.append(value)
+
+    return {
+        "published": list(dict.fromkeys(x for x in published if x)),
+        "modified": list(dict.fromkeys(x for x in modified if x)),
+    }
+
+def contextual_old_years(text):
+    """
+    Return old year references together with the sentence that contains each year.
+    Only time sensitive contexts should trigger REVIEW.
+    """
+    sentences = [
+        re.sub(r"\s+", " ", s).strip()
+        for s in re.split(r"(?<=[.!?؟])\s+|\n+", text or "")
+        if s.strip()
+    ]
+
+    historical_terms = [
+        "launched", "established", "founded", "opened", "built", "completed",
+        "introduced", "inaugurated", "since", "history", "historical",
+        "أطلق", "تأسس", "افتتح", "أنشئ", "بني", "اكتمل", "منذ", "تاريخ"
+    ]
+    sensitive_terms = [
+        "price", "prices", "rent", "rental", "roi", "yield", "fee", "fees",
+        "law", "rule", "visa", "bus route", "metro", "project status",
+        "completion", "handover", "aed", "%",
+        "سعر", "أسعار", "اسعار", "إيجار", "ايجار", "عائد", "رسوم",
+        "قانون", "مترو", "تسليم"
+    ]
+
+    output = []
+    for sentence in sentences:
+        years = [
+            int(y)
+            for y in re.findall(r"\b20(?:1\d|2\d)\b", sentence)
+            if int(y) <= CURRENT_YEAR - 2
+        ]
+        if not years:
+            continue
+
+        low = sentence.lower()
+        historical = any(term in low for term in historical_terms)
+        sensitive = any(term in low for term in sensitive_terms)
+
+        # Historical context can coexist with a price claim. Time sensitive wins.
+        classification = "Time sensitive" if sensitive else "Contextual or historical" if historical else "Context needs review"
+
+        for year in sorted(set(years)):
+            output.append({
+                "year": year,
+                "sentence": sentence[:320],
+                "classification": classification,
+                "sensitive": sensitive,
+            })
+
+    return output
+
+def factual_claim_examples(article_soup, base_url, limit=6):
+    """
+    Extract concrete verifiable claims, not generic promotional language.
+
+    Strong claim signals include:
+    numbers, dates, percentages, prices, distances, durations,
+    completion/launch facts, developer attribution, ranking/data claims,
+    named facilities and specific location statements.
+    """
+    claims = []
+
+    strong_patterns = [
+        r"\bAED\s*\d",
+        r"\b\d+(?:\.\d+)?%",
+        r"\b20(?:1\d|2\d)\b",
+        r"\b\d+\s*(?:minute|minutes|min|km|kilometre|kilometer|metre|meter|sq\.?\s*ft|sqft)\b",
+        r"\b(?:average|avg\.?)\s+(?:price|rent|roi|yield)\b",
+        r"\b(?:completed|launched|established|opened|founded|developed by|developer is|consists of|comprises)\b",
+        r"\b(?:most searched|most popular|ranked|according to our data|data experts)\b",
+        r"\b(?:located in|located at|situated in|situated at)\b",
+        r"\b(?:أسعار|سعر|إيجار|ايجار|عائد|رسوم)\s+\d",
+        r"\b(?:دقيقة|دقائق|كم|كيلومتر|متر)\b",
+        r"\b(?:تم إطلاق|تم اطلاق|اكتمل|افتتح|تأسس|طورته|المطور)\b",
+        r"\b(?:الأكثر بحثا|الاكثر بحثا|وفقا لبيانات|بحسب البيانات)\b",
+    ]
+
+    weak_marketing_terms = {
+        "great option",
+        "comfortable lifestyle",
+        "convenient lifestyle",
+        "popular choice",
+        "not hard to see why",
+        "perfect choice",
+        "ideal choice",
+        "excellent facilities",
+    }
+
+    for node in article_soup.find_all(["p", "li", "td"]):
+        value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        if len(value) < 45:
+            continue
+
+        low = value.lower()
+
+        # Skip purely promotional/generic text if it has no strong factual signal.
+        has_strong = any(
+            re.search(pattern, value, flags=re.I)
+            for pattern in strong_patterns
+        )
+
+        if not has_strong:
+            continue
+
+        # If a sentence is dominated by marketing language and has no numeric/date
+        # or specific attribution signal, do not treat it as a factual claim.
+        has_numeric_specificity = bool(re.search(
+            r"\b\d+(?:[.,]\d+)?(?:%|\s*(?:minutes?|km|sqft|sq\.?\s*ft))?\b|AED\s*\d",
+            value,
+            flags=re.I,
+        ))
+        has_claim_attribution_signal = bool(re.search(
+            r"\b(?:according to|data experts|developed by|developer|completed|launched|located in|located at)\b",
+            value,
+            flags=re.I,
+        ))
+
+        if any(term in low for term in weak_marketing_terms) and not (
+            has_numeric_specificity or has_claim_attribution_signal
+        ):
+            continue
+
+        sources = []
+        for anchor in node.find_all("a", href=True):
+            resolved = urljoin(base_url, anchor.get("href"))
+            if resolved.startswith(("http://", "https://")):
+                sources.append(resolved)
+
+        nearby_context = nearby_support_context(node)
+        claim_links = unique_http_urls(sources)
+        claims.append({
+            "claim": value[:360],
+            "source_links": claim_links,
+            "attributed": has_attribution(nearby_context),
+            "supported": bool(claim_links) or has_attribution(nearby_context),
+        })
+
+        if len(claims) >= limit:
+            break
+
+    return claims
+
+GENERIC_ENTITY_HEADINGS = {
+    "faqs", "faq", "introduction", "conclusion", "overview", "summary",
+    "popular", "comments", "leave a reply", "find a reliable agent",
+    "frequently asked questions", "find an agent", "read more",
+    "rent apartments", "rent villas", "apartments", "villas",
+    "where to rent", "where can you rent",
+}
+
+
+ENTITY_GENERIC_PREFIX_PATTERNS = [
+    # Generic property wording before a real named entity
+    r"^(?:studio|studios)\s+(?:in|at|from|near|within|inside)\s+",
+    r"^(?:apartment|apartments|flat|flats)\s+(?:in|at|from|near|within|inside)\s+",
+    r"^(?:villa|villas|townhouse|townhouses)\s+(?:in|at|from|near|within|inside)\s+",
+    r"^(?:unit|units|property|properties)\s+(?:in|at|from|near|within|inside)\s+",
+    r"^(?:rent|rental|renting)\s+(?:in|at|from|near|within|inside)\s+",
+
+    # Standalone English prepositions accidentally captured with a proper noun
+    r"^(?:in|at|from|near|within|inside|around|across|by)\s+",
+
+    # Common Arabic location prepositions accidentally captured with an entity
+    r"^(?:في|داخل|ضمن|قرب|حول)\s+",
+    r"^بالقرب\s+من\s+",
+    r"^من\s+(?=[A-Z\u0600-\u06ff])",
+]
+
+def clean_entity_candidate(value):
+    """
+    Remove generic property wording and leading prepositions around a proper noun.
+
+    Examples:
+    studio in Elite Sports Residents -> Elite Sports Residents
+    in Global Golf Residence -> Global Golf Residence
+    near Victory Heights -> Victory Heights
+    """
+    value = re.sub(r"\s+", " ", (value or "")).strip(" ,.;:-")
+
+    changed = True
+    while changed and value:
+        changed = False
+        for pattern in ENTITY_GENERIC_PREFIX_PATTERNS:
+            cleaned = re.sub(
+                pattern,
+                "",
+                value,
+                flags=re.I,
+            ).strip(" ,.;:-")
+            if cleaned != value:
+                value = cleaned
+                changed = True
+
+    # Remove punctuation or connector remnants after repeated prefix cleaning.
+    value = re.sub(r"^(?:[-–—,:;]+\s*)+", "", value).strip()
+    value = re.sub(r"\s+", " ", value).strip(" ,.;:-")
+    return value
+
+def entity_similarity_key(value):
+    value = clean_entity_candidate(value).casefold()
+    value = re.sub(r"[^a-z0-9\u0600-\u06ff ]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+def roman_variant_pair(a, b):
+    """
+    Do not flag legitimate numbered project variants such as
+    Global Golf Residence and Global Golf Residence II.
+    """
+    roman = {"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"}
+    aa = entity_similarity_key(a).split()
+    bb = entity_similarity_key(b).split()
+
+    if len(aa) + 1 == len(bb) and bb[-1] in roman and aa == bb[:-1]:
+        return True
+    if len(bb) + 1 == len(aa) and aa[-1] in roman and bb == aa[:-1]:
+        return True
+    return False
+
+def near_duplicate_entities(entities, threshold=0.88):
+    """
+    Find suspiciously similar entity spellings after full normalization.
+
+    Exact matches after removing wrappers and prepositions are merged and are
+    not reported. Legitimate numbered variants are also excluded.
+
+    Real spelling variants such as:
+    Elite Sports Residence
+    Elite Sports Residents
+    remain visible for editorial verification.
+    """
+    pairs = []
+
+    for i, left in enumerate(entities):
+        left_clean = clean_entity_candidate(left)
+        left_key = entity_similarity_key(left_clean)
+        if not left_key:
+            continue
+
+        for right in entities[i + 1:]:
+            right_clean = clean_entity_candidate(right)
+            right_key = entity_similarity_key(right_clean)
+
+            # Exact normalized entities are the same entity, not a near duplicate.
+            if not right_key or left_key == right_key:
+                continue
+
+            if roman_variant_pair(left_clean, right_clean):
+                continue
+
+            left_tokens = set(left_key.split())
+            right_tokens = set(right_key.split())
+            token_overlap = (
+                len(left_tokens & right_tokens)
+                / max(1, min(len(left_tokens), len(right_tokens)))
+            )
+            ratio = SequenceMatcher(
+                None,
+                left_key,
+                right_key,
+            ).ratio()
+
+            # Avoid false positives caused only by one extra generic connector token.
+            if left_key in right_key or right_key in left_key:
+                longer = right_key if len(right_key) > len(left_key) else left_key
+                shorter = left_key if len(left_key) <= len(right_key) else right_key
+                extra = longer.replace(shorter, "", 1).strip()
+                if extra in {
+                    "in", "at", "from", "near", "within", "inside",
+                    "around", "by", "في", "داخل", "ضمن", "قرب"
+                }:
+                    continue
+
+            if ratio >= threshold and token_overlap >= 0.60:
+                pairs.append({
+                    "left": left_clean,
+                    "right": right_clean,
+                    "similarity": ratio,
+                })
+
+    unique = []
+    seen = set()
+
+    for item in sorted(
+        pairs,
+        key=lambda x: x["similarity"],
+        reverse=True,
+    ):
+        key = tuple(sorted([
+            entity_similarity_key(item["left"]),
+            entity_similarity_key(item["right"]),
+        ]))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    return unique
+
+def looks_like_entity_phrase(value):
+    value = clean_entity_candidate(value)
+    if not value:
+        return False
+
+    low = value.casefold()
+
+    if low in GENERIC_ENTITY_HEADINGS:
+        return False
+
+    if any(term in low for term in [
+        "find an agent",
+        "leave a reply",
+        "frequently asked",
+        "faq",
+        "rent apartment",
+        "rent apartments",
+        "rent villa",
+        "rent villas",
+        "where can you",
+        "where to rent",
+        "click here",
+        "read more",
+        "want to",
+    ]):
+        return False
+
+    words = tokenize(value)
+    if not (1 <= len(words) <= 7):
+        return False
+
+    # Reject sentence fragments and calls to action.
+    if value.endswith(("?", "!", ".")):
+        return False
+
+    # Reject phrases that are mostly generic SEO/action terms.
+    generic_tokens = {
+        "rent", "rental", "renting", "apartment", "apartments", "villa", "villas",
+        "property", "properties", "find", "agent", "faq", "faqs", "want",
+        "best", "popular", "places", "where", "can", "you",
+    }
+    meaningful = [w.lower() for w in words if w.lower() not in generic_tokens]
+    if len(meaningful) == 0:
+        return False
+
+    # Prefer proper noun style or known entity suffixes.
+    title_case_words = sum(
+        1 for token in value.split()
+        if token[:1].isupper() or token.isupper()
+    )
+
+    entity_suffixes = {
+        "residence", "residences", "tower", "towers", "villas", "villa",
+        "heights", "gardens", "estate", "estates", "city", "community",
+        "school", "academy", "hospital", "clinic", "mall", "hotel",
+        "park", "course", "stadium", "centre", "center",
+    }
+
+    has_entity_suffix = any(w.lower().strip(".,") in entity_suffixes for w in value.split())
+
+    return title_case_words >= max(1, len(value.split()) // 2) or has_entity_suffix
+
+
+def entity_heading_context_relevant(heading_text, section_text, target_topic):
+    """
+    Named projects, buildings and places can be valid headings without
+    repeating the Focus Keyword.
+
+    Accept an entity heading when the section beneath it has a meaningful
+    relationship to the page topic.
+    """
+    if not looks_like_entity_phrase(heading_text):
+        return False
+
+    if not section_text:
+        return False
+
+    section_score = semantic_overlap(target_topic, section_text)
+    lexical_score = keyword_overlap(target_topic, section_text)
+
+    target_concepts = set(semantic_tokens(target_topic))
+    section_concepts = set(semantic_tokens(section_text))
+
+    important_topic_concepts = {
+        "rent", "sale", "property", "price", "location"
+    }
+    shared_important = (
+        target_concepts
+        & section_concepts
+        & important_topic_concepts
+    )
+
+    return (
+        section_score >= 0.30
+        or lexical_score >= 0.12
+        or (
+            bool(shared_important)
+            and section_score >= 0.20
+        )
+    )
+
+def entity_candidates(article_soup, limit=20):
+    values = []
+
+    # 1. Headings are strong entity candidates when they look like proper nouns.
+    for heading in article_soup.find_all(re.compile(r"^h[2-4]$")):
+        value = clean_entity_candidate(
+            heading.get_text(" ", strip=True)
+        )
+        if looks_like_entity_phrase(value):
+            values.append(value)
+
+    # 2. Anchor text inside the article is often a cleaner signal for named places/projects.
+    for anchor in article_soup.find_all("a", href=True):
+        value = clean_entity_candidate(
+            anchor.get_text(" ", strip=True)
+        )
+        if looks_like_entity_phrase(value):
+            values.append(value)
+
+    # 3. Conservative proper noun phrase extraction from prose.
+    text_value = clean_text(article_soup)
+    for match in re.findall(
+        r"\b(?:[A-Z][A-Za-z0-9'&.-]+(?:\s+|$)){2,5}",
+        text_value,
+    ):
+        value = clean_entity_candidate(match)
+        if looks_like_entity_phrase(value):
+            values.append(value)
+
+    clean_values = []
+    seen = set()
+
+    for value in values:
+        value = clean_entity_candidate(value)
+        key = entity_similarity_key(value)
+
+        if not key or key in seen:
+            continue
+
+        # Avoid article title or focus keyword style headings being mistaken for entities.
+        if len(tokenize(value)) >= 6 and any(
+            token in key
+            for token in ["rent", "apartments", "villas", "properties"]
+        ):
+            continue
+
+        seen.add(key)
+        clean_values.append(value)
+
+        if len(clean_values) >= limit:
+            break
+
+    return clean_values
+
+def repeated_sentence_ratio(text):
+    sents = [re.sub(r"\s+", " ", s.strip().lower()) for s in re.split(r"[.!?؟]+", text) if len(s.strip()) >= 35]
+    if not sents:
+        return 0.0, []
+    counts = Counter(sents)
+    repeated = [s for s,c in counts.items() if c > 1]
+    duplicate_instances = sum(counts[s]-1 for s in repeated)
+    return duplicate_instances / len(sents), repeated[:4]
+
+def repeated_paragraph_ratio(soup):
+    paras = []
+    for p in soup.find_all("p"):
+        t = re.sub(r"\s+", " ", p.get_text(" ", strip=True).lower())
+        if len(t) >= 80:
+            paras.append(t)
+    if not paras:
+        return 0.0, []
+    counts = Counter(paras)
+    repeated = [p for p,c in counts.items() if c > 1]
+    duplicate_instances = sum(counts[p]-1 for p in repeated)
+    return duplicate_instances / len(paras), repeated[:3]
+
+def looks_time_sensitive(text):
+    keys = [
+        "price","prices","rent","rental","sale price","roi","yield","visa","law","rule","fee","fees","bus route",
+        "metro","project status","completion","handover","aed","%","سعر","أسعار","ايجار","إيجار","قانون","رسوم","مترو"
+    ]
+    low = text.lower()
+    return any(k in low for k in keys)
+
+def old_years(text):
+    years = [int(y) for y in re.findall(r"\b20(?:1\d|2\d)\b", text)]
+    return sorted(set(y for y in years if y <= CURRENT_YEAR - 2))
+
+def classify_counts(rows):
+    c = Counter(r.get("_internal_status", PASS) for r in rows)
+    if c[FAIL]:
+        overall = FAIL
+    elif c[REVIEW]:
+        overall = REVIEW
+    else:
+        overall = PASS
+    return overall, c
+
+# -----------------------------
+# Spam audit
+# -----------------------------
+
+
+def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="", secondary_keywords=None):
+    rows = []
+    rules = dict(SPAM_RULES)
+    secondary_keywords = secondary_keywords or []
+
+    desktop_text = body_text
+    bot_text = main_content_text(soup_of(bot_r.text))
+    mobile_text = main_content_text(soup_of(mobile_r.text))
+
+    sim_bot = similarity(desktop_text, bot_text)
+    desktop_dest = normalized_destination(desktop_r.url)
+    bot_dest = normalized_destination(bot_r.url)
+    desktop_chain = response_redirect_chain(desktop_r)
+    bot_chain = response_redirect_chain(bot_r)
+
+    if desktop_dest != bot_dest:
+        rows.append(result(
+            "Cloaking",
+            FAIL,
+            f"User and Googlebot like requests reached different final destinations: {desktop_r.url} vs {bot_r.url}.",
+            rules["Cloaking"],
+        ))
+    elif sim_bot < 0.72 and min(word_count(desktop_text), word_count(bot_text)) > 150:
+        rows.append(result(
+            "Cloaking",
+            FAIL,
+            f"Material user versus Googlebot like content difference detected ({sim_bot:.0%} similarity).",
+            rules["Cloaking"],
+        ))
+    elif sim_bot < 0.88:
+        rows.append(result(
+            "Cloaking",
+            REVIEW,
+            f"User versus Googlebot like content similarity is {sim_bot:.0%}. Review dynamic or personalised content.",
+            rules["Cloaking"],
+        ))
+    else:
+        rows.append(result(
+            "Cloaking",
+            PASS,
+            f"User versus Googlebot like content similarity is {sim_bot:.0%}. Final destination matches.",
+            rules["Cloaking"],
+        ))
+
+    chains_materially_different = (
+        desktop_dest != bot_dest
+        or (
+            len(desktop_chain) != len(bot_chain)
+            and (len(desktop_chain) > 1 or len(bot_chain) > 1)
+        )
+    )
+    if desktop_dest != bot_dest:
+        st_redirect = FAIL
+        note = (
+            f"Different final destinations. User chain: {redirect_chain_summary(desktop_r)}. "
+            f"Crawler chain: {redirect_chain_summary(bot_r)}."
+        )
+    elif chains_materially_different:
+        st_redirect = REVIEW
+        note = (
+            "Final destination matches, but user and crawler redirect chains differ. "
+            f"User chain: {redirect_chain_summary(desktop_r)}. "
+            f"Crawler chain: {redirect_chain_summary(bot_r)}."
+        )
+    else:
+        st_redirect = PASS
+        note = f"User and crawler reach the same destination with no material redirect-chain difference: {desktop_r.url}"
+    rows.append(result("Sneaky Redirect", st_redirect, note, rules["Sneaky Redirect"]))
+
+    mobile_dest = normalized_destination(mobile_r.url)
+    if mobile_dest != desktop_dest:
+        rows.append(result(
+            "Device Spam Redirect",
+            FAIL,
+            f"Mobile final destination differs from desktop. Desktop: {desktop_r.url}. Mobile: {mobile_r.url}.",
+            rules["Device Spam Redirect"],
+        ))
+    else:
+        sm = similarity(desktop_text, mobile_text)
+        chain_diff = len(response_redirect_chain(mobile_r)) != len(desktop_chain)
+        device_status = REVIEW if sm < 0.80 or chain_diff else PASS
+        rows.append(result(
+            "Device Spam Redirect",
+            device_status,
+            f"Desktop and mobile final destination matches; content similarity {sm:.0%}. "
+            f"Redirect chain difference: {'yes' if chain_diff else 'no'}.",
+            rules["Device Spam Redirect"],
+        ))
+
+    hidden_text_items = hidden_text_details(soup)
+    if hidden_text_items:
+        hidden_text_statuses = [x["status"] for x in hidden_text_items]
+        hidden_text_status = FAIL if FAIL in hidden_text_statuses else REVIEW if REVIEW in hidden_text_statuses else PASS
+
+        text_details = []
+        for index, item in enumerate(hidden_text_items[:6], 1):
+            text_details.append(
+                f"Hidden text {index}. Purpose: {item['purpose']}. "
+                f"Hidden Because: {item['hidden_because']}. Element: {item['hidden_element']}. "
+                f"Example Text: {item['text']}. Assessment: {item['explanation']}"
+            )
+
+        if hidden_text_status == PASS:
+            text_summary = "Hidden text was detected, but every detected block had a recognised legitimate hiding reason. "
+        elif hidden_text_status == REVIEW:
+            text_summary = "Hidden text was detected and at least one block has an unconfirmed hiding reason. "
+        else:
+            text_summary = "Hidden text was detected and at least one block uses a strongly concealed method without a recognised legitimate reason. "
+
+        rows.append(result("Hidden Text", hidden_text_status, text_summary + " ".join(text_details), rules["Hidden Text"]))
+    else:
+        rows.append(result(
+            "Hidden Text",
+            PASS,
+            "No substantial visually hidden text blocks were detected by the available static hiding checks.",
+            rules["Hidden Text"],
+        ))
+
+    hidden_links, hidden_inventory = hidden_link_details(
+        soup,
+        desktop_r.url,
+    )
+
+    if hidden_links:
+        hidden_status = FAIL
+
+        issue_lines = [
+            f"{len(hidden_links)} hidden link instance(s) found."
+        ]
+
+        for index, item in enumerate(hidden_links, start=1):
+            link_url = item.get("url") or "(URL unavailable)"
+            issue_type = item.get("issue_type") or "Hidden link"
+
+            issue_lines.append(
+                f"{index}. {link_url} | {issue_type}"
+            )
+
+        hidden_result = "\n".join(issue_lines)
+        hidden_action = "Remove or fix the hidden link instances listed in Result."
+
+    else:
+        hidden_status = PASS
+        hidden_result = "No hidden links found."
+        hidden_action = ""
+
+    rows.append(result(
+        "Hidden Links",
+        hidden_status,
+        hidden_result,
+        rules["Hidden Links"],
+        hidden_action,
+    ))
+
+    article_soup = main_content_node(soup)
+    page_internal, page_external = extract_page_links(soup, url)
+    article_internal, article_external = extract_page_links(article_soup, url)
+    article_host = urlparse(url).netloc.lower().replace("www.", "")
+
+    article_anchors = []
+    for a in article_soup.find_all("a", href=True):
+        href = normalized_link_url(a.get("href"), url)
+        if not href:
+            continue
+        host = urlparse(href).netloc.lower().replace("www.", "")
+        if host != article_host and not is_social_domain(href):
+            article_anchors.append((a, href))
+
+    keyword_rich = 0
+    repeated_anchor_counts = Counter()
+    for a, href in article_anchors:
+        txt = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip().lower()
+        if len(tokenize(txt)) >= 4:
+            keyword_rich += 1
+        if txt:
+            repeated_anchor_counts[txt] += 1
+
+    repeated_manipulative = [
+        anchor for anchor, count in repeated_anchor_counts.items()
+        if count >= 4 and len(tokenize(anchor)) >= 3
+    ]
+
+    if repeated_manipulative:
+        link_status = REVIEW
+        finding = (
+            f"{len(article_anchors)} editorial external link(s) found. "
+            f"Repeated keyword rich anchor patterns need review: {', '.join(repeated_manipulative[:5])}."
+        )
+    elif len(article_anchors) > 40 or (
+        len(article_anchors) >= 12
+        and keyword_rich / max(1, len(article_anchors)) > .70
+    ):
+        link_status = REVIEW
+        finding = (
+            f"{len(article_anchors)} editorial external links; {keyword_rich} use long keyword rich anchor text. "
+            "Review link intent."
+        )
+    else:
+        link_status = PASS
+        finding = (
+            f"{len(article_anchors)} non social editorial external link(s) and "
+            f"{len(page_external)} page wide external link(s) found; no clear automated link spam pattern."
+        )
+    rows.append(result("Link Spam", link_status, finding, rules["Link Spam"]))
+
+    paid_candidates = 0
+    paid_bad = 0
+    for a, href in article_anchors:
+        context = (
+            a.get_text(" ", strip=True)
+            + " "
+            + (a.parent.get_text(" ", strip=True) if a.parent else "")
+        ).lower()
+        if any(k in context for k in [
+            "sponsored", "advertisement", "advertorial",
+            "paid partnership", "affiliate",
+        ]):
+            paid_candidates += 1
+            rel = {str(x).lower() for x in (a.get("rel") or [])}
+            if not ({"sponsored", "nofollow"} & rel):
+                paid_bad += 1
+
+    script_text = "\n".join((s.string or s.get_text() or "") for s in soup.find_all("script"))
+    suspicious_js = []
+    for pattern in [
+        "window.location", "location.replace(", "document.location",
+        "eval(atob(", "fromCharCode(",
+    ]:
+        if pattern.lower() in script_text.lower():
+            suspicious_js.append(pattern)
+    js_status = REVIEW if len(suspicious_js) >= 2 else PASS
+    rows.append(result(
+        "Spam JavaScript",
+        js_status,
+        f"Suspicious redirect or obfuscation indicators: {', '.join(suspicious_js) if suspicious_js else 'none detected'}.",
+        rules["Spam JavaScript"],
+    ))
+
+    iframes = soup.find_all("iframe")
+    hidden_iframes = [i for i in iframes if obvious_hidden(i)]
+    suspicious_iframe_sources = []
+    for iframe in hidden_iframes:
+        src = normalized_link_url(iframe.get("src"), url)
+        if src and urlparse(src).netloc.lower().replace("www.", "") != article_host:
+            suspicious_iframe_sources.append(src)
+
+    if hidden_iframes and suspicious_iframe_sources:
+        iframe_status = REVIEW
+        iframe_find = (
+            f"Found {len(hidden_iframes)} hidden iframe(s), including external hidden source(s): "
+            + ", ".join(suspicious_iframe_sources[:4]) + "."
+        )
+    elif hidden_iframes:
+        iframe_status = REVIEW
+        iframe_find = f"Found {len(hidden_iframes)} hidden iframe(s); verify legitimate interface purpose."
+    else:
+        iframe_status = PASS
+        iframe_find = f"{len(iframes)} iframe(s) found; none obviously hidden."
+    rows.append(result("Spam Iframes", iframe_status, iframe_find, rules["Spam Iframes"]))
+
+
+    comment_nodes = soup.select(".comment, .comments, [id*='comment'], [class*='comment']")
+    ugc_links = []
+    for n in comment_nodes:
+        for a in n.find_all("a", href=True):
+            href = normalized_link_url(a.get("href"), url)
+            if href:
+                ugc_links.append((a.get_text(" ", strip=True), href, a.get("rel") or []))
+
+    ugc_domains = Counter(
+        urlparse(href).netloc.lower().replace("www.", "")
+        for _, href, _ in ugc_links
+    )
+    ugc_anchor_counts = Counter(
+        re.sub(r"\s+", " ", anchor).strip().lower()
+        for anchor, _, _ in ugc_links
+        if anchor.strip()
+    )
+    spammy_ugc = (
+        len(ugc_links) >= 10
+        and (
+            max(ugc_domains.values(), default=0) >= 6
+            or max(ugc_anchor_counts.values(), default=0) >= 5
+        )
+    )
+
+    if spammy_ugc:
+        ugc_status = REVIEW
+        ugc_finding = (
+            f"Detected {len(ugc_links)} UGC link(s) with concentrated domain or repeated anchor patterns. "
+            "Review comment moderation."
+        )
+    else:
+        ugc_status = PASS
+        ugc_finding = (
+            f"Detected {len(ugc_links)} link(s) in comment or UGC like containers; "
+            "no mass repeated UGC link pattern was detected."
+        )
+    rows.append(result("User Generated Spam", ugc_status, ugc_finding, rules["User Generated Spam"]))
+
+    lower_js = script_text.lower()
+    hijack = (
+        "popstate" in lower_js
+        and ("pushstate" in lower_js or "replacestate" in lower_js)
+        and any(x in lower_js for x in ["location.href", "location.replace", "window.location"])
+    )
+    rows.append(result(
+        "Back Button Hijacking",
+        FAIL if hijack else PASS,
+        "Browser-history redirect pattern detected."
+        if hijack
+        else "No obvious browser-history hijacking pattern detected.",
+        rules["Back Button Hijacking"],
+    ))
+
+    malware_signals = sum(
+        1
+        for x in ["eval(atob(", "unescape(", "document.write('<script", 'document.write("<script']
+        if x in lower_js
+    )
+    if malware_signals >= 2:
+        ms = REVIEW
+        mf = "Multiple script obfuscation or injection patterns detected; security review required."
+    else:
+        ms = PASS
+        mf = "No strong malware or scam script signature detected by the static HTML and JavaScript scan."
+    rows.append(result("Malware / Scam Behaviour", ms, mf, rules["Malware / Scam Behaviour"]))
+
+    return rows
+
+
+def audit_seo(
+    url,
+    desktop_r,
+    desktop_elapsed,
+    mobile_r,
+    soup,
+    body_text,
+    focus_keyword="",
+    secondary_keywords=None,
+    sitemap_result=None,
+    internal_validation=None,
+    external_validation=None,
+    resource_validation=None,
+    robots_txt_result=None,
+):
+    rows = []
+    rules = dict(SEO_RULES)
+    secondary_keywords = secondary_keywords or []
+    article_soup = main_content_node(soup)
+
+    code = desktop_r.status_code
+    redirect_count = len(getattr(desktop_r, "history", []) or [])
+    if code == 200:
+        http_status = PASS
+    elif 300 <= code < 400:
+        http_status = REVIEW
+    else:
+        http_status = FAIL
+    rows.append(result(
+        "HTTP Status",
+        http_status,
+        f"Final HTTP {code}. Redirects followed: {redirect_count}. Final URL: {desktop_r.url}. Response time: {desktop_elapsed:.2f}s.",
+        rules["HTTP Status"],
+    ))
+
+    robots = robots_directives(soup)
+    if "noindex" in robots:
+        rows.append(result(
+            "Indexability",
+            FAIL,
+            f"Page level robots directive contains noindex: {robots}",
+            rules["Indexability"],
+        ))
+    else:
+        rows.append(result(
+            "Indexability",
+            PASS,
+            f"No page level noindex detected{': ' + robots if robots else ''}.",
+            rules["Indexability"],
+        ))
+
+    if robots_txt_result is None:
+        robots_txt_result = robots_access_result(desktop_r.url)
+
+    robots_status = PASS
+    robots_notes = []
+
+    if "noindex" in robots:
+        robots_status = FAIL
+        robots_notes.append(f"Page meta contains noindex: {robots}.")
+    elif "nofollow" in robots or "none" in robots:
+        robots_status = REVIEW
+        robots_notes.append(f"Page meta contains a restrictive follow directive: {robots}.")
+    else:
+        robots_notes.append(robots or "No restrictive page level robots meta detected.")
+
+    rt_status = robots_txt_result.get("status")
+    if rt_status == 200:
+        if robots_txt_result.get("googlebot_allowed") is False:
+            robots_status = FAIL
+            robots_notes.append(
+                f"robots.txt blocks the URL for Googlebot: {robots_txt_result['robots_url']}."
+            )
+        else:
+            robots_notes.append(
+                f"robots.txt allows Googlebot to fetch this URL: {robots_txt_result['robots_url']}."
+            )
+    elif rt_status in {404, 410}:
+        robots_notes.append("robots.txt was not found; no URL level robots.txt block was detected.")
+    elif rt_status is None or (rt_status and rt_status >= 500):
+        if robots_status == PASS:
+            robots_status = REVIEW
+        robots_notes.append(
+            f"robots.txt could not be reliably verified. "
+            f"HTTP: {rt_status if rt_status is not None else 'request error'}."
+        )
+    else:
+        if robots_status == PASS:
+            robots_status = REVIEW
+        robots_notes.append(f"robots.txt returned HTTP {rt_status}; verify crawler access manually.")
+
+    rows.append(result("Robots", robots_status, " ".join(robots_notes), rules["Robots"]))
+
+    canonical = canonical_href(soup)
+    if not canonical:
+        cs = REVIEW
+        cf = "Canonical tag not found."
+    else:
+        can_abs = normalized_link_url(canonical, desktop_r.url)
+        current_identity = normalized_destination(desktop_r.url)
+        canonical_identity = normalized_destination(can_abs)
+        canonical_probe = probe_http_url(can_abs) if can_abs else None
+
+        if not can_abs:
+            cs = FAIL
+            cf = f"Canonical is malformed: {canonical}"
+        elif canonical_identity != current_identity:
+            cs = REVIEW
+            cf = f"Canonical points to a different preferred URL: {can_abs}."
+        elif canonical_probe and canonical_probe.get("status") not in range(200, 300):
+            cs = REVIEW
+            cf = (
+                f"Canonical matches the page URL but the target did not return a successful response. "
+                f"Canonical: {can_abs}. HTTP: {canonical_probe.get('status')}."
+            )
+        else:
+            cs = PASS
+            cf = f"Canonical matches the preferred final URL and resolves successfully: {can_abs}."
+    rows.append(result("Canonical", cs, cf, rules["Canonical"]))
+
+    title = title_text(soup)
+    title_len = len(title)
+    if not title:
+        ts = FAIL
+        title_reason = "Title is missing."
+    else:
+        ts = PASS
+        title_reason_parts = []
+        title_body_overlap = max(
+            keyword_overlap(title, body_text),
+            semantic_overlap(title, body_text),
+        )
+        focus_exact = keyword_in_text(focus_keyword, title) if focus_keyword else True
+        focus_overlap = max(
+            keyword_overlap(focus_keyword, title),
+            semantic_overlap(focus_keyword, title),
+        ) if focus_keyword else 1.0
+        focus_represented = focus_exact or focus_overlap >= 0.60
+
+        title_words = [
+            w for w in tokenize(title)
+            if len(w) > 2 and w not in {
+                "the", "and", "for", "with", "from", "this", "that", "your", "you",
+                "are", "our", "in", "on", "of", "to", "a", "an", "is",
+                "في", "من", "على", "إلى", "الى", "عن", "هذا", "هذه", "مع", "و", "أو", "او",
+            }
+        ]
+        repeated_title_terms = [
+            word for word, count in Counter(title_words).items()
+            if count >= 3
+        ]
+
+        if title_len > 80:
+            ts = REVIEW
+            title_reason_parts.append(
+                f"The title contains {title_len} characters and may be more verbose than necessary."
+            )
+        elif title_len < 30 and title_body_overlap < 0.55:
+            ts = REVIEW
+            title_reason_parts.append(
+                f"The title contains {title_len} characters and has weak topic coverage."
+            )
+        else:
+            title_reason_parts.append(
+                f"The title contains {title_len} characters. Length is treated as an internal quality signal only."
+            )
+
+        if title_body_overlap < 0.35:
+            ts = REVIEW
+            title_reason_parts.append(
+                f"Title to article topic agreement is only {title_body_overlap:.0%}."
+            )
+        else:
+            title_reason_parts.append(
+                f"Title to article topic agreement is {title_body_overlap:.0%}."
+            )
+
+        if focus_keyword:
+            if not focus_represented:
+                ts = REVIEW
+                title_reason_parts.append(
+                    f"The Focus Keyword meaning is weakly represented in the title ({focus_overlap:.0%})."
+                )
+            elif focus_exact:
+                title_reason_parts.append("The Focus Keyword is directly represented in the title.")
+            else:
+                title_reason_parts.append(
+                    f"The Focus Keyword is represented semantically ({focus_overlap:.0%})."
+                )
+
+        if repeated_title_terms:
+            ts = REVIEW
+            title_reason_parts.append(
+                "Repeated title terms detected: " + ", ".join(repeated_title_terms[:6]) + "."
+            )
+
+        title_reason = " ".join(title_reason_parts)
+
+    rows.append(result(
+        "Title Tag",
+        ts,
+        f"Title: {title or 'missing'}. {title_reason}",
+        rules["Title Tag"],
+    ))
+
+    meta = meta_content(soup, name="description")
+    ml = len(meta)
+    if not meta:
+        md = REVIEW
+        meta_note = "Meta description is missing."
+    else:
+        meta_topic = max(
+            semantic_overlap(focus_keyword or title, meta),
+            keyword_overlap(focus_keyword or title, meta),
+        )
+        md = PASS
+        notes = [f"{ml} characters.", f"Topic agreement {meta_topic:.0%}."]
+
+        # Google does not define a fixed description character limit.
+        if ml < 50 and meta_topic < 0.55:
+            md = REVIEW
+            notes.append("Description is very short and weakly represents the topic.")
+        elif ml > 320:
+            md = REVIEW
+            notes.append("Description is unusually long and may be unnecessarily verbose.")
+
+        if meta_topic < 0.35:
+            md = REVIEW
+            notes.append("Description has weak semantic relevance to the page topic.")
+        elif focus_keyword and keyword_in_text(focus_keyword, meta):
+            notes.append("Focus Keyword is directly represented.")
+        elif focus_keyword:
+            notes.append("Exact Focus Keyword wording is not required because the meaning is represented semantically.")
+
+        meta_note = " ".join(notes) + f" Description: {meta[:220]}"
+
+    rows.append(result("Meta Description", md, meta_note, rules["Meta Description"]))
+
+    h1s = page_h1s(soup)
+    if len(h1s) == 0:
+        h1_status = FAIL
+        h1_finding = "No H1 was found on the page."
+    else:
+        h1_text = h1s[0]
+        h1_status = PASS if len(h1s) == 1 else REVIEW
+
+        if focus_keyword:
+            h1_exact = phrase_count(h1_text, focus_keyword) > 0
+            h1_semantic = semantic_overlap(focus_keyword, h1_text)
+            h1_page_topic = semantic_overlap(h1_text, body_text)
+
+            if h1_exact:
+                relation_note = "The Focus Keyword is directly represented."
+            elif h1_semantic >= 0.60:
+                relation_note = f"The Focus Keyword meaning is represented semantically at {h1_semantic:.0%} concept overlap."
+            elif h1_page_topic >= 0.60:
+                relation_note = (
+                    f"The H1 strongly represents the article topic at {h1_page_topic:.0%} concept overlap."
+                )
+            else:
+                h1_status = REVIEW
+                relation_note = (
+                    f"The H1 has weak semantic representation of the Focus Keyword ({h1_semantic:.0%}) "
+                    f"and article topic ({h1_page_topic:.0%})."
+                )
+        else:
+            h1_page_topic = semantic_overlap(h1_text, body_text)
+            if h1_page_topic < 0.45:
+                h1_status = REVIEW
+            relation_note = f"H1 to article semantic concept overlap is {h1_page_topic:.0%}."
+
+        count_note = (
+            "One H1 was found."
+            if len(h1s) == 1
+            else f"{len(h1s)} H1 elements were found."
+        )
+        h1_finding = f"{count_note} H1: {h1_text}. {relation_note}"
+
+    rows.append(result("H1", h1_status, h1_finding, rules["H1"]))
+
+    heading_nodes = []
+    primary_h1 = page_primary_h1(soup)
+    if primary_h1:
+        heading_nodes.append(("h1", primary_h1))
+
+    for tag in article_soup.find_all(re.compile(r"^h[2-6]$")):
+        txt = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
+        heading_nodes.append((tag.name, txt))
+
+    empty_headings = sum(1 for _, txt in heading_nodes if not txt)
+    populated = [(tag, txt) for tag, txt in heading_nodes if txt]
+    duplicate_count = len(populated) - len(set(txt.casefold() for _, txt in populated))
+
+    level_jumps = []
+    last_level = None
+    for tag, txt in populated:
+        level = int(tag[1])
+        if last_level is not None and level > last_level + 1:
+            level_jumps.append(
+                f"H{last_level} to H{level} before '{txt[:70]}'"
+            )
+        last_level = level
+
+    hs = REVIEW if empty_headings or duplicate_count >= 3 or level_jumps else PASS
+    heading_finding = (
+        f"{len(populated)} editorial headings; {empty_headings} empty; "
+        f"{duplicate_count} duplicate occurrence(s); {len(level_jumps)} hierarchy jump(s)."
+    )
+    if level_jumps:
+        heading_finding += " Examples: " + "; ".join(level_jumps[:4]) + "."
+    rows.append(result("Heading Structure", hs, heading_finding, rules["Heading Structure"]))
+
+    parsed = urlparse(desktop_r.url)
+    q = parsed.query
+    bad_chars = bool(re.search(r"\s|[<>\"{}|\\^`]", desktop_r.url))
+    if bad_chars:
+        us = FAIL
+    elif len(q) > 80 or q.count("&") >= 4:
+        us = REVIEW
+    else:
+        us = PASS
+    rows.append(result(
+        "URL Structure",
+        us,
+        f"Path: {parsed.path}" + (f" | Query: {q[:120]}" if q else ""),
+        rules["URL Structure"],
+    ))
+
+    title_for_kw = title_text(soup)
+    h1_for_kw = page_primary_h1(soup)
+    kw_assessment = keyword_repetition_assessment(
+        body_text,
+        focus_keyword,
+        secondary_keywords,
+        title=title_for_kw,
+        h1=h1_for_kw,
+        url=url,
+    )
+    target_note = ""
+    if kw_assessment["targets"]:
+        target_note = " Target phrases: " + "; ".join(
+            f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
+            for kw, exact, per_1000 in kw_assessment["targets"][:12]
+        ) + "."
+    rows.append(result(
+        "Keyword Stuffing",
+        kw_assessment["status"],
+        f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
+        f"({kw_assessment['density']:.1%} of two word phrases). "
+        f"{kw_assessment['reason']}{target_note}",
+        rules["Keyword Stuffing"],
+    ))
+
+
+    internal, external = extract_page_links(soup, desktop_r.url)
+
+    content_link_inventory = content_internal_link_inventory(
+        article_soup,
+        desktop_r.url,
+    )
+
+    content_internal_urls = unique_http_urls([
+        item["url"]
+        for item in content_link_inventory
+        if item.get("is_internal")
+    ])
+
+    if internal_validation is None:
+        internal_validation = validate_url_set(
+            content_internal_urls,
+            timeout=INTERNAL_LINK_CHECK_TIMEOUT,
+            workers=INTERNAL_LINK_CHECK_WORKERS,
+        )
+
+    internal_issues = internal_link_issues(
+        content_link_inventory,
+        internal_validation,
+    )
+
+    internal_status = REVIEW if internal_issues else PASS
+    internal_finding = internal_link_issue_text(internal_issues)
+
+    if internal_issues:
+        internal_action = "Fix only the editorial body links listed in Result."
+    else:
+        internal_action = ""
+
+    rows.append(result(
+        "Internal Links",
+        internal_status,
+        internal_finding,
+        rules["Internal Links"],
+        internal_action,
+    ))
+
+    if external_validation is None:
+        external_validation = validate_url_set(
+            external,
+            timeout=LINK_CHECK_TIMEOUT,
+            workers=LINK_CHECK_WORKERS,
+        )
+
+    external_classified = classify_link_validation(external_validation)
+    external_problem_items = (
+        external_classified["broken"]
+        + external_classified["server_errors"]
+        + external_classified["restricted"]
+        + external_classified["unreachable"]
+    )
+
+    if not external:
+        external_status = PASS
+        external_finding = "No external HTTP links were found."
+    elif external_problem_items:
+        external_status = REVIEW
+        external_problems = validation_problem_examples({
+            "broken": external_classified["broken"],
+            "server_errors": external_classified["server_errors"],
+            "restricted": external_classified["restricted"],
+            "unreachable": external_classified["unreachable"],
+        })
+        external_finding = (
+            f"{len(external_classified['checked'])} unique external links were requested. "
+            f"{len(external_classified['working'])} resolved successfully. "
+            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected automated access restrictions. "
+            "Problems requiring review: " + "; ".join(external_problems) + "."
+        )
+    else:
+        external_status = PASS
+        external_finding = (
+            f"{len(external_classified['checked'])} unique external HTTP links were requested. "
+            f"{len(external_classified['working'])} resolved directly. "
+            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected login or anti bot responses and were not treated as broken. "
+            f"{len(external_classified['redirected'])} redirected to a working final destination."
+        )
+    rows.append(result("External Links", external_status, external_finding, rules["External Links"]))
+
+    image_inventory = meaningful_image_inventory(
+        soup,
+        desktop_r.url,
+        resource_validation=resource_validation,
+    )
+
+    if image_inventory["issues"]:
+        image_status = REVIEW
+
+        simple_image_issues = []
+        for issue in image_inventory["issues"][:10]:
+            cleaned = issue
+
+            if issue.startswith("Meaningful image has empty alt text: "):
+                url_value = issue.split(": ", 1)[1]
+                cleaned = f"{url_value} | Issue: Empty alt text"
+
+            elif issue.startswith("Meaningful image missing alt attribute: "):
+                url_value = issue.split(": ", 1)[1]
+                cleaned = f"{url_value} | Issue: Missing alt attribute"
+
+            elif issue.startswith("Meaningful image resource problem: "):
+                rest = issue.split(": ", 1)[1]
+                cleaned = f"{rest} | Issue: Broken image resource"
+
+            simple_image_issues.append(cleaned)
+
+        image_finding = "\n".join(simple_image_issues)
+        image_action = "Fix only the images listed in Result."
+    else:
+        image_status = PASS
+        image_finding = "No image issues found inside the article content."
+        image_action = ""
+
+    rows.append(result(
+        "Images",
+        image_status,
+        image_finding,
+        rules["Images"],
+        image_action,
+    ))
+
+    jsonld, json_errors = parse_jsonld(soup)
+    article_objects = article_schema_objects(jsonld)
+    visible_title = title_text(soup)
+    visible_h1 = page_primary_h1(soup)
+    sd = PASS
+    schema_notes = []
+
+    if json_errors:
+        sd = REVIEW
+        schema_notes.append(f"{json_errors} JSON LD parse error(s) detected.")
+    if not jsonld:
+        sd = REVIEW
+        schema_notes.append("No valid JSON LD block was found.")
+    elif not article_objects and word_count(body_text) >= 300:
+        sd = REVIEW
+        schema_notes.append(
+            f"{len(jsonld)} JSON LD block(s) are parseable, but no Article, BlogPosting or NewsArticle type was identified for this editorial page."
+        )
+    else:
+        schema_notes.append(
+            f"{len(jsonld)} valid JSON LD block(s); {len(article_objects)} article type schema object(s)."
+        )
+
+    if article_objects:
+        obj = article_objects[0]
+        headline = obj.get("headline")
+        if isinstance(headline, str) and headline.strip():
+            headline_score = max(
+                semantic_overlap(headline, visible_title),
+                semantic_overlap(headline, visible_h1),
+                keyword_overlap(headline, visible_title),
+                keyword_overlap(headline, visible_h1),
+            )
+            if headline_score < 0.45:
+                sd = REVIEW
+                schema_notes.append(
+                    f"Schema headline has weak agreement with visible title and H1 ({headline_score:.0%})."
+                )
+            else:
+                schema_notes.append(
+                    f"Schema headline agrees with visible page topic at {headline_score:.0%}."
+                )
+
+        schema_urls = [
+            normalized_link_url(value, desktop_r.url)
+            for value in schema_object_urls(obj)
+        ]
+        schema_urls = [u for u in schema_urls if u]
+        if schema_urls:
+            if not any(
+                normalized_destination(u) == normalized_destination(desktop_r.url)
+                for u in schema_urls
+            ):
+                sd = REVIEW
+                schema_notes.append(
+                    "Article schema URL or mainEntityOfPage does not match the preferred final page URL."
+                )
+
+    rows.append(result("Structured Data", sd, " ".join(schema_notes), rules["Structured Data"]))
+
+    published = [
+        str(value)
+        for value in get_schema_values(jsonld, "datePublished")
+        if isinstance(value, (str, int, float))
+    ]
+    modified = [
+        str(value)
+        for value in get_schema_values(jsonld, "dateModified")
+        if isinstance(value, (str, int, float))
+    ]
+    visible_dates = visible_date_signals(soup)
+
+    published_status = PASS if published else REVIEW
+    published_notes = [
+        f"Schema datePublished: {published[:3] if published else 'not found'}."
+    ]
+    if visible_dates["published"]:
+        published_notes.append(f"Visible or metadata published dates: {visible_dates['published'][:3]}.")
+        if published:
+            diffs = [
+                datetime_difference_hours(published[0], value)
+                for value in visible_dates["published"]
+            ]
+            diffs = [d for d in diffs if d is not None]
+            if diffs and min(diffs) > 24:
+                published_status = REVIEW
+                published_notes.append("Publication date signals differ by more than 24 hours.")
+    rows.append(result("datePublished", published_status, " ".join(published_notes), rules["datePublished"]))
+
+    modified_status = PASS if modified else REVIEW
+    modified_notes = [
+        f"Schema dateModified: {modified[:3] if modified else 'not found'}."
+    ]
+    if visible_dates["modified"]:
+        modified_notes.append(f"Visible or metadata modified dates: {visible_dates['modified'][:3]}.")
+
+    sitemap_lastmod = sitemap_result.get("lastmod") if sitemap_result else ""
+    if sitemap_lastmod:
+        modified_notes.append(f"Sitemap lastmod: {sitemap_lastmod}.")
+        if modified:
+            diff = datetime_difference_hours(modified[0], sitemap_lastmod)
+            if diff is not None and diff > 24:
+                modified_status = REVIEW
+                modified_notes.append("Schema dateModified and sitemap lastmod differ by more than 24 hours.")
+
+    http_last_modified = desktop_r.headers.get("Last-Modified") or desktop_r.headers.get("last-modified")
+    if http_last_modified:
+        modified_notes.append(f"HTTP Last Modified: {http_last_modified}.")
+        if modified:
+            diff = datetime_difference_hours(modified[0], http_last_modified)
+            if diff is not None and diff > 24:
+                modified_status = REVIEW
+                modified_notes.append(
+                    "HTTP Last Modified differs materially from the editorial modification date. "
+                    "This is a technical freshness inconsistency, not a spam violation."
+                )
+
+    if visible_dates["modified"] and modified:
+        diffs = [
+            datetime_difference_hours(modified[0], value)
+            for value in visible_dates["modified"]
+        ]
+        diffs = [d for d in diffs if d is not None]
+        if diffs and min(diffs) > 24:
+            modified_status = REVIEW
+            modified_notes.append("Visible modified date and schema dateModified differ by more than 24 hours.")
+
+    if modified_status == REVIEW:
+        modified_action = (
+            "Check what generates the HTTP Last Modified header. If it changes because of cache, deployment, template regeneration or server behaviour rather than an editorial update, "
+            "fix the backend header logic or stop emitting a misleading Last Modified value. Keep schema dateModified and sitemap lastmod tied to real editorial changes."
+        )
+    else:
+        modified_action = ""
+
+    rows.append(result(
+        "dateModified",
+        modified_status,
+        " ".join(modified_notes),
+        rules["dateModified"],
+        modified_action,
+    ))
+
+    if sitemap_result is None:
+        sitemap_result = find_url_in_sitemaps(desktop_r.url)
+
+    if sitemap_result["found"]:
+        ss = PASS
+        sf = (
+            f"Preferred URL found in sitemap: {sitemap_result['found_in']}. "
+            f"Sitemap files checked: {len(sitemap_result['checked'])}. "
+            f"Child sitemap references discovered: {sitemap_result['child_count']}. "
+            f"Sitemap stage time: {sitemap_result.get('elapsed', 0):.1f} seconds."
+        )
+        if sitemap_result.get("lastmod"):
+            sf += f" Sitemap lastmod: {sitemap_result['lastmod']}."
+    elif sitemap_result["accessible"] > 0 and sitemap_result["complete"]:
+        ss = REVIEW
+        sf = (
+            "Accessible sitemap files were fully inspected but the preferred URL was not found. "
+            f"Sitemap files checked: {len(sitemap_result['checked'])}. "
+            f"Child sitemap references discovered: {sitemap_result['child_count']}."
+        )
+    elif sitemap_result["accessible"] > 0:
+        ss = REVIEW
+        if sitemap_result.get("stopped_by_budget"):
+            stop_reason = f"the {SITEMAP_TIME_BUDGET} second sitemap time budget was reached"
+        elif sitemap_result.get("stopped_by_limit"):
+            stop_reason = f"the {SITEMAP_MAX_FILES} sitemap file audit limit was reached"
+        else:
+            stop_reason = "the sitemap inspection could not process every discovered file"
+        sf = (
+            f"Sitemap inspection was incomplete because {stop_reason}. "
+            f"Sitemap files checked: {len(sitemap_result['checked'])}. "
+            f"Child sitemap references discovered: {sitemap_result['child_count']}. "
+            f"Sitemap stage time: {sitemap_result.get('elapsed', 0):.1f} seconds."
+        )
+    else:
+        ss = REVIEW
+        sf = (
+            "No accessible XML sitemap could be confirmed from robots.txt or common sitemap locations. "
+            f"Endpoints attempted: {len(sitemap_result['checked'])}."
+        )
+    rows.append(result("Sitemap", ss, sf, rules["Sitemap"]))
+
+    mobile_text = main_content_text(soup_of(mobile_r.text))
+    sm = similarity(body_text, mobile_text)
+    rows.append(result(
+        "Mobile Content",
+        PASS if sm >= .80 else REVIEW,
+        f"Desktop and mobile main content similarity: {sm:.0%}.",
+        rules["Mobile Content"],
+    ))
+
+    script_count = len(soup.find_all("script"))
+    wc = word_count(body_text)
+    if wc < 150 and script_count >= 20:
+        jr = REVIEW
+        jf = f"Only {wc} extracted words with {script_count} scripts; rendered content verification is recommended."
+    else:
+        jr = PASS
+        jf = (
+            f"{wc} meaningful article words were already present in initial HTML with {script_count} scripts. "
+            "No obvious empty HTML shell pattern was detected."
+        )
+    rows.append(result("JavaScript Rendering", jr, jf, rules["JavaScript Rendering"]))
+
+    resource_urls = extract_resource_urls(soup, desktop_r.url)
+    mixed_content = [
+        u for u in resource_urls
+        if parsed.scheme == "https" and urlparse(u).scheme == "http"
+    ]
+    if parsed.scheme != "https":
+        https_status = FAIL
+        https_finding = f"Preferred page scheme is {parsed.scheme}, not HTTPS."
+    elif mixed_content:
+        https_status = REVIEW
+        https_finding = (
+            f"Preferred page uses HTTPS, but {len(mixed_content)} HTTP render resource(s) create potential mixed content. "
+            f"Examples: {', '.join(mixed_content[:4])}."
+        )
+    else:
+        https_status = PASS
+        https_finding = "Preferred page and discovered render resources use HTTPS without detected mixed content."
+    rows.append(result("HTTPS", https_status, https_finding, rules["HTTPS"]))
+
+    if resource_validation is None:
+        resource_validation = validate_url_set(
+            resource_urls,
+            timeout=RESOURCE_CHECK_TIMEOUT,
+            workers=RESOURCE_CHECK_WORKERS,
+        )
+
+    resource_problems = validation_problem_examples(resource_validation)
+    if not resource_urls:
+        resource_status = REVIEW
+        resource_finding = "No image, stylesheet, font preload or JavaScript resource URLs were discovered."
+    elif resource_problems:
+        resource_status = REVIEW
+        resource_finding = (
+            f"{len(resource_validation['checked'])} unique render resource URLs were requested. "
+            f"{len(resource_validation['working'])} resolved successfully. "
+            "Problems: " + "; ".join(resource_problems) + "."
+        )
+    else:
+        resource_status = PASS
+        resource_finding = (
+            f"All {len(resource_validation['checked'])} unique image, stylesheet, font preload and JavaScript resource URLs resolved successfully."
+        )
+    rows.append(result("Broken Resources", resource_status, resource_finding, rules["Broken Resources"]))
+
+    return rows
+
+
+def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=None):
+    rows = []
+    rules = dict(CONTENT_RULES)
+    secondary_keywords = secondary_keywords or []
+
+    article_soup = main_content_node(soup)
+    body_text = clean_text(article_soup)
+
+    title = title_text(soup)
+    h1 = page_primary_h1(soup)
+    wc = word_count(body_text)
+    target_topic = focus_keyword or title or h1
+
+    intent_overlap = max(
+        keyword_overlap(target_topic, body_text),
+        semantic_overlap(target_topic, body_text),
+    )
+    if intent_overlap >= .65:
+        s = PASS
+    elif intent_overlap >= .35:
+        s = REVIEW
+    else:
+        s = FAIL
+    intent_label = f"focus keyword ‘{focus_keyword}’" if focus_keyword else "title topic"
+    rows.append(result(
+        "Search Intent",
+        s,
+        f"Meaning or terms from the {intent_label} are represented in the article at {intent_overlap:.0%} topic agreement.",
+        rules["Search Intent"],
+    ))
+
+    content_sections = heading_sections(article_soup)
+    headings = [item["heading"] for item in content_sections]
+
+    weak_sections = []
+    for item in content_sections:
+        heading_score = semantic_overlap(target_topic, item["heading"])
+        section_score = semantic_overlap(target_topic, item["section"]) if item["section"] else 0.0
+
+        if is_faq_heading(item["heading"]):
+            if not faq_section_relevant(item["section"], target_topic):
+                weak_sections.append(item["heading"])
+            continue
+
+        if entity_heading_context_relevant(item["heading"], item["section"], target_topic):
+            continue
+
+        if heading_score < 0.20 and section_score < 0.35:
+            weak_sections.append(item["heading"])
+
+    if content_sections:
+        weak_share = len(weak_sections) / len(content_sections)
+        rel_status = FAIL if weak_share > 0.65 else REVIEW if weak_share > 0.45 else PASS
+        rel_finding = (
+            f"{len(weak_sections)} of {len(content_sections)} H2 to H4 sections remain weakly related "
+            "after heading hierarchy, entity context and FAQ content analysis."
+        )
+        if weak_sections:
+            rel_finding += " Weak sections: " + "; ".join(weak_sections[:6]) + "."
+    else:
+        rel_status = PASS
+        rel_finding = "No H2 to H4 sections were available; no unrelated section pattern was detected."
+    rows.append(result("Content Relevance", rel_status, rel_finding, rules["Content Relevance"]))
+
+    thin_status = PASS if wc >= 600 else REVIEW if wc >= 300 else FAIL
+    rows.append(result("Thin Content", thin_status, f"{wc:,} extracted meaningful article words.", rules["Thin Content"]))
+
+    value_signals = {
+        "tables": len(article_soup.find_all("table")),
+        "lists": len(article_soup.find_all(["ul", "ol"])),
+        "numbers": len(re.findall(r"\b\d+(?:[.,]\d+)?%?\b", body_text)),
+        "headings": len(content_sections),
+    }
+    if wc >= 800 and (
+        value_signals["tables"]
+        or value_signals["numbers"] >= 12
+        or value_signals["lists"] >= 3
+    ):
+        ov = PASS
+        of = (
+            f"Internal useful value signals: {value_signals['tables']} table(s), "
+            f"{value_signals['lists']} list(s), {value_signals['numbers']} numeric references and "
+            f"{value_signals['headings']} structured sections. "
+            "External originality comparison is separate."
+        )
+    else:
+        ov = REVIEW
+        of = (
+            "The page has limited internal evidence of added value. "
+            f"Signals: {value_signals}. External or site comparison may still be required."
+        )
+    rows.append(result("Original Value", ov, of, rules["Original Value"]))
+
+    claim_examples = factual_claim_examples(article_soup, url, limit=20)
+    if claim_examples:
+        supported_items = [item for item in claim_examples if item.get("supported")]
+        unsupported_items = [item for item in claim_examples if not item.get("supported")]
+        factual_status = REVIEW
+
+        factual_finding = (
+            f"{len(claim_examples)} concrete factual or numeric statement(s) were sampled. "
+            f"{len(supported_items)} have nearby visible attribution or a source link; "
+            f"{len(unsupported_items)} do not have nearby visible support. "
+        )
+
+        if unsupported_items:
+            factual_finding += (
+                "Unsupported examples: "
+                + " | ".join(item["claim"] for item in unsupported_items[:6])
+                + "."
+            )
+        else:
+            factual_finding += (
+                "All sampled statements have a nearby source or attribution, but the system still requires external or first party verification before confirming factual truth."
+            )
+
+        factual_actions = []
+        targets = unsupported_items if unsupported_items else claim_examples[:6]
+        for item in targets[:8]:
+            factual_actions.append(compact_claim_action(item["claim"]))
+
+        factual_action = " || ".join(factual_actions)
+    else:
+        factual_status = PASS
+        factual_finding = "No high confidence factual or numeric statement was extracted that requires separate verification."
+        factual_action = ""
+
+    rows.append(result(
+        "Factual Accuracy",
+        factual_status,
+        factual_finding,
+        rules["Factual Accuracy"],
+        factual_action,
+    ))
+
+    year_contexts = contextual_old_years(body_text)
+    risky_years = [item for item in year_contexts if item["sensitive"]]
+    uncertain_years = [
+        item for item in year_contexts
+        if not item["sensitive"] and item["classification"] == "Context needs review"
+    ]
+
+    freshness_date = latest_editorial_datetime(soup)
+    freshness_days = None
+    if freshness_date is not None:
+        freshness_days = max(
+            0,
+            (datetime.now(timezone.utc) - freshness_date).total_seconds() / 86400,
+        )
+
+    time_sensitive = looks_time_sensitive(body_text)
+
+    if risky_years:
+        od = REVIEW
+        examples = " | ".join(
+            f"{item['year']}: {item['sentence']}"
+            for item in risky_years[:5]
+        )
+        odf = (
+            f"{len(risky_years)} old year reference(s) occur inside time sensitive claims. "
+            f"Examples: {examples}"
+        )
+    elif time_sensitive and freshness_days is not None and freshness_days > 365:
+        od = REVIEW
+        odf = (
+            f"The article contains time sensitive information such as prices, rents, ROI, fees, routes or project status, "
+            f"while the latest editorial date signal is about {freshness_days:.0f} days old "
+            f"({freshness_date.isoformat()}). Verify current data."
+        )
+    elif time_sensitive and freshness_date is None:
+        od = REVIEW
+        odf = (
+            "The article contains time sensitive information, but no reliable editorial publication or modification date "
+            "was available to judge freshness."
+        )
+    elif uncertain_years:
+        od = REVIEW
+        examples = " | ".join(
+            f"{item['year']}: {item['sentence']}"
+            for item in uncertain_years[:4]
+        )
+        odf = f"Old year references need context review: {examples}"
+    elif year_contexts:
+        od = PASS
+        examples = " | ".join(
+            f"{item['year']}: {item['sentence']}"
+            for item in year_contexts[:4]
+        )
+        odf = f"Old year references appear historical or contextual rather than stale current claims. Examples: {examples}"
+    else:
+        od = PASS
+        odf = (
+            "No stale year signal was found in the isolated article body."
+            + (
+                f" Latest editorial date signal is about {freshness_days:.0f} days old."
+                if freshness_days is not None
+                else ""
+            )
+        )
+    if od == REVIEW:
+        if time_sensitive:
+            outdated_action = (
+                "Refresh the current time sensitive data in this article: prices, rents, ROI, fees, routes and project status wherever present. "
+                "Use the current approved Bayut or authoritative source, then update dateModified only after the article content is actually changed."
+            )
+        else:
+            outdated_action = "Review the old year references shown in Result and either update the current claim or make the historical context explicit."
+    else:
+        outdated_action = ""
+
+    rows.append(result(
+        "Outdated Information",
+        od,
+        odf,
+        rules["Outdated Information"],
+        outdated_action,
+    ))
+
+    kw_assessment = keyword_repetition_assessment(
+        body_text,
+        focus_keyword,
+        secondary_keywords,
+        title=title,
+        h1=h1,
+        url=url,
+    )
+    semantic_note = ""
+    if focus_keyword:
+        focus_semantic = semantic_overlap(focus_keyword, body_text)
+        semantic_note = f" Focus Keyword concept coverage in the article is {focus_semantic:.0%}."
+
+    target_note = ""
+    if kw_assessment["targets"]:
+        target_note = " Target phrase use: " + "; ".join(
+            f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
+            for kw, exact, per_1000 in kw_assessment["targets"][:12]
+        ) + "."
+
+    rows.append(result(
+        "Keyword Use",
+        kw_assessment["status"],
+        f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
+        f"({kw_assessment['density']:.1%}). {kw_assessment['reason']}{semantic_note}{target_note}",
+        rules["Keyword Use"],
+    ))
+
+    sent_ratio, repeated_sents = repeated_sentence_ratio(body_text)
+    para_ratio, repeated_paras = repeated_paragraph_ratio(article_soup)
+    rep = max(sent_ratio, para_ratio)
+    if rep >= .10:
+        rp = FAIL
+    elif rep >= .04:
+        rp = REVIEW
+    else:
+        rp = PASS
+    repetition_note = f"Estimated duplicate sentence or paragraph ratio: {rep:.1%}."
+    if repeated_sents or repeated_paras:
+        examples = (repeated_sents + repeated_paras)[:3]
+        repetition_note += " Examples: " + " | ".join(x[:180] for x in examples) + "."
+    rows.append(result("Repetition", rp, repetition_note, rules["Repetition"]))
+
+    paragraphs = [
+        p.get_text(" ", strip=True)
+        for p in article_soup.find_all("p")
+        if len(p.get_text(" ", strip=True)) >= 60
+    ]
+    if paragraphs:
+        low_specific = sum(
+            1
+            for p in paragraphs
+            if max(
+                keyword_overlap(target_topic, p),
+                semantic_overlap(target_topic, p),
+            ) < .08
+        )
+        filler_share = low_specific / len(paragraphs)
+    else:
+        filler_share = 1
+
+    filler_status = REVIEW if filler_share > .55 else PASS
+    rows.append(result(
+        "Generic / Filler Content",
+        filler_status,
+        f"{filler_share:.0%} of substantial paragraphs have very weak semantic and lexical relationship to the main topic. "
+        "This is a review signal, not proof of filler.",
+        rules["Generic / Filler Content"],
+    ))
+
+    tc = max(keyword_overlap(title, body_text), semantic_overlap(title, body_text))
+    rows.append(result(
+        "Title vs Content",
+        PASS if tc >= .55 else REVIEW if tc >= .30 else FAIL,
+        f"Title to body topic agreement: {tc:.0%}.",
+        rules["Title vs Content"],
+    ))
+
+    hc = max(keyword_overlap(h1, body_text), semantic_overlap(h1, body_text)) if h1 else 0
+    rows.append(result(
+        "H1 vs Content",
+        PASS if h1 and hc >= .55 else REVIEW if h1 else FAIL,
+        f"H1 to body topic agreement: {hc:.0%}." if h1 else "H1 missing.",
+        rules["H1 vs Content"],
+    ))
+
+    section_items = heading_sections(article_soup)
+    if section_items:
+        relevant = 0
+        contextual = 0
+        weak_examples = []
+        detail_examples = []
+
+        for item in section_items:
+            heading_score = semantic_overlap(target_topic, item["heading"])
+            section_score = semantic_overlap(target_topic, item["section"]) if item["section"] else 0.0
+
+            if is_faq_heading(item["heading"]):
+                is_relevant = faq_section_relevant(item["section"], target_topic)
+                relevance_reason = "FAQ section context"
+            elif entity_heading_context_relevant(item["heading"], item["section"], target_topic):
+                is_relevant = True
+                relevance_reason = "entity heading with related section context"
+            else:
+                is_relevant = heading_score >= 0.20 or section_score >= 0.45
+                relevance_reason = "semantic heading or section overlap"
+
+            if is_relevant:
+                relevant += 1
+                if heading_score < 0.20:
+                    contextual += 1
+                    if len(detail_examples) < 5:
+                        detail_examples.append(
+                            f"'{item['heading']}' accepted through {relevance_reason}; section topic overlap {section_score:.0%}."
+                        )
+            elif len(weak_examples) < 5:
+                weak_examples.append(
+                    f"'{item['heading']}' heading overlap {heading_score:.0%}, section overlap {section_score:.0%}"
+                )
+
+        hr = relevant / len(section_items)
+        hstatus = PASS if hr >= 0.70 else REVIEW if hr >= 0.45 else FAIL
+        hfind = (
+            f"{relevant}/{len(section_items)} H2 to H4 sections are related to the main topic. "
+            f"{contextual} section(s) were accepted through contextual relevance."
+        )
+        if detail_examples:
+            hfind += " Context examples: " + " ".join(detail_examples)
+        if weak_examples:
+            hfind += " Weakest sections: " + "; ".join(weak_examples) + "."
+    else:
+        hstatus = REVIEW
+        hfind = "No H2 to H4 headings were available for contextual heading relevance assessment."
+    rows.append(result("Heading Relevance", hstatus, hfind, rules["Heading Relevance"]))
+
+    intro_words = " ".join(tokenize(body_text)[:140])
+    intro_overlap = max(
+        keyword_overlap(target_topic, intro_words),
+        semantic_overlap(target_topic, intro_words),
+    )
+    iq = PASS if intro_overlap >= .45 else REVIEW
+    rows.append(result(
+        "Introduction Quality",
+        iq,
+        f"Opening 140 word topic agreement: {intro_overlap:.0%}.",
+        rules["Introduction Quality"],
+    ))
+
+    faq_pairs = faq_question_answer_pairs(article_soup)
+    faq_headers = [h for h in headings if is_faq_heading(h)]
+    if faq_headers or faq_pairs:
+        short_answers = [
+            item for item in faq_pairs
+            if word_count(item["answer"]) < 15
+        ]
+        unrelated_answers = [
+            item for item in faq_pairs
+            if item["answer"]
+            and max(
+                semantic_overlap(target_topic, item["answer"]),
+                keyword_overlap(target_topic, item["answer"]),
+            ) < .12
+        ]
+        normalized_answers = [
+            re.sub(r"\W+", " ", item["answer"].lower()).strip()
+            for item in faq_pairs
+            if item["answer"]
+        ]
+        duplicate_answers = len(normalized_answers) - len(set(normalized_answers))
+
+        if not faq_pairs and faq_headers:
+            fq = REVIEW
+            ff = "FAQ heading detected but no question and answer pairs were extracted."
+        elif short_answers or duplicate_answers >= 2 or len(unrelated_answers) > len(faq_pairs) / 2:
+            fq = REVIEW
+            ff = (
+                f"{len(faq_pairs)} FAQ pair(s); {len(short_answers)} short or empty answer(s); "
+                f"{duplicate_answers} duplicate answer occurrence(s); {len(unrelated_answers)} weakly related answer(s)."
+            )
+        else:
+            fq = PASS
+            ff = (
+                f"{len(faq_pairs)} FAQ question and answer pair(s) checked. "
+                "No empty, very short, heavily duplicated or predominantly unrelated FAQ answer pattern was detected."
+            )
+    else:
+        fq = PASS
+        ff = "No FAQ section detected; no FAQ quality issue to evaluate."
+    rows.append(result("FAQ Quality", fq, ff, rules["FAQ Quality"]))
+
+    super_claims = superlative_claim_assessment(article_soup, url)
+    unsupported_hard = [
+        item for item in super_claims
+        if item["hard"] and not item["supported"]
+    ]
+    unsupported_soft = [
+        item for item in super_claims
+        if not item["hard"] and not item["supported"]
+    ]
+
+    if unsupported_hard:
+        ss = REVIEW
+        sf = (
+            f"{len(super_claims)} superlative claim(s) detected. "
+            f"{len(unsupported_hard)} objective or ranking superlative claim(s) lack nearby attribution or a source link. "
+            "Examples: " + " | ".join(item["text"] for item in unsupported_hard[:4])
+        )
+    else:
+        ss = PASS
+        sf = (
+            f"{len(super_claims)} superlative claim(s) detected. "
+            "No hard ranking, cheapest, highest, lowest or most popular claim was found without nearby attribution or a source link."
+        )
+        if unsupported_soft:
+            sf += (
+                f" {len(unsupported_soft)} editorial soft superlative wording instance(s), such as best, "
+                "were treated as editorial framing rather than automatically unsupported factual claims."
+            )
+    if unsupported_hard:
+        super_actions = []
+        for item in unsupported_hard[:8]:
+            claim_text = item["text"]
+            super_actions.append(
+                compact_claim_action(
+                    claim_text,
+                    prefix="Support or rewrite"
+                )
+            )
+        super_action = " || ".join(super_actions)
+    else:
+        super_action = ""
+
+    rows.append(result(
+        "Unsupported Superlatives",
+        ss,
+        sf,
+        rules["Unsupported Superlatives"],
+        super_action,
+    ))
+
+    source_claims = factual_claim_examples(article_soup, url, limit=40)
+    supported = [item for item in source_claims if item.get("supported")]
+    unsupported = [item for item in source_claims if not item.get("supported")]
+
+    regulatory_terms = [
+        "law", "regulation", "visa", "fee", "fees", "rule",
+        "قانون", "قوانين", "رسوم", "تأشيرة", "تاشيرة",
+    ]
+    regulatory_unsourced = [
+        item for item in unsupported
+        if any(term in item["claim"].lower() for term in regulatory_terms)
+    ]
+
+    support_ratio = len(supported) / len(source_claims) if source_claims else 1.0
+
+    if regulatory_unsourced:
+        sq = REVIEW
+        source_targets = regulatory_unsourced
+        sf = (
+            f"{len(source_claims)} concrete source sensitive statement(s) assessed; "
+            f"{len(supported)} have nearby attribution or source links. "
+            f"{len(regulatory_unsourced)} regulatory or fee statement(s) lack visible support. "
+            "Unsupported examples: " + " | ".join(item["claim"] for item in source_targets[:6])
+        )
+    elif len(source_claims) >= 4 and support_ratio < .35:
+        sq = REVIEW
+        source_targets = unsupported
+        sf = (
+            f"{len(source_claims)} concrete source sensitive statement(s) assessed; only {len(supported)} "
+            f"({support_ratio:.0%}) have nearby attribution or source links. "
+            f"{len(unsupported)} statement(s) need stronger local sourcing. "
+            "Unsupported examples: " + " | ".join(item["claim"] for item in source_targets[:6])
+        )
+    else:
+        sq = PASS
+        source_targets = []
+        sf = (
+            f"{len(source_claims)} concrete source sensitive statement(s) assessed; {len(supported)} "
+            f"({support_ratio:.0%} if statements exist) have nearby visible attribution or source links. "
+            "Source Quality is based on statement level support, not raw external link count."
+        )
+
+    if sq == REVIEW:
+        source_actions = [
+            compact_claim_action(item["claim"], prefix="Add source beside")
+            for item in source_targets[:10]
+        ]
+        source_action = " || ".join(source_actions)
+    else:
+        source_action = ""
+
+    rows.append(result(
+        "Source Quality",
+        sq,
+        sf,
+        rules["Source Quality"],
+        source_action,
+    ))
+
+    conflicts = numeric_statement_conflicts(article_soup)
+    percents = re.findall(r"\b\d+(?:\.\d+)?%", body_text)
+    if conflicts:
+        data_status = REVIEW
+        data_finding = (
+            f"{len(conflicts)} possible internal numeric contradiction(s) were detected where substantially the same statement "
+            "appears with different values. Examples: "
+            + " | ".join(
+                f"{item['statement']} | previous values {item['previous_values']} | current values {item['current_values']}"
+                for item in conflicts[:5]
+            )
+        )
+        data_action = " || ".join(
+            f"Check and correct: {item['statement']} | choose the verified value between previous {item['previous_values']} and current {item['current_values']}."
+            for item in conflicts[:8]
+        )
+    else:
+        data_status = PASS
+        data_finding = (
+            f"No repeated statement template with conflicting numeric values was detected. "
+            f"{len(percents)} percentage reference(s) were found. "
+            "This checks internal consistency only; external data verification remains part of Factual Accuracy."
+        )
+        data_action = ""
+
+    rows.append(result(
+        "Data Accuracy",
+        data_status,
+        data_finding,
+        rules["Data Accuracy"],
+        data_action,
+    ))
+
+    entities = entity_candidates(article_soup)
+    near_duplicates = near_duplicate_entities(entities)
+
+    if entities:
+        entity_status = REVIEW
+        entity_finding = (
+            f"{len(entities)} normalized entity candidate(s) were extracted and require external or first party verification. "
+            f"Examples: {', '.join(entities[:10])}."
+        )
+
+        if near_duplicates:
+            duplicate_parts = []
+            for item in near_duplicates[:5]:
+                left_key = entity_similarity_key(item["left"])
+                right_key = entity_similarity_key(item["right"])
+                likely_typo = (
+                    len(left_key.split()) == len(right_key.split())
+                    and item["similarity"] >= 0.90
+                )
+                label = "possible typo" if likely_typo else "possible naming variation"
+                duplicate_parts.append(
+                    f"{item['left']} vs {item['right']} "
+                    f"({item['similarity']:.0%} spelling similarity; {label})"
+                )
+            entity_finding += (
+                " Possible near duplicate entity spellings should be checked: "
+                + " | ".join(duplicate_parts)
+                + "."
+            )
+        else:
+            entity_finding += " No suspicious near duplicate entity spelling was detected internally."
+    else:
+        entity_status = PASS
+        entity_finding = "No clear named entity candidate requiring separate verification was extracted."
+    if entity_status == REVIEW:
+        entity_actions = []
+        if near_duplicates:
+            for item in near_duplicates[:8]:
+                entity_actions.append(
+                    f"Verify official name and standardize this pair: {item['left']} vs {item['right']}."
+                )
+        else:
+            for entity in entities[:10]:
+                entity_actions.append(
+                    f"Verify official first party name: {entity}."
+                )
+        entity_action = " || ".join(entity_actions)
+    else:
+        entity_action = ""
+
+    rows.append(result(
+        "Entity Accuracy",
+        entity_status,
+        entity_finding,
+        rules["Entity Accuracy"],
+        entity_action,
+    ))
+
+    sentences = re.split(r"(?<=[.!?؟])\s+", body_text)
+    lens = [len(tokenize(s)) for s in sentences if len(tokenize(s)) >= 3]
+    avg = sum(lens) / len(lens) if lens else 0
+    malformed = sum(
+        1 for s in sentences
+        if len(s.strip()) > 180 and not re.search(r"[.!?؟]$", s.strip())
+    )
+    gr = REVIEW if avg > 32 or malformed >= 4 else PASS
+    rows.append(result(
+        "Grammar / Readability",
+        gr,
+        f"Average sentence length: {avg:.1f} words; {malformed} unusually long or potentially malformed sentence fragment(s). "
+        "This is a readability heuristic, not a full grammar proof.",
+        rules["Grammar / Readability"],
+    ))
+
+    placeholders = [
+        p for p in [
+            "lorem ipsum", "todo", "tbd", "[insert", "placeholder",
+            "coming soon", "xx", "xxx",
+        ]
+        if p in body_text.lower()
+    ]
+    empty_heads = sum(
+        1 for h in article_soup.find_all(re.compile(r"^h[1-6]$"))
+        if not h.get_text(" ", strip=True)
+    )
+    _, repeated_paras = repeated_paragraph_ratio(article_soup)
+    if placeholders:
+        bc = FAIL
+    elif empty_heads or repeated_paras:
+        bc = REVIEW
+    else:
+        bc = PASS
+
+    rows.append(result(
+        "Broken Content",
+        bc,
+        f"Placeholder indicators: {placeholders if placeholders else 'none'}; "
+        f"empty editorial headings: {empty_heads}; repeated substantial paragraph templates: {len(repeated_paras)}.",
+        rules["Broken Content"],
+    ))
+
+    return rows
+
+# -----------------------------
+# UI
+# -----------------------------
+
+ICON_SEARCH_CHECK = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="10.8" cy="10.8" r="6.7" stroke="currentColor" stroke-width="1.8"/>
+  <path d="M15.6 15.6L20.1 20.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M7.8 10.7L10 12.8L14.2 8.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+ICON_SHIELD = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 3L19 5.8V11.2C19 15.5 16.1 19.1 12 21C7.9 19.1 5 15.5 5 11.2V5.8L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M9 11.8L11.1 13.9L15.3 9.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+ICON_SEARCH = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="10.8" cy="10.8" r="6.4" stroke="currentColor" stroke-width="1.8"/>
+  <path d="M15.6 15.6L20.1 20.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+</svg>
+"""
+ICON_DOC = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M6 3.8H14L18 7.8V20.2H6V3.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  <path d="M14 3.8V8H18" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  <path d="M9 12H15M9 15.5H15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+</svg>
+"""
+ICON_LINK = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M9.6 14.4L14.4 9.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M7.7 16.3L6.2 17.8C4.5 19.5 1.8 19.5.2 17.8C-1.5 16.2-1.5 13.5.2 11.8L3.4 8.6C5.1 6.9 7.8 6.9 9.5 8.6" transform="translate(4 0)" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M16.3 7.7L17.8 6.2C19.5 4.5 22.2 4.5 23.8 6.2C25.5 7.8 25.5 10.5 23.8 12.2L20.6 15.4C18.9 17.1 16.2 17.1 14.5 15.4" transform="translate(-4 0)" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+</svg>
+"""
+ICON_LIST = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M6 7H18M6 12H15M6 17H13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="17.2" cy="16.6" r="2.3" stroke="currentColor" stroke-width="1.6"/>
+  <path d="M18.9 18.3L20.4 19.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+</svg>
+"""
+ICON_CHART = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M5 19V12M10 19V8M15 19V14M20 19V5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+</svg>
+"""
+ICON_BADGE = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 3L14.2 5.1L17.2 4.8L18.2 7.7L21 9L19.9 11.9L21 14.8L18.2 16.1L17.2 19L14.2 18.7L12 21L9.8 18.7L6.8 19L5.8 16.1L3 14.8L4.1 11.9L3 9L5.8 7.7L6.8 4.8L9.8 5.1L12 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M8.8 12L11 14.2L15.5 9.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+ICON_HOME = """
+<svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="14" cy="14" r="11.5" stroke="currentColor" stroke-width="2.2"/>
+  <path d="M8.5 13.2L14 8.6L19.5 13.2V19H9V13.2" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>
+  <path d="M12 19V15H16V19" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>
+</svg>
+"""
+
+with st.sidebar:
+    st.markdown(
+        f"""
+        <div class="side-brand">{ICON_HOME}<span>bayut</span></div>
+        <div class="side-title">Audit Structure</div>
+        <div class="nav-card active">
+          <div class="nav-icon">{ICON_SHIELD}</div>
+          <div><div class="nav-name">Spam Check</div><div class="nav-desc">Google spam risk patterns</div></div>
+        </div>
+        <div class="nav-card">
+          <div class="nav-icon">{ICON_SEARCH}</div>
+          <div><div class="nav-name">SEO Check</div><div class="nav-desc">Crawling, indexing and<br>on page signals</div></div>
+        </div>
+        <div class="nav-card">
+          <div class="nav-icon">{ICON_DOC}</div>
+          <div><div class="nav-name">Content Check</div><div class="nav-desc">Usefulness, relevance,<br>accuracy and quality</div></div>
+        </div>
+        <div class="side-divider"></div>
+        <div class="side-note"><strong>ⓘ</strong>&nbsp;&nbsp;Rule thresholds in this app are internal auditing heuristics unless the rule explicitly describes a Google spam-policy condition.</div>
+        <div class="engine-proof"><strong>Engine {APP_VERSION}</strong><br>Build {ENGINE_BUILD}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    show_rules = st.checkbox("Show rule library", value=False)
+
+    if st.button("Clear audit cache", use_container_width=True):
+        for fn in [
+            _robots_sitemaps_cached,
+            _fetch_sitemap_document_cached,
+            _find_url_in_sitemaps_cached,
+            _rendered_hidden_inventory_cached,
+            _probe_http_url_cached,
+            _robots_access_cached,
+        ]:
+            try:
+                fn.cache_clear()
+            except Exception:
+                pass
+
+        for key in [
+            "article_url",
+            "focus_keyword",
+            "secondary_keywords",
+        ]:
+            if key in st.session_state:
+                # Keep user input; only network and analysis caches are cleared.
+                pass
+
+        st.success(f"{APP_VERSION} audit cache cleared.")
+
+st.markdown(
+    """
+    <div class="utility-row">
+      <div class="utility-btn">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 16V4M8 8L12 4L16 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 13V19H19V13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Share
+      </div>
+      <div class="utility-btn icon-only"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3.8L14.4 8.7L19.8 9.5L15.9 13.3L16.8 18.7L12 16.2L7.2 18.7L8.1 13.3L4.2 9.5L9.6 8.7L12 3.8Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+      <div class="utility-btn icon-only"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.6"/><path d="M8.3 15.3C9 16.1 9.7 16.3 10.6 16.4V14.9C9.2 14.5 8.7 13.4 8.7 12.2C8.7 11.4 9 10.6 9.7 10C9.5 9.4 9.6 8.8 9.8 8.3C10.4 8.3 11 8.6 11.4 8.9C11.8 8.8 12.2 8.8 12.6 8.9C13 8.6 13.6 8.3 14.2 8.3C14.4 8.8 14.5 9.4 14.3 10C15 10.6 15.3 11.4 15.3 12.2C15.3 13.4 14.8 14.5 13.4 14.9V16.4C14.3 16.3 15 16.1 15.7 15.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+      <div class="utility-btn icon-only"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5.5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="18.5" r="1.5"/></svg></div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    f"""
+    <div class="hero-card">
+      <div class="hero-left">
+        <div class="hero-icon">{ICON_SEARCH_CHECK}</div>
+        <div>
+          <div class="hero-title"><span class="bayut-word">bayut</span> URL Quality Auditor</div>
+          <div class="hero-sub">Single URL checks for Spam, SEO and Content quality</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center"><div class="version-chip">{APP_VERSION}</div><div class="audit-pill">URL by URL audit</div></div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown('<div class="url-shell"><div class="url-label">Article URL</div>', unsafe_allow_html=True)
+url_col, btn_col = st.columns([5.25, 1.35], gap="medium")
+with url_col:
+    url_input = st.text_input(
+        "Article URL",
+        placeholder="https://www.bayut.com/area-guides/damac-hills-akoya-damac/",
+        label_visibility="collapsed",
+        key="article_url",
+    )
+with btn_col:
+    run = st.button("▶  Run URL Audit", type="primary", use_container_width=True)
+
+kw_col, secondary_col = st.columns([1, 1], gap="medium")
+with kw_col:
+    st.markdown('<div class="field-label">Focus Keyword</div>', unsafe_allow_html=True)
+    focus_keyword_input = st.text_input(
+        "Focus Keyword",
+        placeholder="e.g. DAMAC Hills",
+        label_visibility="collapsed",
+        key="focus_keyword",
+    )
+    st.markdown('<div class="field-help">Primary keyword the page should target.</div>', unsafe_allow_html=True)
+with secondary_col:
+    st.markdown('<div class="field-label">Secondary Keywords</div>', unsafe_allow_html=True)
+    secondary_keywords_input = st.text_input(
+        "Secondary Keywords",
+        placeholder="e.g. DAMAC Hills villas, living in DAMAC Hills, Akoya by DAMAC",
+        label_visibility="collapsed",
+        key="secondary_keywords",
+    )
+    st.markdown('<div class="field-help">Separate multiple keywords with commas.</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# This placeholder is intentionally above the Rule Library so long audits
+# always show visible progress instead of making the page appear frozen.
+audit_status_slot = st.empty()
+
+if show_rules:
+    st.markdown('<div class="section-heading">Rule Library</div>', unsafe_allow_html=True)
+    for label, rules in [("Spam", SPAM_RULES), ("SEO", SEO_RULES), ("Content", CONTENT_RULES)]:
+        with st.expander(f"{label} rules ({len(rules)})"):
+            for i, (name, rule) in enumerate(rules, 1):
+                method = SYSTEM_USES.get(name, "Rule based page analysis")
+                st.markdown(f"**{i}. {name}**  \n**What the System Uses:** {method}  \n**Rule:** {rule}")
+
+if run:
+    url = normalize_url(url_input)
+    focus_keyword = re.sub(r"\s+", " ", (focus_keyword_input or "")).strip()
+    secondary_keywords = parse_keywords(secondary_keywords_input)
+    if not url:
+        st.error("Enter a URL first.")
+        st.stop()
+
+    try:
+        audit_started = time.time()
+        audit_status = audit_status_slot.status(
+            "Running URL audit",
+            expanded=True,
+        )
+
+        audit_status.write(f"{APP_VERSION}  1 of 4  Fetching Desktop, Mobile and Googlebot versions in parallel")
+        (
+            desktop_r,
+            desktop_elapsed,
+            mobile_r,
+            mobile_elapsed,
+            bot_r,
+            bot_elapsed,
+        ) = fetch_page_variants(url)
+
+        soup = soup_of(desktop_r.text)
+        body_text = main_content_text(soup)
+
+        # Separate read trees for parallel workers.
+        spam_soup = soup_of(desktop_r.text)
+        content_soup = soup_of(desktop_r.text)
+
+        audit_status.write(
+            f"Page variants fetched in parallel. "
+            f"Desktop {desktop_elapsed:.2f}s, Mobile {mobile_elapsed:.2f}s, Googlebot {bot_elapsed:.2f}s"
+        )
+
+        page_internal_urls, external_urls = extract_page_links(soup, desktop_r.url)
+        article_soup_for_links = main_content_node(soup)
+        internal_urls = content_internal_link_urls(
+            article_soup_for_links,
+            desktop_r.url,
+        )
+        resource_urls = extract_resource_urls(soup, desktop_r.url)
+
+        audit_status.write(
+            "2 of 4  Running Spam, Content, Sitemap, Robots, Internal Link, External Link and Resource checks in parallel"
+        )
+
+        parallel_results = {}
+        with ThreadPoolExecutor(max_workers=7) as executor:
+            futures = {
+                executor.submit(
+                    audit_spam,
+                    url,
+                    desktop_r,
+                    mobile_r,
+                    bot_r,
+                    spam_soup,
+                    body_text,
+                    focus_keyword,
+                    secondary_keywords,
+                ): "Spam",
+                executor.submit(
+                    audit_content,
+                    url,
+                    content_soup,
+                    body_text,
+                    focus_keyword,
+                    secondary_keywords,
+                ): "Content",
+                executor.submit(
+                    find_url_in_sitemaps,
+                    desktop_r.url,
+                    SITEMAP_MAX_FILES,
+                    SITEMAP_MAX_DEPTH,
+                ): "Sitemap",
+                executor.submit(
+                    validate_url_set,
+                    internal_urls,
+                    INTERNAL_LINK_CHECK_TIMEOUT,
+                    INTERNAL_LINK_CHECK_WORKERS,
+                ): "Internal Links",
+                executor.submit(
+                    validate_url_set,
+                    external_urls,
+                    LINK_CHECK_TIMEOUT,
+                    LINK_CHECK_WORKERS,
+                ): "External Links",
+                executor.submit(
+                    validate_url_set,
+                    resource_urls,
+                    RESOURCE_CHECK_TIMEOUT,
+                    RESOURCE_CHECK_WORKERS,
+                ): "Resources",
+                executor.submit(
+                    robots_access_result,
+                    desktop_r.url,
+                ): "Robots",
+            }
+
+            for future in as_completed(futures):
+                label = futures[future]
+                parallel_results[label] = future.result()
+
+                if label == "Sitemap":
+                    sitemap_stage = parallel_results[label]
+                    audit_status.write(
+                        f"Sitemap check completed in {sitemap_stage.get('elapsed', 0):.1f}s "
+                        f"after checking {len(sitemap_stage.get('checked', []))} sitemap file(s)"
+                    )
+                elif label == "Internal Links":
+                    audit_status.write(
+                        f"Internal link validation completed for {len(parallel_results[label].get('checked', []))} link(s)"
+                    )
+                elif label == "External Links":
+                    audit_status.write(
+                        f"External link validation completed for {len(parallel_results[label].get('checked', []))} link(s)"
+                    )
+                elif label == "Robots":
+                    audit_status.write(
+                        f"robots.txt validation completed with HTTP {parallel_results[label].get('status')}"
+                    )
+                elif label == "Resources":
+                    audit_status.write(
+                        f"Resource validation completed for {len(parallel_results[label].get('checked', []))} resource(s)"
+                    )
+                else:
+                    audit_status.write(f"{label} checks completed")
+
+        spam_rows = parallel_results["Spam"]
+        content_rows = parallel_results["Content"]
+        sitemap_result = parallel_results["Sitemap"]
+        internal_validation = parallel_results["Internal Links"]
+        external_validation = parallel_results["External Links"]
+        resource_validation = parallel_results["Resources"]
+        robots_txt_result = parallel_results["Robots"]
+
+        audit_status.write("3 of 4  Finalising SEO checks")
+        seo_rows = audit_seo(
+            url,
+            desktop_r,
+            desktop_elapsed,
+            mobile_r,
+            soup,
+            body_text,
+            focus_keyword,
+            secondary_keywords,
+            sitemap_result=sitemap_result,
+            internal_validation=internal_validation,
+            external_validation=external_validation,
+            resource_validation=resource_validation,
+            robots_txt_result=robots_txt_result,
+        )
+
+        total_audit_time = time.time() - audit_started
+        audit_status.write("4 of 4  Preparing results")
+        audit_status.update(
+            label=f"Audit completed in {total_audit_time:.1f} seconds",
+            state="complete",
+            expanded=False,
+        )
+
+        # Internal rule outcomes are retained only for engine logic.
+        # They are never shown to the user.
+        spam_status, spam_counts = classify_counts(spam_rows)
+        seo_status, seo_counts = classify_counts(seo_rows)
+        content_status, content_counts = classify_counts(content_rows)
+
+        st.markdown(
+            """
+            <div style="margin-top:18px;margin-bottom:8px;">
+              <div style="font-size:22px;font-weight:800;">Audit Results</div>
+              <div style="font-size:13px;color:#66736F;margin-top:4px;">
+                Each rule shows its status, exactly what was found, the action you need to take, and why the system reached that result.
+              </div>
             </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
+        info_cols = st.columns(3)
+        with info_cols[0]:
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                  <div class="metric-label">Spam Check</div>
+                  <div class="metric-value {status_class(spam_status)}">{spam_status}</div>
+                  <div class="metric-note">{spam_counts[PASS]} PASS · {spam_counts[REVIEW]} REVIEW · {spam_counts[FAIL]} FAIL</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with info_cols[1]:
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                  <div class="metric-label">SEO Check</div>
+                  <div class="metric-value {status_class(seo_status)}">{seo_status}</div>
+                  <div class="metric-note">{seo_counts[PASS]} PASS · {seo_counts[REVIEW]} REVIEW · {seo_counts[FAIL]} FAIL</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with info_cols[2]:
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                  <div class="metric-label">Content Check</div>
+                  <div class="metric-value {status_class(content_status)}">{content_status}</div>
+                  <div class="metric-note">{content_counts[PASS]} PASS · {content_counts[REVIEW]} REVIEW · {content_counts[FAIL]} FAIL</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
+        st.caption(
+            f"HTTP {desktop_r.status_code} · {word_count(body_text):,} extracted words · "
+            f"{desktop_elapsed:.2f}s desktop response · {len(desktop_r.history)} redirects · "
+            f"{total_audit_time:.1f}s total audit time"
+        )
 
-<p>The current <a rel="noreferrer noopener" href="https://www.bayut.com/to-rent/apartments/dubai/al-qusais/" target="_blank">rental trends in Al Qusais</a> are as follows:</p>
+        tabs = st.tabs([
+            f"Spam Check ({len(spam_rows)})",
+            f"SEO Check ({len(seo_rows)})",
+            f"Content Check ({len(content_rows)})",
+        ])
 
+        for tab, rows in zip(tabs, [spam_rows, seo_rows, content_rows]):
+            with tab:
+                public_rows = [
+                    {
+                        "Check": row["Check"],
+                        "Status": row["Status"],
+                        "Result": row["Result"],
+                        "Action Needed": row["Action Needed"],
+                        "Why": row["Why"],
+                    }
+                    for row in rows
+                ]
+                df = pd.DataFrame(public_rows)
 
+                def status_style(value):
+                    if value == "PASS":
+                        return "color: #28B16D; font-weight: 800;"
+                    if value == "REVIEW":
+                        return "color: #B7791F; font-weight: 800;"
+                    if value == "FAIL":
+                        return "color: #C53030; font-weight: 800;"
+                    return ""
 
-<ul><li>The average rent for studios in Al Qusais is AED 37k. </li><li>For renting 1-bedroom apartments in Al Qusais, you will have to pay AED 53k, on average. </li><li>Whereas for 2 and 3-bedroom apartments, the average rent rises to AED 66k and AED 89k, respectively.</li></ul>
+                styled_df = df.style.map(status_style, subset=["Status"])
 
+                st.dataframe(
+                    styled_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Check": st.column_config.TextColumn(width="medium"),
+                        "Status": st.column_config.TextColumn(width="small"),
+                        "Result": st.column_config.TextColumn(width="large"),
+                        "Action Needed": st.column_config.TextColumn(width="large"),
+                        "Why": st.column_config.TextColumn(width="large"),
+                    },
+                )
 
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
+        export = {
+            "app_version": APP_VERSION,
+            "engine_build": ENGINE_BUILD,
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "url_requested": url,
+            "url_final": desktop_r.url,
+            "focus_keyword": focus_keyword,
+            "secondary_keywords": secondary_keywords,
+            "spam": [
+                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
+                for r in spam_rows
+            ],
+            "seo": [
+                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
+                for r in seo_rows
+            ],
+            "content": [
+                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
+                for r in content_rows
+            ],
+        }
 
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/al-qusais/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/al-qusais/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Al Qusais                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
+        st.download_button(
+            "Download audit JSON",
+            data=json.dumps(export, ensure_ascii=False, indent=2),
+            file_name="url_audit_v18_7_1_clean_deploy.json",
+            mime="application/json",
+        )
+
+        with st.expander("Important interpretation notes"):
+            st.markdown(
+                """
+                This export was generated by the engine version displayed at the top of the app and stored in the JSON under app_version.
+
+                Every rule receives one of three statuses: PASS, REVIEW or FAIL.
+
+                Result shows exactly what the system found.
+
+                Why explains the data and rule used to reach that status and result.
+
+                When a rule cannot be fully verified from one URL, it can receive REVIEW and the Result explains what additional verification is required.
+
+                The Googlebot check uses a Googlebot User Agent comparison. It does not reproduce Google's full rendering and indexing infrastructure.
+
+                External plagiarism, factual accuracy, entity accuracy and site reputation abuse may require external verification.
+
+                Content word count and repetition thresholds are internal QA heuristics and are not Google thresholds.
+
+                Hidden content inspection uses a rendered Chromium browser when Playwright and Chromium are available. If Chromium is unavailable, the system falls back to static HTML inspection.
+
+                Network heavy checks are parallelised and cached. Sitemap inspection has a strict time and file budget so it cannot hold the interface indefinitely.
+
+                Content QA uses an isolated editorial article body and excludes comments, related posts, popular widgets, sidebars, navigation and other page chrome before calculating content results.
+
+                External links and linked image, stylesheet and JavaScript resources are now requested directly instead of receiving PASS from discovery alone.
+                """
+            )
+
+    except requests.exceptions.RequestException as e:
+        if "audit_status" in locals():
+            audit_status.update(
+                label="Audit stopped because the URL request failed",
+                state="error",
+                expanded=True,
+            )
+        st.error(f"Could not fetch the URL: {e}")
+    except Exception as e:
+        if "audit_status" in locals():
+            audit_status.update(
+                label="Audit stopped because a check returned an error",
+                state="error",
+                expanded=True,
+            )
+        st.exception(e)
+
+else:
+    st.markdown('<div class="section-heading">What this version checks</div>', unsafe_allow_html=True)
+    a, b, c = st.columns(3, gap="medium")
+    cards = [
+        (a, ICON_SHIELD, f'<span>Spam</span> {len(SPAM_RULES)} rules', 'Cloaking, redirects, hidden content, links, hacked content, scripts, UGC, malware and related spam risks.'),
+        (b, ICON_SEARCH, f'<span>SEO</span> {len(SEO_RULES)} rules', 'Status, indexability, canonical, titles, headings, keyword stuffing, links, images, schema, dates, sitemap, mobile, HTTPS and more.'),
+        (c, ICON_DOC, f'<span>Content</span> {len(CONTENT_RULES)} rules', 'Intent, relevance, thinness, originality, freshness, repetition, FAQs, sourcing, accuracy and readability.'),
+    ]
+    for col, icon, title, desc in cards:
+        with col:
+            st.markdown(
+                f"""
+                <div class="feature-card">
+                  <div class="feature-row">
+                    <div class="feature-icon">{icon}</div>
+                    <div>
+                      <div class="feature-title">{title}</div>
+                      <div class="feature-desc">{desc}</div>
                     </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="WAKEEL ABBAS ZAFAR IQBAL">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/800605746/89db6b67414a40c79543b716b6c9507f" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        WAKEEL ABBAS ZAFAR IQBAL                                    </div>
-
-                                    <div class="location">
-                                        Nour Aldunya Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Nikita Methwani">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/846230759/9c9f06b2287a400daf56d985f0b2c63a" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Nikita Methwani                                    </div>
-
-                                    <div class="location">
-                                        Abdulwahed Bin Shabib Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Muhammad Sharjeel Muhammad Sharif">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/781542244/2358a7eac64e436297059e7b5477a9ee" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Muhammad Sharjeel Muhammad Sharif                                    </div>
-
-                                    <div class="location">
-                                        Nour Aldunya Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Neelam Nitin Mankani">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/791868449/cbc3c7c20d324feab4a15ec1ec9dda1f" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Neelam Nitin Mankani                                    </div>
-
-                                    <div class="location">
-                                        Abdulwahed Bin Shabib Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Asadullah Daud Butt">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/172559476/afd3e604f03a4e4fb501292d86ba3016" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Asadullah Daud Butt                                    </div>
-
-                                    <div class="location">
-                                        Najam Al Qamar Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
+                  </div>
                 </div>
-            
-
-
-
-<h3><strong>Al Karama</strong></h3>
-
-
-
-<p>Next on our list of areas with flats for rent near the Dubai Metro is <a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/al-karama/" target="_blank">Al Karama</a>. The ADCB metro station is conveniently located for residents of Al Karama. Several bus routes connect this area to the Max and Burjuman Metro Stations, making the location a good choice for those relying on public transport in Dubai.</p>
-
-
-
-<p>Residents <a rel="noreferrer noopener" href="https://www.bayut.com/to-rent/apartments/dubai/al-karama/" target="_blank">renting an apartment in Al Karama</a> can also use the Oud Metha Metro Station&nbsp;easily.</p>
-
-
-
-<ul><li>The studios in Al Karama average at AED 49k. </li><li>1 BHK flats are slightly more expensive at AED 68k </li><li>2-bedroom apartments average at AED 86k. </li><li>For a 3-bed flat, you must pay AED 121k, on average. </li></ul>
-
-
-
-<figure class="wp-block-image size-large"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-Mar-2023-1024x640.jpg" alt="Dubai Metro station near Al Karama" class="wp-image-572568" srcset="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-Mar-2023-1024x640.jpg 1024w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-Mar-2023-300x188.jpg 300w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-Mar-2023-768x480.jpg 768w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-Mar-2023-640x400.jpg 640w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-Mar-2023.jpg 1440w" sizes="(min-width: 768px) 60vw, (min-width: 375px) 30vw" /><figcaption><em>You can rent apartments near the Dubai metro without having to break the bank</em></figcaption></figure>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/al-karama/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/al-karama/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Al Karama                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Kalu Bhatia">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/224474604/b7d56425ab3e4b5fb8234adb849d6546" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Kalu Bhatia                                    </div>
-
-                                    <div class="location">
-                                        Rocky Real Estate - Head Office                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Gokul Shaji">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/322820000/6a82996029474886b14b7763f7ae762b" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Gokul Shaji                                    </div>
-
-                                    <div class="location">
-                                        SBK Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Gopal Narang">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/224474594/2031b68c2045409b8303a7918747d14a" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Gopal Narang                                    </div>
-
-                                    <div class="location">
-                                        Rocky Real Estate - Head Office                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Muhammad Saad Khan">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/798112100/5ea4ce78af074dcdb5707a6d627a61b6" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Muhammad Saad Khan                                    </div>
-
-                                    <div class="location">
-                                        SBK Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Ali Nawaz">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/435243014/58cf1c8fc4f24c0fba77198dc28746d5" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Ali Nawaz                                    </div>
-
-                                    <div class="location">
-                                        T A N Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h3><strong>Dubai Investment Park (DIP)</strong></h3>
-
-
-
-<p><a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/dubai-investments-park-dip/" target="_blank">Dubai Investment Park</a> is a practical choice if you want budget-friendly flats close to the metro. The community is calm, well planned and offers plenty of daily conveniences. It sits near DIP Metro Station on the Route 2020 extension, so getting around the city stays quick and stress-free. Many residents pick this area for its value, spacious homes and easy access to public transport.</p>
-
-
-
-<p>Those who want to <a href="https://www.bayut.com/to-rent/apartments/dubai/dubai-investment-park-dip/" target="_blank" rel="noreferrer noopener">rent an apartment in DIP</a>, here&#8217;s what you are expected to pay annually:</p>
-
-
-
-<ul><li>The cost of renting studios in DIP is around AED 42k.</li><li>You can rent 1-bedroom apartments for about AED 65k and 2 BHK units for roughly AED 87k.</li><li>Need more space? Consider 3-bed flats, which average close to AED 158k.</li></ul>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/dubai-investment-park-dip/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/dubai-investment-park-dip/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in Dubai Investment Park (DIP)                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Ahsan Shahid">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/404001236/fbc4214507ba48bea98f01b70d127b69" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Ahsan Shahid                                    </div>
-
-                                    <div class="location">
-                                        Atomic Properties                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Adil Aman">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/461358909/6dfdbc09503c4feca4df8d009dbb89de" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Adil Aman                                    </div>
-
-                                    <div class="location">
-                                        Royal Place Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Tarannum Sayed">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/796285222/a94ae91e421b4d3193b68717671ecfb9" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Tarannum Sayed                                    </div>
-
-                                    <div class="location">
-                                        Fam Properties - Branch 14                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Kaleb Habtamu">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/804289728/320a3399e4984eb19772731135fdfaef" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Kaleb Habtamu                                    </div>
-
-                                    <div class="location">
-                                        Regen Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Haris Zafar">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/786839056/ec884d56617f4b37aef0e2a271093391" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Haris Zafar                                    </div>
-
-                                    <div class="location">
-                                        Royal Place Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h3><strong>The Gardens</strong></h3>
-
-
-
-<p><a rel="noreferrer noopener" href="https://www.bayut.com/area-guides/the-gardens/" target="_blank">The Gardens</a> is last on our list of areas with apartments for rent near the Dubai Metro. It offers reasonably priced flats along with easy access to shops, cafés and daily services. The area is served by The Gardens Metro Station, which keeps commutes simple and predictable. </p>
-
-
-
-<p><a href="https://www.bayut.com/to-rent/apartments/dubai/the-gardens/" target="_blank" rel="noreferrer noopener">Rental apartments in The Gardens</a> offer comfort, value and smooth metro connectivity.</p>
-
-
-
-<ul><li>You can rent studio units in The Gardens for about AED 51k. </li><li>1 BHK apartments are available for nearly AED 87k annually.</li></ul>
-
-
-
-<figure class="wp-block-image size-large"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-23-1024x640.jpg" alt="Dubai metro station outside view" class="wp-image-572534" srcset="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-23-1024x640.jpg 1024w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-23-300x188.jpg 300w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-23-768x480.jpg 768w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-23-640x400.jpg 640w, https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Rent-apartments-near-metro-stations-16th-March-23.jpg 1440w" sizes="(min-width: 768px) 60vw, (min-width: 375px) 30vw" /><figcaption><em>You can find affordable apartments for rent in Dubai near the metro</em></figcaption></figure>
-
-
-            
-                <div class="area-property-details  bayut-tru-broker-slider">
-
-                    <div class="listing-heading">
-                        <a target="_blank" href="https://www.bayut.com/brokers/dubai/the-gardens/?purpose=for-rent" onclick="datalayer('view_all',current_pagetype(),'en','https://www.bayut.com/brokers/dubai/the-gardens/?purpose=for-rent','trubroker_slider')">
-                        TruBrokers for Residential Leasing (Long-Term) in The Gardens                        </a>
-                        <div class="view-all-prop">
-                            View all <i style="color: #222222" class="fas fa-arrow-circle-right"></i>
-                        </div>
-                    </div>
-                    <div class="clearfix"></div>
-                    <section id="" class="property-similar owl-carousel owl-theme">
-                                                <div class="property" title="Mohd Abdul lateef">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/769090319/4ccc57af180842c795a0ccc85e36e230" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Mohd Abdul lateef                                    </div>
-
-                                    <div class="location">
-                                        Creative Solutions Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Mohammed Abdul Altaf">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/817558488/7dee766caba24c9f99fb79f244b25a51" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Mohammed Abdul Altaf                                    </div>
-
-                                    <div class="location">
-                                        Creative Solutions Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Naveed Qamar">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/769181815/a11400ac6fac427c9aa81b9f7a41ab56" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Naveed Qamar                                    </div>
-
-                                    <div class="location">
-                                        Creative Solutions Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="Mohammed Saber Quadri">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/784821103/e429141bb0544d1182970933aa4a6ae1" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        Mohammed Saber Quadri                                    </div>
-
-                                    <div class="location">
-                                        Creative Solutions Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                                <div class="property" title="MOHAMMED ZAID">
-                            <div class="property-image broker-image">
-                                <img src="https://bayut-production.s3.eu-central-1.amazonaws.com/image/844270245/d7c8a7ccb6f9455ebb3cde7bef0fea91" />                                
-                            </div>
-                            <div class="property-details">
-                                <div class="about-property">
-                                    <div class="tru-broker-label">Tru<strong>Broker</strong>™</div>
-                                    <div class="price">
-                                        MOHAMMED ZAID                                    </div>
-
-                                    <div class="location">
-                                        Creative Solutions Real Estate                                        
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                                            </section>
-                    
-                </div>
-            
-
-
-
-<h2 id="FAQS"><strong>FAQS ABOUT WHERE TO RENT APARTMENTS NEAR THE DUBAI METRO</strong></h2>
-
-
-
-<h3><strong>Which are the top hotels near metro stations?</strong></h3>
-
-
-
-<p>If you&#8217;re planning to visit the emirate and want to stay close to a metro station, here&#8217;s a list of the most popular <a rel="noreferrer noopener" href="https://www.bayut.com/mybayut/hotels-near-metro-stations-dubai/" target="_blank">hotels near metro stations in Dubai</a>.</p>
-
-
-
-<h3><strong>Which other areas are near the Dubai Metro?</strong></h3>
-
-
-
-<p>If budget constraint is not an issue, here&#8217;s a list of <a href="https://www.bayut.com/mybayut/apartments-rent-near-dubai-metro-station/" target="_blank" rel="noreferrer noopener">popular areas with apartments to live near the Dubai metro</a>.</p>
-
-
-
-<p>That concludes our list of the most popular areas with apartments for rent near the Dubai Metro. The list of areas to live in Dubai near the metro is long, but you may have to pay higher rents here. You can also check out properties near specific metro stations. For instance, you can read our guide on <a rel="noreferrer noopener" href="https://www.bayut.com/mybayut/popular-areas-rent-internet-city-metro/" target="_blank">renting a property near the Dubai Internet City Metro Station</a>.</p>
-
-
-
-<p>Living near a metro reduces your commuting time and ensures you don&#8217;t have to spend extra money on a taxi or a personal car. So, factor in all these calculations before making the final call.</p>
-
-
-
-<p>Before <a href="https://www.bayut.com/to-rent/villas/dubai/" target="_blank" rel="noreferrer noopener">renting villas in Dubai</a> or apartments, be sure to understand the terms of the lease, including the duration of the rental, any security deposits, and maintenance fees.</p>
-
-
-
-<p>Stay tuned to MyBayut for more information on the property market in the UAE.</p><a href="https://google.com/preferences/source?q=https://www.bayut.com/" class="google-preferred-source-btn" title="Google Preferred Source"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/bayut-google-preferred-source-btn-en-05062026.png" alt="Google Preferred Source" /></a>
-<div class="swp_social_panel swp_horizontal_panel swp_flat_fresh  swp_default_full_color swp_individual_full_color swp_other_full_color scale-100  scale-" data-min-width="1100" data-float-color="#ffffff" data-float="none" data-float-mobile="none" data-transition="slide" data-post-id="47854" ><div class="nc_tweetContainer swp_share_button swp_facebook" data-network="facebook"><a class="nc_tweet swp_share_link" rel="nofollow noreferrer noopener" target="_blank" href="https://www.facebook.com/share.php?u=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F" data-link="https://www.facebook.com/share.php?u=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F"><span class="iconFiller"><span class="spaceManWilly"><i class="sw swp_facebook_icon"></i><span class="swp_share">Share</span></span></span><span class="swp_count">1</span></a></div><div class="nc_tweetContainer swp_share_button swp_twitter" data-network="twitter"><a class="nc_tweet swp_share_link" rel="nofollow noreferrer noopener" target="_blank" href="https://twitter.com/intent/tweet?text=Affordable+areas+to+rent+apartments+near+the+Dubai+Metro&url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F" data-link="https://twitter.com/intent/tweet?text=Affordable+areas+to+rent+apartments+near+the+Dubai+Metro&url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F"><span class="swp_count swp_hide"><span class="iconFiller"><span class="spaceManWilly"><i class="sw swp_twitter_icon"></i><span class="swp_share">Tweet</span></span></span></span></a></div><div class="nc_tweetContainer swp_share_button swp_pinterest" data-network="pinterest"><a rel="nofollow noreferrer noopener" class="nc_tweet swp_share_link noPop" onClick="var e=document.createElement('script');
-							e.setAttribute('type','text/javascript');
-							e.setAttribute('charset','UTF-8');
-							e.setAttribute('src','//assets.pinterest.com/js/pinmarklet.js?r='+Math.random()*99999999);
-							document.body.appendChild(e);
-						" ><span class="swp_count swp_hide"><span class="iconFiller"><span class="spaceManWilly"><i class="sw swp_pinterest_icon"></i><span class="swp_share">Pin</span></span></span></span></a></div><div class="nc_tweetContainer swp_share_button swp_linkedin" data-network="linkedin"><a class="nc_tweet swp_share_link" rel="nofollow noreferrer noopener" target="_blank" href="https://www.linkedin.com/cws/share?url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F" data-link="https://www.linkedin.com/cws/share?url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F"><span class="swp_count swp_hide"><span class="iconFiller"><span class="spaceManWilly"><i class="sw swp_linkedin_icon"></i><span class="swp_share">Share</span></span></span></span></a></div></div><div class="swp-content-locator"></div></div>
-
-                                    </div> <!-- end post_info_wrapper -->
-                                </div> <!-- end post_body -->
-                            </article>
-
-    
-                            
-                                                                        <div class="current-article-rating">
-                                                                                                <div class="title">Was this article helpful?</div>
-                                                <div class="article-rating 47854">                        <div class="likes" onclick="article_rating('like',47854, 'article', 'bottom', 'en', 'Market Trends')">
-                        <div class="icon"></div><div class="number"></div></div><div class="seperater">|</div>                            <div class="dislikes" onclick="article_rating('dislike',47854, 'article', 'bottom', 'en', 'Market Trends')">
-                            <div class="icon"></div><div class="number"></div></div></div>                                            </div>
-                                            <div class="comment_container">
-<div id="comments" class="comments-area">
-
-		
-			<div id="respond" class="comment-respond">
-		<h3 id="reply-title" class="comment-reply-title">Leave a Reply <small><a rel="nofollow" id="cancel-comment-reply-link" href="/mybayut/affordable-apartments-near-metro-stations-in-dubai/#respond" style="display:none;">Cancel Reply</a></small></h3><form action="https://www.bayut.com/mybayut/wp-comments-post.php" method="post" id="commentform" class="comment-form"><p class="logged-in-as"><a href="https://www.bayut.com/mybayut/wp-admin/profile.php" aria-label="Logged in as faten aish. Edit your profile.">Logged in as faten aish</a>. <a href="https://www.bayut.com/mybayut/wp-login.php?action=logout&amp;redirect_to=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F&amp;_wpnonce=865eb40193">Log out?</a></p><div class="gglcptch gglcptch_v2"><div id="gglcptch_recaptcha_695892990" class="gglcptch_recaptcha"></div>
-				<noscript>
-					<div style="width: 302px;">
-						<div style="width: 302px; height: 422px; position: relative;">
-							<div style="width: 302px; height: 422px; position: absolute;">
-								<iframe src="https://www.google.com/recaptcha/api/fallback?k=6LeQaloUAAAAAD0rH1jHrwKUVwdWWCzYtHoOg2Hr" frameborder="0" scrolling="no" style="width: 302px; height:422px; border-style: none;"></iframe>
-							</div>
-						</div>
-						<div style="border-style: none; bottom: 12px; left: 25px; margin: 0px; padding: 0px; right: 25px; background: #f9f9f9; border: 1px solid #c1c1c1; border-radius: 3px; height: 60px; width: 300px;">
-							<textarea id="g-recaptcha-response" name="g-recaptcha-response" class="g-recaptcha-response" style="width: 250px !important; height: 40px !important; border: 1px solid #c1c1c1 !important; margin: 10px 25px !important; padding: 0px !important; resize: none !important;"></textarea>
-						</div>
-					</div>
-				</noscript></div><div class="comment_textarea_wrapper col12"><img alt='' src='https://secure.gravatar.com/avatar/39c9fcb4dc9fed5ec1c8aac867515255?s=45&#038;d=mm&#038;r=g' srcset="https://secure.gravatar.com/avatar/39c9fcb4dc9fed5ec1c8aac867515255?s=90&#038;d=mm&#038;r=g 2x" class='avatar avatar-45 photo' height='45' width='45' /><textarea placeholder="Write your comment" id="comment" name="comment" cols="3" rows="8" aria-required="true"></textarea></div><p class="form-submit"><input name="submit" type="submit" id="submit" class="submit" value="Post Comment" /> <input type='hidden' name='comment_post_ID' value='47854' id='comment_post_ID' />
-<input type='hidden' name='comment_parent' id='comment_parent' value='0' />
-</p><p style="display: none;"><input type="hidden" id="akismet_comment_nonce" name="akismet_comment_nonce" value="1e36259a91" /></p><input type="hidden" id="_wp_unfiltered_html_comment_disabled" name="_wp_unfiltered_html_comment_disabled" value="74cd210f2c" /><script>(function(){if(window===window.parent){document.getElementById('_wp_unfiltered_html_comment_disabled').name='_wp_unfiltered_html_comment';}})();</script>
-<p style="display: none;"><input type="hidden" id="ak_js" name="ak_js" value="160"/></p></form>	</div><!-- #respond -->
-	
-	
-</div><!-- #comments -->
-</div>
-                    </div><!-- close col12 just inside .full_width_list -->
-                </div> <!-- close .full_width_list -->
-                
-				<!--start whatsapp link -->
-					<a class="post-whatsapp-btn" onClick="whatsapp_share()" href="https://api.whatsapp.com/send?text=Affordable areas to rent apartments near the Dubai Metro  https://www.bayut.com/mybayut/affordable-apartments-near-metro-stations-in-dubai/">whatsapp</a>
-				<!--end whatsapp link -->
-                    
-                <!-- start related posts -->
-                        <div class="post_related"><div class="row two_coloumns_list"><div class="col12"><div class="thepost_row row">
-<article id="post-100785" class="blog_post_container post-100785 post type-post status-publish format-standard has-post-thumbnail category-pulse tag-affordable-romantic-dinner-in-dubai tag-affordable-romantic-restaurants-in-dubai tag-al-mahara tag-at-mosphere tag-best-romantic-dinner-in-dubai tag-cheapest-candle-light-dinner-in-dubai tag-dubai-romantic-restaurants tag-eauzone tag-good-romantic-dinner-in-dubai tag-level-43-sky-lounge tag-list-of-romantic-dinner-in-dubai tag-moana tag-ossiano tag-palm-avenue tag-pierchic tag-pulse tag-romantic-dining-places-in-dubai tag-romantic-dinner-in-dubai tag-romantic-dinner-restaurants-in-dubai tag-romantic-dubai-dinner tag-romantic-dubai-restaurants tag-romantic-places-in-dubai-for-dinner tag-romantic-places-to-dine-in-dubai tag-romantic-restaurant-in-dubai tag-romantic-restaurants-in-dubai tag-thiptara tag-top-romantic-restaurants-in-dubai bayut_topics-activity bayut_topics-bar bayut_topics-breakfast bayut_topics-cafe bayut_topics-fine-dining bayut_topics-food bayut_topics-places-to-visit bayut_topics-restaurant bayut_topics-seafood bayut_topics-things-to-do persona-dubai persona-foodies persona-married">
-
-		
-			<figure class="post_banner">
-
-						<a href="https://www.bayut.com/mybayut/best-romantic-restaurants-dubai/">
-				<img width="370" height="285" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Romantic-restaurants-in-Dubai_Cover-16-Sep-2019-370x285.jpg" class="attachment-alia_child_grid_banner size-alia_child_grid_banner wp-post-image" alt="romantic restaurants in dubai" />			</a>
-					</figure>
-				
-	<div class="post_body has_post_banner">
-		<div class="post_meta_info post_meta_row clearfix"><span class="post_meta_item meta_item_category"><a href="https://www.bayut.com/mybayut/pulse/" rel="category tag">Pulse</a><div class="article-rating 100785 no-feeback zero-likes"><div class="likes rated"><div class="icon"></div><div class="number no-numbers"></div></div><div class="seperater">|</div><div class="dislikes rated"><div class="icon"></div><div class="number no-numbers"></div></div></div></span></div>			<div class="post_header">
-				<h2 class="entry-title title post_title"><a href="https://www.bayut.com/mybayut/best-romantic-restaurants-dubai/" rel="bookmark">Ooh La La! Fall in love at these romantic restaurants in Dubai</a></h2>			</div>
-									<div class="post_meta_wrap">
-				<div class="blog-reading-time">6 min read</div>
-										<svg xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 512 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z"/></svg>
-						<div class="publishing-date">Published: 17 Dec, 2024</div>			</div>
-							
-		<div class="post_info_wrapper">
-			<div class="entry-content blog_post_text blog_post_description clearfix"></div>			
-
-		</div> <!-- end post_info_wrapper -->
-	</div> <!-- end post_body -->
-</article></div><div class="thepost_row row">
-<article id="post-28751" class="blog_post_container post-28751 post type-post status-publish format-standard has-post-thumbnail category-market-trends tag-abu-dhabi-property tag-al-ghadeer tag-al-raha-beach tag-al-reef tag-al-reem-island tag-higest-roi-areas tag-high-return-on-investment-areas-in-abu-dhabi tag-high-roi-areas-and-growing-investment-in-abu-dhabi tag-high-roi-areas-in-abu-dhabi tag-highest-roi-neighbourhoods-in-abui-dhabi tag-list-of-hight-roi-areas-in-abu-dhabi tag-market-trends tag-raha-gardens tag-top-high-roi-areas-in-abu-dhabi bayut_topics-apartment bayut_topics-buying-property bayut_topics-selling-property bayut_topics-villa mybayut-article-heatmap-clarity persona-abu-dhabi persona-investment persona-properties">
-
-		
-			<figure class="post_banner">
-
-						<a href="https://www.bayut.com/mybayut/best-roi-abu-dhabi-top-5-areas/">
-				<img width="370" height="285" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/cover-high-ROI-Abu-Dhabi-areas-09-12-2024-370x285.jpg" class="attachment-alia_child_grid_banner size-alia_child_grid_banner wp-post-image" alt="high ROI Abu Dhabi areas" />			</a>
-					</figure>
-				
-	<div class="post_body has_post_banner">
-		<div class="post_meta_info post_meta_row clearfix"><span class="post_meta_item meta_item_category"><a href="https://www.bayut.com/mybayut/market-trends/" rel="category tag">Market Trends</a><div class="article-rating 28751"><div class="likes rated"><div class="icon"></div><div class="number"></div></div><div class="seperater">|</div><div class="dislikes rated"><div class="icon"></div><div class="number no-numbers"></div></div></div></span></div>			<div class="post_header">
-				<h2 class="entry-title title post_title"><a href="https://www.bayut.com/mybayut/best-roi-abu-dhabi-top-5-areas/" rel="bookmark">Maximise your returns: High ROI property hotspots in Abu Dhabi</a></h2>			</div>
-									<div class="post_meta_wrap">
-				<div class="blog-reading-time">7 min read</div>
-										<svg xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 512 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z"/></svg>
-						<div class="publishing-date">Published: 9 Dec, 2025</div>			</div>
-							
-		<div class="post_info_wrapper">
-			<div class="entry-content blog_post_text blog_post_description clearfix"></div>			
-
-		</div> <!-- end post_info_wrapper -->
-	</div> <!-- end post_body -->
-</article></div><div class="thepost_row row">
-<article id="post-380751" class="blog_post_container post-380751 post type-post status-publish format-standard has-post-thumbnail category-pulse tag-address-sky-view-dubai-booking tag-address-sky-view-hotel-dubai tag-adventure-in-dubai tag-adventure-in-the-uae tag-adventurous-things-to-do-in-dubai tag-downtown-dubai-buildings tag-hotels-in-downtown-dubai tag-pulse tag-sky-view-dubai bayut_topics-hotel bayut_topics-things-to-do mybayut-article-heatmap-clarity persona-daredevils persona-dubai persona-travel-adventure">
-
-		
-			<figure class="post_banner">
-
-						<a href="https://www.bayut.com/mybayut/sky-views-dubai/">
-				<img width="370" height="285" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/SKY-VIEWS-dubai_cover-image-1-370x285.jpg" class="attachment-alia_child_grid_banner size-alia_child_grid_banner wp-post-image" alt="glimpse of things to at Sky Views Observatory in dubai" />			</a>
-					</figure>
-				
-	<div class="post_body has_post_banner">
-		<div class="post_meta_info post_meta_row clearfix"><span class="post_meta_item meta_item_category"><a href="https://www.bayut.com/mybayut/pulse/" rel="category tag">Pulse</a><div class="article-rating 380751"><div class="likes rated"><div class="icon"></div><div class="number"></div></div><div class="seperater">|</div><div class="dislikes rated"><div class="icon"></div><div class="number no-numbers"></div></div></div></span></div>			<div class="post_header">
-				<h2 class="entry-title title post_title"><a href="https://www.bayut.com/mybayut/sky-views-dubai/" rel="bookmark">Hit the heights at Sky Views Dubai for a unique adventure!</a></h2>			</div>
-									<div class="post_meta_wrap">
-				<div class="blog-reading-time">5 min read</div>
-										<svg xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 512 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z"/></svg>
-						<div class="publishing-date">Published: 8 May, 2026</div>			</div>
-							
-		<div class="post_info_wrapper">
-			<div class="entry-content blog_post_text blog_post_description clearfix"></div>			
-
-		</div> <!-- end post_info_wrapper -->
-	</div> <!-- end post_body -->
-</article></div></div></div></div>                <!-- end related posts -->
-
-                <!-- close col and row in case of sidebar layout -->		
-                
-
-                </div><!-- close post_content_col col8 -->
-
-                <!-- start default sidebar col -->
-                                        <div class="default_widgets_container default_widgets_col col4">
-                        <div id="default_sidebar_widget" class="widget_area">
-        <div id="text-3" class="widget_container widget_content widget widget_text clearfix">			<div class="textwidget">            <form id="news_letter_form" class="news_letter_form">
-                <div class='newsletter'>
-                    <div class='heading'>Subscribe to</div>
-                    <!--<p></p>-->
-                    <div class="message-container"></div>  
-                     <input placeholder='Name*' type='text' name='user_name' id='user_name' value='' required/>                     <input placeholder='Email*' type='email' name='email' id='user_email' value='' required/>
-                                        <input type='hidden' name='style' id='style' value='default'/>
-					<input type='hidden' name='position' id='position' value='not-fixed'/>
-                    <input type='hidden' name='name_field_switch' id='name_field_switch' value='true'/>
-					<input type='hidden' name='user_lang' id='user_lang' value='en'/>
-                    <div class="clearfix section-border"></div>
-					<button name="imzee_subscribe_form" id="subscribe_button" onclick="event.preventDefault();
-                            submitSubscribeButton(this)">Subscribe</button>
-                </div>
-            </form>
-            
-</div>
-		</div><div id="custom_html-2" class="widget_text widget_container widget_content widget widget_custom_html clearfix"><div class="textwidget custom-html-widget"><a href="https://google.com/preferences/source?q=https://www.bayut.com/" class="google-preferred-source-btn desktop widget" title="Google Preferred Source"><img src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/bayut-google-preferred-source-btn-en-05062026.png" alt="Google Preferred Source" /></a></div></div>
-            <div class="property-search-widget">
-                <div class="wrapper">
-                    <div class="search-widget-wrapper">
-                        <div class="logo"></div>
-                        <div class="purpose-selection">
-                            <div class="purpose selected" data-purpose="to-rent/">Rent</div>
-                            <div class="purpose" data-purpose="for-sale/">Buy</div>
-                        </div>
-                        <div class="illustration"></div>
-                        <input type="hidden" id="bayut-post-language" name="bayut-post-language" value="bayut-production-locations-en" class="bayut-post-language" />
-                        <input type="hidden" id="bayut_property_purpose" name="bayut-property-purpose" value="to-rent/" />
-                        <input type="hidden" id="bayut_base_url" name="bayut_base_url" value="https://www.bayut.com/" />
-                        <div class="location-input-wrapper">
-                            <input type="text" id="bayut_algolia_listing_location_autocomplete" name="bayut_algolia_listing_location_autocomplete" value="" placeholder="Enter Location" />
-                            <span class="search-icon"></span>
-                        </div>
-                        <div id="autocomplete-locations"></div>
-                        <input type="hidden" id="searched_url" name="searched_url" value="" />
-                    </div>
-                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown(
+        f"""
+        <div class="how-card">
+          <div class="section-heading" style="margin:0 0 17px 0;">How it works</div>
+          <div class="steps">
+            <div class="step">
+              <div class="step-icon">{ICON_LINK}<div class="step-num">1</div></div>
+              <div><div class="step-title">Enter URL and Keywords</div><div class="step-desc">Provide the article URL, Focus Keyword and optional Secondary Keywords.</div></div>
             </div>
-
-            <div id="text-8" class="widget_container widget_content widget widget_text clearfix">			<div class="textwidget">
-</div>
-		</div><div id="text-9" class="widget_container widget_content widget widget_text clearfix">			<div class="textwidget"><div class="mybayut-popular-posts"><h3 class="section-title">Popular</h3><a id="popular-post-337273" class="mybayut-popular-posts-wrapper" href="https://www.bayut.com/mybayut/travelling-uae-georgia/"><div class="mybayut-popular-posts-thumbnail"><img width="370" height="285" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Travel-from-the-UAE-to-Georgia_24072026-370x285.jpg" class="attachment-alia_child_grid_banner size-alia_child_grid_banner wp-post-image" alt="Travel from the UAE to Georgia_24072026" /></div><div class="mybayut-popular-posts-content"><h4>All you must know about travelling from the UAE to Georgia</h4><div class="posts-content-meta">4 min read                                    <svg xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 512 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z"/></svg>
-                                    <div class="publishing-date">Published: 24 Jul, 2026</div></div></div></a><a id="popular-post-58880" class="mybayut-popular-posts-wrapper" href="https://www.bayut.com/mybayut/horse-riding-lessons-dubai/"><div class="mybayut-popular-posts-thumbnail"><img width="370" height="285" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Cover-15-370x285.jpg" class="attachment-alia_child_grid_banner size-alia_child_grid_banner wp-post-image" alt="Horse Riding in Dubai" /></div><div class="mybayut-popular-posts-content"><h4>Places For Horse Riding Lessons in Dubai</h4><div class="posts-content-meta">6 min read                                    <svg xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 512 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z"/></svg>
-                                    <div class="publishing-date">Updated: 21 Oct, 2024</div></div></div></a><a id="popular-post-36589" class="mybayut-popular-posts-wrapper" href="https://www.bayut.com/mybayut/popular-areas-rent-jumeirah/"><div class="mybayut-popular-posts-thumbnail"><img width="370" height="285" src="https://mybayutcdn.bayut.com/mybayut/wp-content/uploads/Jumeirah-villas-and-apartments-for-rent-cover-370x285.jpg" class="attachment-alia_child_grid_banner size-alia_child_grid_banner wp-post-image" alt="" /></div><div class="mybayut-popular-posts-content"><h4>Most popular areas to rent villas and apartments in Jumeirah</h4><div class="posts-content-meta">11 min read                                    <svg xmlns="http://www.w3.org/2000/svg" height="1em" viewBox="0 0 512 512"><!--! Font Awesome Free 6.4.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512z"/></svg>
-                                    <div class="publishing-date">Published: 13 May, 2026</div></div></div></a></div>
-</div>
-		</div>                        </div>
-                    </div><!-- #intro_widgets_container -->
-                                <!-- end default sidebar col -->
-
-            </div><!-- close row -->
-                     <!-- end check for post layout -->
-
-</section><!-- #primary -->
-            		
-
-		</main><!-- #content -->
-
-		<footer id="colophon" class="site_footer" role="contentinfo">
-
-			
-						<div class="row footer_sidebars_container container footers_active_1">
-				<div class="footer_sidebars_inner_wrapper">
-									<div class="footer_widgets_container footer_sidebar_1 col12" id="footer_sidebar_1">
-						<div id="nav_menu-7" class="widget_container widget_content widget widget_nav_menu clearfix"><div class="menu-bayut-footer-property-menu-container"><ul id="menu-bayut-footer-property-menu" class="menu"><li id="menu-item-171536" class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-171536"><a href="#">Apartments for Sale</a>
-<ul class="sub-menu">
-	<li id="menu-item-171538" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171538"><a href="https://www.bayut.com/for-sale/apartments/dubai/">Apartments for sale in Dubai</a></li>
-	<li id="menu-item-171542" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171542"><a href="https://www.bayut.com/for-sale/apartments/abu-dhabi/">Apartments for sale in Abu Dhabi</a></li>
-	<li id="menu-item-171543" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171543"><a href="https://www.bayut.com/for-sale/apartments/sharjah/">Apartments for sale in Sharjah</a></li>
-	<li id="menu-item-171544" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171544"><a href="https://www.bayut.com/for-sale/apartments/ajman/">Apartments for sale in Ajman</a></li>
-</ul>
-</li>
-<li id="menu-item-171545" class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-171545"><a href="#">Villas for Sale</a>
-<ul class="sub-menu">
-	<li id="menu-item-171546" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171546"><a href="https://www.bayut.com/for-sale/villas/dubai/">Villas for sale in Dubai</a></li>
-	<li id="menu-item-171547" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171547"><a href="https://www.bayut.com/for-sale/villas/abu-dhabi/">Villas for sale in Abu Dhabi</a></li>
-	<li id="menu-item-171549" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171549"><a href="https://www.bayut.com/for-sale/villas/sharjah/">Villas for sale in Sharjah</a></li>
-	<li id="menu-item-171550" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171550"><a href="https://www.bayut.com/for-sale/villas/ajman/">Villas for sale in Ajman</a></li>
-</ul>
-</li>
-<li id="menu-item-171551" class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-171551"><a href="#">Apartments for Rent</a>
-<ul class="sub-menu">
-	<li id="menu-item-171552" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171552"><a href="https://www.bayut.com/to-rent/apartments/dubai/">Apartments for rent in Dubai</a></li>
-	<li id="menu-item-171553" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171553"><a href="https://www.bayut.com/to-rent/apartments/abu-dhabi/">Apartments for rent in Abu Dhabi</a></li>
-	<li id="menu-item-171554" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171554"><a href="https://www.bayut.com/to-rent/apartments/sharjah/">Apartments for rent in Sharjah</a></li>
-	<li id="menu-item-171555" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171555"><a href="https://www.bayut.com/to-rent/apartments/ajman/">Apartments for rent in Ajman</a></li>
-</ul>
-</li>
-<li id="menu-item-171556" class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-171556"><a href="#">Villas for Rent</a>
-<ul class="sub-menu">
-	<li id="menu-item-171557" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171557"><a href="https://www.bayut.com/to-rent/villas/dubai/">Villas for rent in Dubai</a></li>
-	<li id="menu-item-171563" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171563"><a href="https://www.bayut.com/to-rent/villas/abu-dhabi/">Villas for rent in Abu Dhabi</a></li>
-	<li id="menu-item-171564" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171564"><a href="https://www.bayut.com/to-rent/villas/sharjah/">Villas for rent in Sharjah</a></li>
-	<li id="menu-item-171565" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-171565"><a href="https://www.bayut.com/to-rent/villas/ajman/">Villas for rent in Ajman</a></li>
-</ul>
-</li>
-<li id="menu-item-846167" class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-846167"><a href="#">Off-Plan Properties</a>
-<ul class="sub-menu">
-	<li id="menu-item-846168" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846168"><a href="https://www.bayut.com/for-sale/off-plan/property/uae/">Off plan properties in UAE</a></li>
-	<li id="menu-item-846169" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846169"><a href="https://www.bayut.com/for-sale/off-plan/property/dubai/">Off plan properties in Dubai</a></li>
-	<li id="menu-item-846170" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846170"><a href="https://www.bayut.com/for-sale/off-plan/property/abu-dhabi/">Off plan properties in Abu Dhabi</a></li>
-	<li id="menu-item-846171" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846171"><a href="https://www.bayut.com/for-sale/off-plan/property/sharjah/">Off plan properties in Sharjah</a></li>
-</ul>
-</li>
-<li id="menu-item-846172" class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-846172"><a href="#">New Projects</a>
-<ul class="sub-menu">
-	<li id="menu-item-846173" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846173"><a href="https://www.bayut.com/new-projects/uae/">New projects in UAE</a></li>
-	<li id="menu-item-846174" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846174"><a href="https://www.bayut.com/new-projects/dubai/">New projects in Dubai</a></li>
-	<li id="menu-item-846176" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846176"><a href="https://www.bayut.com/new-projects/developers/emaar/">New projects by Emaar</a></li>
-	<li id="menu-item-846177" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846177"><a href="https://www.bayut.com/new-projects/developers/damac-properties/">New projects by DAMAC</a></li>
-</ul>
-</li>
-<li id="menu-item-846178" class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-846178"><a href="#">Popular Searches</a>
-<ul class="sub-menu">
-	<li id="menu-item-846179" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846179"><a href="https://www.bayut.com/s/cheap-apartments-rent-dubai/">Cheap apartments for rent in Dubai</a></li>
-	<li id="menu-item-846180" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846180"><a href="https://www.bayut.com/s/furnished-apartments-rent-dubai-monthly-basis/">Furnished apartments for rent in Dubai monthly</a></li>
-	<li id="menu-item-846181" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846181"><a href="https://www.bayut.com/s/cheap-properties-for-sale-in-dubai/">Cheap properties for sale in Dubai</a></li>
-	<li id="menu-item-846182" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-846182"><a href="https://www.bayut.com/s/buy-properties-dubai-installments/">Properties for sale on installments in Dubai</a></li>
-</ul>
-</li>
-</ul></div></div><div id="nav_menu-4" class="widget_container widget_content widget widget_nav_menu clearfix"><div class="menu-bayut-footer-container"><ul id="menu-bayut-footer" class="menu"><li id="menu-item-12145" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-12145"><a title="About Us" href="https://www.bayut.com/about/aboutus.html">About Us</a></li>
-<li id="menu-item-12144" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-12144"><a title="Contact Us" href="https://www.bayut.com/contactus.html">Contact Us</a></li>
-<li id="menu-item-12147" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-12147"><a title="Terms &#038; Privacy Policy" href="https://www.bayut.com/terms.html">Terms &#038; Privacy Policy</a></li>
-</ul></div></div><div id="nav_menu-5" class="widget_container widget_content widget widget_nav_menu clearfix"><div class="menu-bayut-footer-social-container"><ul id="menu-bayut-footer-social" class="menu"><li id="menu-item-58642" class="footer-facebook menu-item menu-item-type-custom menu-item-object-custom menu-item-58642"><a target="_blank" rel="noopener noreferrer" href="https://www.facebook.com/bayutuae">facebook</a></li>
-<li id="menu-item-58643" class="footer-twitter menu-item menu-item-type-custom menu-item-object-custom menu-item-58643"><a target="_blank" rel="noopener noreferrer" href="https://twitter.com/bayut">twitter</a></li>
-<li id="menu-item-58644" class="footer-linkedin menu-item menu-item-type-custom menu-item-object-custom menu-item-58644"><a target="_blank" rel="noopener noreferrer" href="https://www.linkedin.com/company/bayut-com">linkedin</a></li>
-<li id="menu-item-58646" class="footer-instagram menu-item menu-item-type-custom menu-item-object-custom menu-item-58646"><a target="_blank" rel="noopener noreferrer" href="https://www.instagram.com/bayutuae">instagram</a></li>
-<li id="menu-item-58647" class="footer-appstore menu-item menu-item-type-custom menu-item-object-custom menu-item-58647"><a target="_blank" rel="noopener noreferrer" href="https://itunes.apple.com/app/bayut-uae-property-search/id923263211?mt=8">app store</a></li>
-<li id="menu-item-58648" class="footer-googleplay menu-item menu-item-type-custom menu-item-object-custom menu-item-58648"><a target="_blank" rel="noopener noreferrer" href="https://play.google.com/store/apps/details?id=com.bayut.bayutapp">google play</a></li>
-</ul></div></div>					</div>
-				
-				
-							</div> <!-- close .footer_sidebars_inner_wrapper -->
-			</div> <!-- close .footer_sidebars_container -->
-			
-							<div class="footer_credits container footers_active_sidebars_1">
-					© 2008 - 2026 Bayut.com				</div>
-			
-						    <div id="aliagototop" title="Scroll To Top" class="alia_gototop_button footer_button">
-			    	<i class="fas fa fa-arrow-up"></i>
-			    </div>
-			
-		</footer><!-- #colophon -->
-
-	</div><!-- .site_main_container -->
-		<div class="bayut-property-portal-widget">
-		<div class="container">
-			<div class="property-purpose">
-				<div class="property-label">
-					<div class="property-image"></div>
-					<div class="looking-for-property">
-						Looking for properties in the UAE?					</div>
-				</div>
-				<div class="bayut_logo">
-					<a href="https://www.bayut.com/" rel="bayut">Bayut</a>
-				</div>
-				<div class="purpose-wrap">
-					<div class="buttons">
-						<div class="purpose buy">
-							<span class="desktop">View Properties for Sale</span>
-							<span class="mobile">Buy</span>
-						</div>
-						<div class="purpose rent">
-							<span class="desktop">View Properties for Rent</span>
-							<span class="mobile">Rent</span>
-						</div>
-					</div>
-					<div class="cross"></div>
-				</div>
-			</div>
-			<div class="property-types">
-				<div class="properties-for-sale">
-					<div class="menu-property-type-buy-container"><ul id="menu-property-type-buy" class="menu"><li id="menu-item-261632" class="apartments menu-item menu-item-type-custom menu-item-object-custom menu-item-261632"><a href="https://www.bayut.com/for-sale/apartments/uae/">Apartment</a></li>
-<li id="menu-item-261633" class="villas menu-item menu-item-type-custom menu-item-object-custom menu-item-261633"><a href="https://www.bayut.com/for-sale/villas/uae/">Villa</a></li>
-<li id="menu-item-261634" class="townhouses menu-item menu-item-type-custom menu-item-object-custom menu-item-261634"><a href="https://www.bayut.com/for-sale/townhouses/uae/">Townhouse</a></li>
-<li id="menu-item-261635" class="residential-plots menu-item menu-item-type-custom menu-item-object-custom menu-item-261635"><a href="https://www.bayut.com/for-sale/residential-plots/uae/">Residential Plot</a></li>
-</ul></div>				</div>
-				<div class="properties-for-rent">
-					<div class="menu-property-type-rent-container"><ul id="menu-property-type-rent" class="menu"><li id="menu-item-261672" class="apartments menu-item menu-item-type-custom menu-item-object-custom menu-item-261672"><a href="https://www.bayut.com/to-rent/apartments/uae/">Apartment</a></li>
-<li id="menu-item-261673" class="villas menu-item menu-item-type-custom menu-item-object-custom menu-item-261673"><a href="https://www.bayut.com/to-rent/villas/uae/">Villa</a></li>
-<li id="menu-item-261675" class="townhouses menu-item menu-item-type-custom menu-item-object-custom menu-item-261675"><a href="https://www.bayut.com/to-rent/townhouses/uae/">Townhouse</a></li>
-<li id="menu-item-261676" class="offices menu-item menu-item-type-custom menu-item-object-custom menu-item-261676"><a href="https://www.bayut.com/to-rent/offices/uae/">Office</a></li>
-</ul></div>				</div>
-			</div>
-		</div>
-	</div>
-	<!-- start sliding sidebar content -->
-		<div class="sliding_close_helper_overlay"></div>
-	<div class="site_side_container">
-		<h3 class="screen-reader-text">Sliding Sidebar</h3>
-		<div class="info_sidebar">
-
-						<div class="top_header_items_holder mobile_menu_opened">
-					<div class="main_menu">
-						<div class="bayut_logo"><a href="https://www.bayut.com/" rel="bayut">Bayut</a></div>
-						<ul id="mobile-menu" class="navbar"><li class="tips-menu menu-item menu-item-type-custom menu-item-object-custom menu-item-11952 default_menu"><a href="/mybayut/tips/">Tips</a></li>
-<li class="pulse-menu menu-item menu-item-type-custom menu-item-object-custom menu-item-11953 default_menu"><a href="/mybayut/pulse/">Pulse</a></li>
-<li class="my-home-menu menu-item menu-item-type-custom menu-item-object-custom menu-item-11993 default_menu"><a href="/mybayut/my-home/">My Home</a></li>
-<li class="genz-menu menu-item menu-item-type-taxonomy menu-item-object-category menu-item-61607 default_menu"><a href="https://www.bayut.com/mybayut/gen-z/">Gen Z</a></li>
-<li class="rules-menu menu-item menu-item-type-taxonomy menu-item-object-category menu-item-61606 default_menu"><a href="https://www.bayut.com/mybayut/rules-regulations/">Laws</a></li>
-<li class="market-trends-menu menu-item menu-item-type-custom menu-item-object-custom menu-item-11954 default_menu"><a href="/mybayut/market-trends/">Market Trends</a></li>
-<li class="partners-menu menu-item menu-item-type-taxonomy menu-item-object-category menu-item-61608 default_menu"><a href="https://www.bayut.com/mybayut/our-partners/">Partners</a></li>
-<li class="bayut-after-hours-menu menu-item menu-item-type-taxonomy menu-item-object-category menu-item-12598 default_menu"><a href="https://www.bayut.com/mybayut/bayut-after-hours/">Life at Bayut</a></li>
-</ul>						<div class="menu-bayut-property-menu-container"><ul id="menu-bayut-property-menu-1" class="menu"><li class="property-dropdown menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-747434"><a href="#">Guides</a>
-<ul class="sub-menu">
-	<li class="menu-item menu-item-type-custom menu-item-object-custom menu-item-747435"><a href="https://www.bayut.com/area-guides/">Area Guides</a></li>
-	<li class="menu-item menu-item-type-custom menu-item-object-custom menu-item-747436"><a href="https://www.bayut.com/buildings/">Building Guides</a></li>
-	<li class="menu-item menu-item-type-custom menu-item-object-custom menu-item-747437"><a href="https://www.bayut.com/schools/">School Guides</a></li>
-</ul>
-</li>
-<li class="property-dropdown new-link menu-item menu-item-type-custom menu-item-object-custom menu-item-has-children menu-item-816593"><a href="#">Market Intelligence</a>
-<ul class="sub-menu">
-	<li class="tru-estimate-link menu-item menu-item-type-custom menu-item-object-custom menu-item-816594"><a target="_blank" rel="noopener noreferrer" href="https://www.bayut.com/property-market-analysis/tru-estimate/">Tru<strong>Estimate</strong>™</a></li>
-	<li class="menu-item menu-item-type-custom menu-item-object-custom menu-item-816595"><a target="_blank" rel="noopener noreferrer" href="https://www.bayut.com/property-market-analysis/transactions/sale/property/">Dubai Transactions</a></li>
-	<li class="menu-item menu-item-type-custom menu-item-object-custom menu-item-816596"><a href="https://www.bayut.com/floorplans/">Floor Plans</a></li>
-</ul>
-</li>
-</ul></div>						<div class="menu-bayut-product-menu-container"><ul id="menu-bayut-product-menu-1" class="menu"><li class="menu-item menu-item-type-custom menu-item-object-custom menu-item-100424"><a href="https://www.bayut.com/new-projects/uae/">New Projects</a></li>
-<li class="menu-item menu-item-type-custom menu-item-object-custom menu-item-100425"><a href="https://www.bayut.com/brokers/">Find my Agent</a></li>
-<li class="get-in-touch-modal menu-item menu-item-type-custom menu-item-object-custom menu-item-747440"><a href="#">Get in Touch</a></li>
-<li class="lang-item lang-item-8187 lang-item-ar lang-item-first menu-item menu-item-type-custom menu-item-object-custom menu-item-100426-ar"><a href="https://www.bayut.com/mybayut/ar/%D8%B4%D9%82%D9%82-%D9%84%D9%84%D8%A7%D9%8A%D8%AC%D8%A7%D8%B1-%D9%82%D8%B1%D8%A8-%D9%85%D8%AA%D8%B1%D9%88-%D8%AF%D8%A8%D9%8A-%D8%A8%D8%B3%D8%B9%D8%B1-%D9%85%D9%86%D8%AE%D9%81%D8%B6/" hreflang="ar" lang="ar">العربية</a></li>
-</ul></div>					</div>
-			</div> <!-- end .top_header_items_holder -->
-			
-					</div>
-	</div>
-		<!-- end sliding sidebar content -->
-
-	
-	<!--MS Clarity Start -->		
-	<script type="text/javascript">
-		(function(c,l,a,r,i,t,y){
-			c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
-			t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
-			y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
-		})(window, document, "clarity", "script", "sclcr98mn3");
-	</script>
-	<!--MS Clarity End -->
-
-	<!-- start footer static content -->
-		<!-- start footer static content -->
-
-	
-</div><!-- #page -->
-
-
-<!-- show cookies notice -->
-
-<!-- Instagram Feed JS -->
-<script type="text/javascript">
-var sbiajaxurl = "https://www.bayut.com/mybayut/wp-admin/admin-ajax.php";
-</script>
-<link rel='stylesheet' id='wp_rp_edit_related_posts_css-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/wordpress-23-related-posts-plugin/static/themes/edit_related_posts.css?ver=3.6.4' type='text/css' media='all' />
-<link rel='stylesheet' id='algolia-property-shortcode-owl-carousel-style-css'  href='https://cdnjs.cloudflare.com/ajax/libs/OwlCarousel2/2.3.4/assets/owl.carousel.min.css?ver=5.4' type='text/css' media='all' />
-<link rel='stylesheet' id='gglcptch-css'  href='https://www.bayut.com/mybayut/wp-content/plugins/google-captcha/css/gglcptch.css?ver=1.56' type='text/css' media='all' />
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-includes/js/hoverintent-js.min.js?ver=2.2.1'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-includes/js/admin-bar.min.js?ver=5.4'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/metronet-profile-picture/js/mpp-frontend.js?ver=2.3.11'></script>
-<script type='text/javascript'>
-/* <![CDATA[ */
-var bayut_algolia_plugin_vars = {"plugin_url":"https:\/\/www.bayut.com\/mybayut\/wp-content\/plugins\/algolia-property-shortcode\/","admin_ajax_url":"https:\/\/www.bayut.com\/mybayut\/wp-admin\/admin-ajax.php","wp_ajax_url":"https:\/\/www.bayut.com\/mybayut\/wp-admin\/wp-ajax.php"};
-/* ]]> */
-</script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/algolia-property-shortcode/assets/js/property-plugin-scripts.js?ver=1.0.5.61'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/bayut-core/includes/modules/topics/assets/js/topic-pages.js?ver=1.2.0'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/social-polls-by-opinionstage/public/js/shortcodes.js?ver=19.6.35'></script>
-<script type='text/javascript'>
-/* <![CDATA[ */
-var socialWarfare = {"addons":[],"post_id":"47854","variables":{"emphasizeIcons":false,"powered_by_toggle":false,"affiliate_link":"https:\/\/warfareplugins.com"},"floatBeforeContent":""};
-/* ]]> */
-</script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/social-warfare/assets/js/script.min.js?ver=4.4.5.1'></script>
-<script type='text/javascript'>
-/* <![CDATA[ */
-var alia_vars = {"ajax_accept_cookies":"https:\/\/www.bayut.com\/mybayut\/wp-content\/themes\/alia\/acceptcookies.php"};
-/* ]]> */
-</script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/themes/alia-child/assets/js/global.js?ver=1.37.7'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-includes/js/comment-reply.min.js?ver=5.4'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/youtube-embed-plus/scripts/fitvids.min.js?ver=13.3.1'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-includes/js/wp-embed.min.js?ver=5.4'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/wordpress-23-related-posts-plugin/static/js/edit_related_posts.js?ver=3.6.4'></script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/algolia-property-shortcode/assets/js/owl.carousel.min.js?ver=1'></script>
-<script async="async" type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/akismet/_inc/form.js?ver=4.1.4'></script>
-<script type='text/javascript' data-cfasync="false" async="async" defer="defer" src='https://www.google.com/recaptcha/api.js?render=explicit&#038;ver=1.56'></script>
-<script type='text/javascript'>
-/* <![CDATA[ */
-var gglcptch = {"options":{"version":"v2","sitekey":"6LeQaloUAAAAAD0rH1jHrwKUVwdWWCzYtHoOg2Hr","error":"<strong>Warning<\/strong>:&nbsp;More than one reCAPTCHA has been found in the current form. Please remove all unnecessary reCAPTCHA fields to make it work properly.","disable":0,"theme":"light"},"vars":{"visibility":false}};
-/* ]]> */
-</script>
-<script type='text/javascript' src='https://www.bayut.com/mybayut/wp-content/plugins/google-captcha/js/script.js?ver=1.56'></script>
-<script type="text/javascript">(function() {
-				var expirationDate = new Date();
-				expirationDate.setTime( expirationDate.getTime() + 31536000 * 1000 );
-				document.cookie = "pll_language=en; expires=" + expirationDate.toUTCString() + "; path=/mybayut/";
-			}());</script><script type="text/javascript"> var swp_nonce = "09cdeb870b";var swpFloatBeforeContent = false; var swp_ajax_url = "https://www.bayut.com/mybayut/wp-admin/admin-ajax.php"; var swp_post_id = "47854";var swpClickTracking = false;</script>		<div id="wpadminbar" class="nojq nojs">
-							<a class="screen-reader-shortcut" href="#wp-toolbar" tabindex="1">Skip to toolbar</a>
-						<div class="quicklinks" id="wp-toolbar" role="navigation" aria-label="Toolbar">
-				<ul id='wp-admin-bar-root-default' class="ab-top-menu"><li id='wp-admin-bar-wp-logo' class="menupop"><a class='ab-item' aria-haspopup="true" href='https://www.bayut.com/mybayut/wp-admin/about.php'><span class="ab-icon"></span><span class="screen-reader-text">About WordPress</span></a><div class="ab-sub-wrapper"><ul id='wp-admin-bar-wp-logo-default' class="ab-submenu"><li id='wp-admin-bar-about'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/about.php'>About WordPress</a></li></ul><ul id='wp-admin-bar-wp-logo-external' class="ab-sub-secondary ab-submenu"><li id='wp-admin-bar-wporg'><a class='ab-item' href='https://wordpress.org/'>WordPress.org</a></li><li id='wp-admin-bar-documentation'><a class='ab-item' href='https://codex.wordpress.org/'>Documentation</a></li><li id='wp-admin-bar-support-forums'><a class='ab-item' href='https://wordpress.org/support/'>Support</a></li><li id='wp-admin-bar-feedback'><a class='ab-item' href='https://wordpress.org/support/forum/requests-and-feedback'>Feedback</a></li></ul></div></li><li id='wp-admin-bar-site-name' class="menupop"><a class='ab-item' aria-haspopup="true" href='https://www.bayut.com/mybayut/wp-admin/'>A blog about homes, trends, tips &amp; l&hellip;</a><div class="ab-sub-wrapper"><ul id='wp-admin-bar-site-name-default' class="ab-submenu"><li id='wp-admin-bar-dashboard'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/'>Dashboard</a></li></ul></div></li><li id='wp-admin-bar-comments'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/edit-comments.php'><span class="ab-icon"></span><span class="ab-label awaiting-mod pending-count count-36384" aria-hidden="true">36,384</span><span class="screen-reader-text comments-in-moderation-text">36,384 Comments in moderation</span></a></li><li id='wp-admin-bar-new-content' class="menupop"><a class='ab-item' aria-haspopup="true" href='https://www.bayut.com/mybayut/wp-admin/post-new.php'><span class="ab-icon"></span><span class="ab-label">New</span></a><div class="ab-sub-wrapper"><ul id='wp-admin-bar-new-content-default' class="ab-submenu"><li id='wp-admin-bar-new-post'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/post-new.php'>Post</a></li><li id='wp-admin-bar-new-media'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/media-new.php'>Media</a></li><li id='wp-admin-bar-new-link'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/link-add.php'>Link</a></li><li id='wp-admin-bar-new-page'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/post-new.php?post_type=page'>Page</a></li></ul></div></li><li id='wp-admin-bar-edit'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/post.php?post=47854&#038;action=edit'>Edit Post</a></li><li id='wp-admin-bar-wpseo-menu' class="menupop"><div class="ab-item ab-empty-item" tabindex="0" aria-haspopup="true"><div id="yoast-ab-icon" class="ab-item yoast-logo svg"><span class="screen-reader-text">SEO</span></div><div class="wpseo-score-icon adminbar-seo-score good"><span class="adminbar-seo-score-text screen-reader-text">SEO score: Good</span></div></div><div class="ab-sub-wrapper"><ul id='wp-admin-bar-wpseo-menu-default' class="ab-submenu"><li id='wp-admin-bar-wpseo-kwresearch' class="menupop"><div class="ab-item ab-empty-item" tabindex="0" aria-haspopup="true"><span class="wp-admin-bar-arrow" aria-hidden="true"></span>Keyword Research</div><div class="ab-sub-wrapper"><ul id='wp-admin-bar-wpseo-kwresearch-default' class="ab-submenu"><li id='wp-admin-bar-wpseo-kwresearchtraining'><a class='ab-item' href='https://yoa.st/wp-admin-bar?php_version=7.2&#038;platform=wordpress&#038;platform_version=5.4&#038;software=premium&#038;software_version=12.9.2&#038;days_active=30plus&#038;user_language=en_US' target='_blank'>Keyword research training</a></li><li id='wp-admin-bar-wpseo-adwordsexternal'><a class='ab-item' href='https://yoa.st/keywordplanner' target='_blank'>Google Ads</a></li><li id='wp-admin-bar-wpseo-googleinsights'><a class='ab-item' href='https://yoa.st/google-trends#q=areas+with+apartments+for+rent+near+Dubai+Metro' target='_blank'>Google Trends</a></li></ul></div></li><li id='wp-admin-bar-wpseo-analysis' class="menupop"><div class="ab-item ab-empty-item" tabindex="0" aria-haspopup="true"><span class="wp-admin-bar-arrow" aria-hidden="true"></span>Analyze this page</div><div class="ab-sub-wrapper"><ul id='wp-admin-bar-wpseo-analysis-default' class="ab-submenu"><li id='wp-admin-bar-wpseo-inlinks'><a class='ab-item' href='https://search.google.com/search-console/links/drilldown?resource_id=https%3A%2F%2Fwww.bayut.com%2Fmybayut&#038;type=EXTERNAL&#038;target=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F&#038;domain=' target='_blank'>Check links to this URL</a></li><li id='wp-admin-bar-wpseo-kwdensity'><a class='ab-item' href='http://www.zippy.co.uk/keyworddensity/index.php?url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F&#038;keyword=areas+with+apartments+for+rent+near+Dubai+Metro' target='_blank'>Check Keyphrase Density</a></li><li id='wp-admin-bar-wpseo-cache'><a class='ab-item' href='//webcache.googleusercontent.com/search?strip=1&#038;q=cache:https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>Check Google Cache</a></li><li id='wp-admin-bar-wpseo-header'><a class='ab-item' href='//quixapp.com/headers/?r=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>Check Headers</a></li><li id='wp-admin-bar-wpseo-structureddata'><a class='ab-item' href='https://search.google.com/structured-data/testing-tool#url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>Google Structured Data Test</a></li><li id='wp-admin-bar-wpseo-facebookdebug'><a class='ab-item' href='//developers.facebook.com/tools/debug/og/object?q=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>Facebook Debugger</a></li><li id='wp-admin-bar-wpseo-pinterestvalidator'><a class='ab-item' href='https://developers.pinterest.com/tools/url-debugger/?link=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>Pinterest Rich Pins Validator</a></li><li id='wp-admin-bar-wpseo-htmlvalidation'><a class='ab-item' href='//validator.w3.org/check?uri=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>HTML Validator</a></li><li id='wp-admin-bar-wpseo-cssvalidation'><a class='ab-item' href='//jigsaw.w3.org/css-validator/validator?uri=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>CSS Validator</a></li><li id='wp-admin-bar-wpseo-pagespeed'><a class='ab-item' href='//developers.google.com/speed/pagespeed/insights/?url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>Google Page Speed Test</a></li><li id='wp-admin-bar-wpseo-google-mobile-friendly'><a class='ab-item' href='https://www.google.com/webmasters/tools/mobile-friendly/?url=https%3A%2F%2Fwww.bayut.com%2Fmybayut%2Faffordable-apartments-near-metro-stations-in-dubai%2F' target='_blank'>Mobile-Friendly Test</a></li></ul></div></li></ul></div></li><li id='wp-admin-bar-alia_changelog' class="alia-changelog-page"><a class='ab-item' href='https://ahmad.works/alia/alia-release-notes?utm_medium=alia_adminbar' target='_blank'>Alia 3.0.7.5.14 Changelog</a></li></ul><ul id='wp-admin-bar-top-secondary' class="ab-top-secondary ab-top-menu"><li id='wp-admin-bar-search' class="admin-bar-search"><div class="ab-item ab-empty-item" tabindex="-1"><form action="https://www.bayut.com/mybayut/" method="get" id="adminbarsearch"><input class="adminbar-input" name="s" id="adminbar-search" type="text" value="" maxlength="150" /><label for="adminbar-search" class="screen-reader-text">Search</label><input type="submit" class="adminbar-button" value="Search"/></form></div></li><li id='wp-admin-bar-my-account' class="menupop with-avatar"><a class='ab-item' aria-haspopup="true" href='https://www.bayut.com/mybayut/wp-admin/profile.php'>Howdy, <span class="display-name">faten aish</span><img alt='' src='https://secure.gravatar.com/avatar/39c9fcb4dc9fed5ec1c8aac867515255?s=26&#038;d=mm&#038;r=g' srcset="https://secure.gravatar.com/avatar/39c9fcb4dc9fed5ec1c8aac867515255?s=52&#038;d=mm&#038;r=g 2x" class='avatar avatar-26 photo' height='26' width='26' /></a><div class="ab-sub-wrapper"><ul id='wp-admin-bar-user-actions' class="ab-submenu"><li id='wp-admin-bar-user-info'><a class='ab-item' tabindex="-1" href='https://www.bayut.com/mybayut/wp-admin/profile.php'><img alt='' src='https://secure.gravatar.com/avatar/39c9fcb4dc9fed5ec1c8aac867515255?s=64&#038;d=mm&#038;r=g' srcset="https://secure.gravatar.com/avatar/39c9fcb4dc9fed5ec1c8aac867515255?s=128&#038;d=mm&#038;r=g 2x" class='avatar avatar-64 photo' height='64' width='64' /><span class='display-name'>faten aish</span><span class='username'>faten.aish</span></a></li><li id='wp-admin-bar-edit-profile'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-admin/profile.php'>Edit My Profile</a></li><li id='wp-admin-bar-logout'><a class='ab-item' href='https://www.bayut.com/mybayut/wp-login.php?action=logout&#038;_wpnonce=865eb40193'>Log Out</a></li></ul></div></li></ul>			</div>
-						<a class="screen-reader-shortcut" href="https://www.bayut.com/mybayut/wp-login.php?action=logout&#038;_wpnonce=865eb40193">Log Out</a>
-					</div>
-
-			<div id="get_in_touch_modal" class="modal get-in-touch-modal">
-		            
-            <article class="get-in-touch-form block-form-section">
-                <div id="info_block_56145" class="info-block">
-                    <h4 class="title">Let’s connect</h4>
-                    <p class="instruction">Ask us anything or just say hi <span>🖐</span></p>
-                </div>
-                <div id="block_form_wrapper_56145" class="block-form-wrapper">
-                    
-                    <div class="block-form-elements">
-                        <form id="get_in_touch_form_56145">
-                            <div class="full-name-wrapper-56145 text-field-wrapper">
-                                <div class="message-wrapper">
-                                    <span class="error">
-                                        Please enter the Full Name                                    </span>
-                                </div>
-                                <input type="text" name="full-name" id="user_name" required>
-                                <label for="full-name">Name*</label>
-                            </div>
-                            <div class="email-address-wrapper-56145 text-field-wrapper">
-                                <div class="message-wrapper">
-                                    <span class="error">
-                                        Please enter the valid Email                                    </span>
-                                </div>
-                                <input type="email" name="email-address" id="user_email" required>
-                                <label for="email-address">Email*</label>
-                            </div>
-                            <div class="phone-number-wrapper-56145 text-field-wrapper">
-                                <div class="message-wrapper">
-                                    <span class="error">
-                                        Please enter the valid Phone Number                                    </span>
-                                </div>
-                                <input type="number" name="phone-number" id="user_phone" required>
-                                <label for="phone-number">Phone Number* (05xxxxxxxx)</label>
-                            </div>
-                            
-                            <div class="write-message-wrapper-56145 text-field-wrapper">
-                                <div class="message-wrapper">
-                                    <span class="error">
-                                        Please write your message                                    </span>
-                                </div>
-                                <textarea name="write-message" id="write_message" rows="5" type="text" required></textarea>
-                                <label for="write-message">Write a message*</label>
-                            </div>
-                            <input type="hidden" name="page-language" id="page_language" value="en">
-                            <input type="button" onclick="submit_ajax_registration_form(56145)" value="Submit">
-                            
-                        </form>
-                    </div>
-                </div>
-                <div id="get_in_touch_form_success_56145" class="block-form-message">
-                    <div class="img-wrapper">
-                        <img src="https://www.bayut.com/mybayut/wp-content/plugins/bayut-theme-core/assets/images/message-sent.svg" />
-                    </div>
-                    <div class="message-title">
-                        Thank you for showing your interest!                    </div>
-                    <div class="message-sub-title">
-                        Our team will reach out to you shortly                    </div>
-                </div>
-                
-            </article>
-
-            	</div>
-</body>
-</html>
-
-<!--
-Performance optimized by W3 Total Cache. Learn more: https://www.boldgrid.com/w3-total-cache/
-
-Page Caching using disk: enhanced (User is logged in) 
-Content Delivery Network via Amazon Web Services: S3: mybayutcdn.bayut.com
-
-Served from: www.bayut.com @ 2026-08-12 16:49:00 by W3 Total Cache
--->
+            <div class="arrow">···›</div>
+            <div class="step">
+              <div class="step-icon">{ICON_LIST}<div class="step-num">2</div></div>
+              <div><div class="step-title">Run Audit</div><div class="step-desc">We check the URL against Spam, SEO and Content quality rules.</div></div>
+            </div>
+            <div class="arrow">···›</div>
+            <div class="step">
+              <div class="step-icon">{ICON_CHART}<div class="step-num">3</div></div>
+              <div><div class="step-title">Review Results</div><div class="step-desc">Browse findings, issues and recommendations across all categories.</div></div>
+            </div>
+            <div class="arrow">···›</div>
+            <div class="step">
+              <div class="step-icon">{ICON_BADGE}<div class="step-num">4</div></div>
+              <div><div class="step-title">Take Action</div><div class="step-desc">Fix issues, improve quality and run again to validate improvements.</div></div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
