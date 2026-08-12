@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.10 IGNORE TRUBROKER WIDGET IMAGES"
-ENGINE_BUILD = "2026.08.12.14"
+APP_VERSION = "V18.11 INTERNAL LINKS CONFIRMED BROKEN ONLY"
+ENGINE_BUILD = "2026.08.12.15"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -54,7 +54,7 @@ PLAYWRIGHT_SETTLE_MS = 450
 
 LINK_CHECK_TIMEOUT = 3
 LINK_CHECK_WORKERS = 16
-INTERNAL_LINK_CHECK_TIMEOUT = 3
+INTERNAL_LINK_CHECK_TIMEOUT = 5
 INTERNAL_LINK_CHECK_WORKERS = 24
 ROBOTS_REQUEST_TIMEOUT = 4
 RESOURCE_CHECK_TIMEOUT = 3
@@ -478,7 +478,7 @@ SEO_RULES = [
     ("Heading Structure", "Evaluate the editorial heading hierarchy rather than navigation or sidebar headings. REVIEW empty headings, heavy duplication or clear heading level jumps."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
     ("Keyword Stuffing", "Analyse editorial article text only. Exclude embedded widgets and interface content. PASS when keyword use is natural. REVIEW when query phrases are unusually repetitive. FAIL when repetition is clearly excessive and manipulative."),
-    ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, confirmed broken internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
+    ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, GET-confirmed HTTP 404/410 internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. Timeouts, connection failures, temporary 5xx responses and HTTP 401/403/405/406/429 automated restrictions are not treated as broken."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
     ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
     ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
@@ -541,7 +541,7 @@ SYSTEM_USES = {
     "H1": "Full page H1 elements including article header H1, H1 count, Focus Keyword exact match, semantic concept overlap and article topic relationship",
     "Heading Structure": "Primary page H1 plus isolated editorial H2 through H6 headings, empty headings, duplicate headings and hierarchy level jumps",
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
-    "Internal Links": "Only inline editorial text hyperlinks inside paragraph, list and table text in the isolated article body; non-editorial cards, banners, CTA, image links, social sharing and widgets are excluded before same-domain validation, HTTP checks and anchor relevance analysis",
+    "Internal Links": "Only inline editorial text hyperlinks inside paragraph, list and table text in the isolated article body; non-editorial modules are excluded; HEAD is followed by normal GET confirmation when needed; only GET-confirmed HTTP 404/410 is treated as a broken destination",
     "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
     "Images": "Isolated editorial article images, TruBroker and broker/property widget exclusion by asset URL and DOM ancestry, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
     "Structured Data": "JSON LD parsing, Article BlogPosting or NewsArticle type detection, schema headline, schema URL and mainEntityOfPage comparison with the visible preferred page",
@@ -2423,6 +2423,206 @@ def probe_http_url(url, timeout=LINK_CHECK_TIMEOUT):
     # Network validation refreshes every 10 minutes.
     return _probe_http_url_cached(url, timeout, cache_bucket(600))
 
+def _internal_get_probe(url, timeout):
+    """
+    Normal GET confirmation for an internal URL.
+    """
+    response = requests.get(
+        url,
+        headers=UA_DESKTOP,
+        timeout=max(float(timeout), 5.0),
+        allow_redirects=True,
+        stream=True,
+    )
+    status = response.status_code
+    final_url = response.url
+    response.close()
+    return status, final_url
+
+
+@lru_cache(maxsize=4096)
+def _probe_internal_http_url_cached(url, timeout, _bucket):
+    """
+    Conservative validation for editorial internal links.
+
+    HEAD is used only as a quick first probe.
+    Any HEAD failure or error status is confirmed with normal GET.
+    Only GET-confirmed HTTP 404 or 410 is considered broken.
+    """
+    started = time.time()
+    result_data = {
+        "url": url,
+        "status": None,
+        "final_url": url,
+        "error": "",
+        "elapsed": 0.0,
+        "confirmed_broken": False,
+        "probe_method": "",
+        "attempts": [],
+    }
+
+    effective_timeout = max(float(timeout), 5.0)
+
+    # Fast first probe.
+    try:
+        response = requests.head(
+            url,
+            headers=UA_DESKTOP,
+            timeout=effective_timeout,
+            allow_redirects=True,
+        )
+        head_status = response.status_code
+        head_final = response.url
+        result_data["attempts"].append(f"HEAD {head_status}")
+
+        if 200 <= head_status < 400:
+            result_data["status"] = head_status
+            result_data["final_url"] = head_final
+            result_data["probe_method"] = "HEAD"
+            result_data["elapsed"] = time.time() - started
+            return result_data
+    except Exception as exc:
+        result_data["attempts"].append("HEAD failed")
+        result_data["error"] = str(exc)
+
+    # Confirm using normal GET. Retry once on transient failure.
+    get_errors = []
+
+    for attempt in range(2):
+        try:
+            get_status, get_final = _internal_get_probe(
+                url,
+                effective_timeout,
+            )
+
+            result_data["attempts"].append(f"GET {get_status}")
+            result_data["status"] = get_status
+            result_data["final_url"] = get_final
+            result_data["probe_method"] = "GET"
+
+            if get_status in {404, 410}:
+                result_data["confirmed_broken"] = True
+                break
+
+            # Retry temporary server errors once.
+            if get_status >= 500 and attempt == 0:
+                continue
+
+            break
+
+        except Exception as exc:
+            get_errors.append(str(exc))
+            result_data["attempts"].append("GET failed")
+
+            if attempt == 0:
+                continue
+
+    if result_data["status"] is None and get_errors:
+        result_data["error"] = get_errors[-1]
+        result_data["probe_method"] = "GET"
+
+    result_data["elapsed"] = time.time() - started
+    return result_data
+
+
+def probe_internal_http_url(
+    url,
+    timeout=INTERNAL_LINK_CHECK_TIMEOUT,
+):
+    return _probe_internal_http_url_cached(
+        url,
+        timeout,
+        cache_bucket(600),
+    )
+
+
+def validate_internal_url_set(
+    urls,
+    timeout=INTERNAL_LINK_CHECK_TIMEOUT,
+    workers=INTERNAL_LINK_CHECK_WORKERS,
+):
+    """
+    Only GET-confirmed HTTP 404/410 responses are classified as broken.
+
+    Automated restrictions, timeouts, connection errors and temporary 5xx
+    responses remain diagnostic only and do not become editorial link issues.
+    """
+    urls = unique_http_urls(urls)
+
+    if not urls:
+        return {
+            "checked": [],
+            "working": [],
+            "redirected": [],
+            "broken": [],
+            "restricted": [],
+            "server_errors": [],
+            "unreachable": [],
+        }
+
+    checked = []
+
+    with ThreadPoolExecutor(
+        max_workers=min(workers, len(urls))
+    ) as executor:
+        futures = {
+            executor.submit(
+                probe_internal_http_url,
+                url,
+                timeout,
+            ): url
+            for url in urls
+        }
+
+        for future in as_completed(futures):
+            checked.append(future.result())
+
+    working = []
+    redirected = []
+    broken = []
+    restricted = []
+    server_errors = []
+    unreachable = []
+
+    for item in checked:
+        status = item.get("status")
+
+        if item.get("confirmed_broken"):
+            broken.append(item)
+
+        elif status is None:
+            unreachable.append(item)
+
+        elif 200 <= status < 400:
+            working.append(item)
+
+            if (
+                item.get("final_url")
+                and item["final_url"] != item["url"]
+            ):
+                redirected.append(item)
+
+        elif status in {401, 403, 405, 406, 429}:
+            restricted.append(item)
+
+        elif status >= 500:
+            server_errors.append(item)
+
+        else:
+            # Other automated responses are inconclusive, not broken.
+            restricted.append(item)
+
+    return {
+        "checked": checked,
+        "working": working,
+        "redirected": redirected,
+        "broken": broken,
+        "restricted": restricted,
+        "server_errors": server_errors,
+        "unreachable": unreachable,
+    }
+
+
 def validate_url_set(urls, timeout=LINK_CHECK_TIMEOUT, workers=LINK_CHECK_WORKERS):
     urls = unique_http_urls(urls)
     if not urls:
@@ -2690,8 +2890,9 @@ def internal_link_issues(inventory, validation):
     """
     Return only actionable issues for inline editorial body links.
 
-    Automated HTTP 401, 403 and 429 responses are ignored because they can
-    reflect bot restrictions rather than a broken user-facing destination.
+    Only GET-confirmed HTTP 404/410 responses are treated as broken.
+    Automated restrictions, timeouts, connection errors and temporary 5xx
+    responses are not reported as broken editorial links.
     """
     validation_by_url = {
         item.get("url"): item
@@ -2711,14 +2912,14 @@ def internal_link_issues(inventory, validation):
             if checked:
                 status = checked.get("status")
 
-                if status in {404, 410}:
+                # Only a normal GET-confirmed 404 or 410 is actionable.
+                # Timeouts, connection errors, bot restrictions and temporary
+                # 5xx responses are intentionally not reported as broken.
+                if (
+                    checked.get("confirmed_broken")
+                    and status in {404, 410}
+                ):
                     reasons.append(f"Broken link HTTP {status}")
-                elif status is not None and status >= 500:
-                    reasons.append(f"Server error HTTP {status}")
-                elif status is None:
-                    reasons.append("Link could not be reached")
-
-                # 401 / 403 / 429 are intentionally not treated as broken.
 
         if item["generic_anchor"]:
             reasons.append("Generic anchor text")
@@ -4686,7 +4887,7 @@ def audit_seo(
     ])
 
     if internal_validation is None:
-        internal_validation = validate_url_set(
+        internal_validation = validate_internal_url_set(
             content_internal_urls,
             timeout=INTERNAL_LINK_CHECK_TIMEOUT,
             workers=INTERNAL_LINK_CHECK_WORKERS,
@@ -5966,7 +6167,7 @@ if run:
                     SITEMAP_MAX_DEPTH,
                 ): "Sitemap",
                 executor.submit(
-                    validate_url_set,
+                    validate_internal_url_set,
                     internal_urls,
                     INTERNAL_LINK_CHECK_TIMEOUT,
                     INTERNAL_LINK_CHECK_WORKERS,
@@ -6179,7 +6380,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_10_ignore_trubroker_widget_images.json",
+            file_name="url_audit_v18_11_internal_links_confirmed_broken_only.json",
             mime="application/json",
         )
 
