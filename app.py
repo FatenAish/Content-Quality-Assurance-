@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18 EMPTY ANCHOR HIDDEN LINKS"
-ENGINE_BUILD = "2026.08.12.3"
+APP_VERSION = "V18.1 HIDDEN LINKS FIX"
+ENGINE_BUILD = "2026.08.12.4"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -1994,6 +1994,99 @@ def is_empty_href_anchor(anchor, base_url):
         return False
 
     return not anchor_has_visible_html_content(anchor)
+
+
+def source_hidden_reasons(node):
+    """
+    Return source-level hiding reasons found directly on one HTML element.
+
+    This intentionally uses fetched HTML attributes and inline styles only.
+    It does not depend on browser rendering.
+    """
+    reasons = []
+
+    if node is None or not getattr(node, "attrs", None):
+        return reasons
+
+    if node.has_attr("hidden"):
+        reasons.append("hidden attribute")
+
+    if node.has_attr("inert"):
+        reasons.append("inert attribute")
+
+    style = str(node.get("style") or "").lower()
+    style_compact = re.sub(r"\s+", "", style)
+
+    if "display:none" in style_compact:
+        reasons.append("display none")
+
+    if (
+        "visibility:hidden" in style_compact
+        or "visibility:collapse" in style_compact
+    ):
+        reasons.append("visibility hidden")
+
+    if re.search(r"opacity\s*:\s*0(?:[;}]|$)", style, flags=re.I):
+        reasons.append("opacity zero")
+
+    if re.search(r"font-size\s*:\s*0(?:px|em|rem|%|;|$)", style, flags=re.I):
+        reasons.append("font size zero")
+
+    width_zero = bool(
+        re.search(r"(?:^|;)\s*width\s*:\s*0(?:px|em|rem|%|;|$)", style, flags=re.I)
+    )
+    height_zero = bool(
+        re.search(r"(?:^|;)\s*height\s*:\s*0(?:px|em|rem|%|;|$)", style, flags=re.I)
+    )
+    if width_zero or height_zero:
+        reasons.append("zero dimensions")
+
+    if (
+        re.search(r"(?:left|right|top|bottom)\s*:\s*-\d{3,}(?:px|em|rem)", style, flags=re.I)
+        or re.search(r"text-indent\s*:\s*-\d{3,}(?:px|em|rem)", style, flags=re.I)
+    ):
+        reasons.append("offscreen positioning")
+
+    if (
+        "clip:rect(0,0,0,0)" in style_compact
+        or "clip-path:inset(50%)" in style_compact
+    ):
+        reasons.append("clipped")
+
+    if "content-visibility:hidden" in style_compact:
+        reasons.append("content visibility hidden")
+
+    if (
+        "transform:scale(0)" in style_compact
+        or "transform:scalex(0)" in style_compact
+        or "transform:scaley(0)" in style_compact
+    ):
+        reasons.append("scale zero")
+
+    return reasons
+
+def hidden_ancestor_info(anchor):
+    """
+    Walk the actual fetched-HTML ancestry for an anchor.
+
+    Returns:
+      (hidden_element, reasons)
+
+    hidden_element is the first anchor/ancestor that contains a supported
+    source-level hiding signal.
+    """
+    node = anchor
+
+    while node is not None:
+        reasons = source_hidden_reasons(node)
+
+        if reasons:
+            return node, reasons
+
+        # Stop once we leave the document tree.
+        node = getattr(node, "parent", None)
+
+    return None, []
 
 def static_hidden_link_details(soup, base_url):
     """
@@ -5988,7 +6081,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_empty_anchor_hidden_links.json",
+            file_name="url_audit_v18_1_hidden_links_fix.json",
             mime="application/json",
         )
 
