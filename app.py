@@ -1,6 +1,7 @@
 import re
 import json
 import io
+import zipfile
 import time
 import html as html_lib
 import gzip
@@ -40,8 +41,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.25 EXCEL REPORT EXPORT"
-ENGINE_BUILD = "2026.08.12.29"
+APP_VERSION = "V18.26 EXCEL NO DEPENDENCY"
+ENGINE_BUILD = "2026.08.12.30"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -63,6 +64,7 @@ RESOURCE_CHECK_TIMEOUT = 3
 RESOURCE_CHECK_WORKERS = 24
 
 
+
 def build_audit_excel_report(
     url_requested,
     url_final,
@@ -82,142 +84,10 @@ def build_audit_excel_report(
     desktop_status_code,
     extracted_words,
 ):
-    """Build the audit as a clear XLSX workbook in memory."""
-    try:
-        import xlsxwriter
-    except ImportError as exc:
-        raise RuntimeError("Excel export requires the XlsxWriter package.") from exc
+    # Generate a real XLSX file using Python standard library only.
 
-    output = io.BytesIO()
-
-    workbook = xlsxwriter.Workbook(
-        output,
-        {
-            "in_memory": True,
-            "strings_to_urls": False,
-            "strings_to_formulas": False,
-        },
-    )
-
-    title_fmt = workbook.add_format({
-        "bold": True,
-        "font_size": 18,
-        "font_color": "#FFFFFF",
-        "bg_color": "#00A66A",
-        "align": "left",
-        "valign": "vcenter",
-    })
-    section_fmt = workbook.add_format({
-        "bold": True,
-        "font_size": 12,
-        "font_color": "#1F2D2A",
-        "bg_color": "#EAF7F1",
-        "border": 1,
-        "border_color": "#D7E7DF",
-        "valign": "vcenter",
-    })
-    label_fmt = workbook.add_format({
-        "bold": True,
-        "font_color": "#33413D",
-        "bg_color": "#F6F9F7",
-        "border": 1,
-        "border_color": "#E4E9E7",
-        "valign": "top",
-    })
-    value_fmt = workbook.add_format({
-        "font_color": "#1F2D2A",
-        "border": 1,
-        "border_color": "#E4E9E7",
-        "text_wrap": True,
-        "valign": "top",
-    })
-    url_fmt = workbook.add_format({
-        "font_color": "#0563C1",
-        "underline": True,
-        "border": 1,
-        "border_color": "#E4E9E7",
-        "text_wrap": True,
-        "valign": "top",
-    })
-    header_fmt = workbook.add_format({
-        "bold": True,
-        "font_color": "#FFFFFF",
-        "bg_color": "#00A66A",
-        "border": 1,
-        "border_color": "#008B59",
-        "align": "center",
-        "valign": "vcenter",
-        "text_wrap": True,
-    })
-    text_fmt = workbook.add_format({
-        "font_color": "#1F2D2A",
-        "border": 1,
-        "border_color": "#E4E9E7",
-        "text_wrap": True,
-        "valign": "top",
-    })
-    check_fmt = workbook.add_format({
-        "bold": True,
-        "font_color": "#1F2D2A",
-        "border": 1,
-        "border_color": "#E4E9E7",
-        "text_wrap": True,
-        "valign": "top",
-    })
-    pass_fmt = workbook.add_format({
-        "bold": True,
-        "font_color": "#14804A",
-        "bg_color": "#E9F8EF",
-        "border": 1,
-        "border_color": "#BFE8CF",
-        "align": "center",
-        "valign": "top",
-    })
-    review_fmt = workbook.add_format({
-        "bold": True,
-        "font_color": "#9A6700",
-        "bg_color": "#FFF6D8",
-        "border": 1,
-        "border_color": "#F0D88A",
-        "align": "center",
-        "valign": "top",
-    })
-    fail_fmt = workbook.add_format({
-        "bold": True,
-        "font_color": "#B42318",
-        "bg_color": "#FDECEC",
-        "border": 1,
-        "border_color": "#F4B8B3",
-        "align": "center",
-        "valign": "top",
-    })
-    neutral_status_fmt = workbook.add_format({
-        "bold": True,
-        "font_color": "#475467",
-        "bg_color": "#F2F4F7",
-        "border": 1,
-        "border_color": "#D0D5DD",
-        "align": "center",
-        "valign": "top",
-    })
-    note_fmt = workbook.add_format({
-        "font_color": "#66736F",
-        "italic": True,
-        "text_wrap": True,
-        "valign": "top",
-    })
-    integer_fmt = workbook.add_format({
-        "border": 1,
-        "border_color": "#E4E9E7",
-        "align": "center",
-        "valign": "vcenter",
-    })
-
-    status_formats = {
-        "PASS": pass_fmt,
-        "REVIEW": review_fmt,
-        "FAIL": fail_fmt,
-    }
+    def xml_escape(value):
+        return html_lib.escape("" if value is None else str(value), quote=False)
 
     def safe_text(value):
         if value is None:
@@ -226,33 +96,153 @@ def build_audit_excel_report(
             return ", ".join(str(v) for v in value)
         return str(value)
 
-    def status_format(status):
-        return status_formats.get(status, neutral_status_fmt)
+    def col_letter(number):
+        letters = ""
+        while number:
+            number, remainder = divmod(number - 1, 26)
+            letters = chr(65 + remainder) + letters
+        return letters
+
+    def cell_ref(row, col):
+        return f"{col_letter(col)}{row}"
+
+    STYLE_DEFAULT = 0
+    STYLE_TITLE = 1
+    STYLE_SECTION = 2
+    STYLE_LABEL = 3
+    STYLE_VALUE = 4
+    STYLE_URL = 5
+    STYLE_HEADER = 6
+    STYLE_TEXT = 7
+    STYLE_CHECK = 8
+    STYLE_PASS = 9
+    STYLE_REVIEW = 10
+    STYLE_FAIL = 11
+    STYLE_NEUTRAL = 12
+    STYLE_NOTE = 13
+    STYLE_INTEGER = 14
+
+    def status_style(status):
+        if status == "PASS":
+            return STYLE_PASS
+        if status == "REVIEW":
+            return STYLE_REVIEW
+        if status == "FAIL":
+            return STYLE_FAIL
+        return STYLE_NEUTRAL
+
+    def inline_cell(row, col, value, style=STYLE_DEFAULT):
+        ref = cell_ref(row, col)
+        return (
+            f'<c r="{ref}" s="{style}" t="inlineStr">'
+            f'<is><t xml:space="preserve">{xml_escape(safe_text(value))}</t></is>'
+            f'</c>'
+        )
+
+    def number_cell(row, col, value, style=STYLE_INTEGER):
+        ref = cell_ref(row, col)
+        return f'<c r="{ref}" s="{style}" t="n"><v>{value}</v></c>'
+
+    def row_xml(row_number, cells, height=None):
+        attrs = [f'r="{row_number}"']
+        if height is not None:
+            attrs.extend([f'ht="{height}"', 'customHeight="1"'])
+        return f'<row {" ".join(attrs)}>{"".join(cells)}</row>'
 
     def row_height_from_values(*values):
         longest = max((len(safe_text(v)) for v in values), default=0)
-        if longest > 700:
-            return 120
-        if longest > 400:
-            return 95
-        if longest > 220:
-            return 75
-        if longest > 100:
-            return 56
-        return 36
+        line_count = max((safe_text(v).count("\n") + 1 for v in values), default=1)
 
-    # ========================================================
-    # SUMMARY
-    # ========================================================
-    summary = workbook.add_worksheet("Summary")
-    summary.hide_gridlines(2)
-    summary.set_zoom(90)
+        if longest > 900 or line_count >= 8:
+            return 135
+        if longest > 600 or line_count >= 6:
+            return 110
+        if longest > 350 or line_count >= 4:
+            return 85
+        if longest > 180 or line_count >= 3:
+            return 65
+        if longest > 90 or line_count >= 2:
+            return 48
+        return 32
 
-    summary.merge_range("A1:F2", "Bayut URL Quality Audit Report", title_fmt)
-    summary.set_row(0, 25)
-    summary.set_row(1, 10)
+    def worksheet_xml(
+        rows,
+        column_widths,
+        merges=None,
+        freeze_rows=1,
+        freeze_cols=0,
+        auto_filter=None,
+    ):
+        merges = merges or []
 
-    summary.merge_range("A4:F4", "Audit Information", section_fmt)
+        cols = "".join(
+            f'<col min="{idx}" max="{idx}" width="{width}" customWidth="1"/>'
+            for idx, width in enumerate(column_widths, start=1)
+        )
+
+        if freeze_rows or freeze_cols:
+            top_left = cell_ref(max(1, freeze_rows + 1), max(1, freeze_cols + 1))
+            pane_attrs = ['state="frozen"', f'topLeftCell="{top_left}"']
+
+            if freeze_rows:
+                pane_attrs.append(f'ySplit="{freeze_rows}"')
+            if freeze_cols:
+                pane_attrs.append(f'xSplit="{freeze_cols}"')
+
+            if freeze_rows and freeze_cols:
+                pane_attrs.append('activePane="bottomRight"')
+            elif freeze_rows:
+                pane_attrs.append('activePane="bottomLeft"')
+            else:
+                pane_attrs.append('activePane="topRight"')
+
+            views = (
+                '<sheetViews><sheetView workbookViewId="0">'
+                f'<pane {" ".join(pane_attrs)}/>'
+                '</sheetView></sheetViews>'
+            )
+        else:
+            views = '<sheetViews><sheetView workbookViewId="0"/></sheetViews>'
+
+        merge_xml = ""
+        if merges:
+            merge_xml = (
+                f'<mergeCells count="{len(merges)}">'
+                + "".join(f'<mergeCell ref="{ref}"/>' for ref in merges)
+                + '</mergeCells>'
+            )
+
+        filter_xml = f'<autoFilter ref="{auto_filter}"/>' if auto_filter else ""
+
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            f'{views}'
+            '<sheetFormatPr defaultRowHeight="15"/>'
+            f'<cols>{cols}</cols>'
+            f'<sheetData>{"".join(rows)}</sheetData>'
+            f'{merge_xml}'
+            f'{filter_xml}'
+            '<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>'
+            '</worksheet>'
+        )
+
+    # Summary.
+    summary_rows_xml = []
+    summary_merges = ["A1:F2", "A4:F4"]
+
+    summary_rows_xml.append(
+        row_xml(
+            1,
+            [inline_cell(1, 1, "Bayut URL Quality Audit Report", STYLE_TITLE)],
+            28,
+        )
+    )
+    summary_rows_xml.append(row_xml(2, [], 12))
+    summary_rows_xml.append(row_xml(3, [], 8))
+    summary_rows_xml.append(
+        row_xml(4, [inline_cell(4, 1, "Audit Information", STYLE_SECTION)], 24)
+    )
 
     info_rows = [
         ("Requested URL", safe_text(url_requested)),
@@ -267,121 +257,163 @@ def build_audit_excel_report(
         ("Total Audit Time", f"{float(total_audit_time):.1f} seconds"),
     ]
 
-    row = 4
+    row_num = 5
     for label, value in info_rows:
-        summary.write(row, 0, label, label_fmt)
-        summary.merge_range(
-            row,
-            1,
-            row,
-            5,
-            value,
-            url_fmt if label in {"Requested URL", "Final URL"} else value_fmt,
+        summary_merges.append(f"B{row_num}:F{row_num}")
+        summary_rows_xml.append(
+            row_xml(
+                row_num,
+                [
+                    inline_cell(row_num, 1, label, STYLE_LABEL),
+                    inline_cell(
+                        row_num,
+                        2,
+                        value,
+                        STYLE_URL if label in {"Requested URL", "Final URL"} else STYLE_VALUE,
+                    ),
+                ],
+                row_height_from_values(value),
+            )
         )
-        summary.set_row(row, row_height_from_values(value))
-        row += 1
+        row_num += 1
 
-    row += 1
-    summary.merge_range(row, 0, row, 5, "Audit Summary", section_fmt)
-    row += 1
+    row_num += 1
+    summary_merges.append(f"A{row_num}:F{row_num}")
+    summary_rows_xml.append(
+        row_xml(row_num, [inline_cell(row_num, 1, "Audit Summary", STYLE_SECTION)], 24)
+    )
 
-    summary_headers = ["Category", "Overall Status", "PASS", "REVIEW", "FAIL", "Rules"]
-    for col, header in enumerate(summary_headers):
-        summary.write(row, col, header, header_fmt)
+    row_num += 1
+    headers = ["Category", "Overall Status", "PASS", "REVIEW", "FAIL", "Rules"]
+    summary_rows_xml.append(
+        row_xml(
+            row_num,
+            [
+                inline_cell(row_num, idx, header, STYLE_HEADER)
+                for idx, header in enumerate(headers, start=1)
+            ],
+            28,
+        )
+    )
 
-    summary_rows = [
+    summary_data = [
         ("Spam", spam_status, spam_counts, len(spam_rows)),
         ("SEO", seo_status, seo_counts, len(seo_rows)),
         ("Content", content_status, content_counts, len(content_rows)),
     ]
 
-    for category, overall_status, counts, rule_count in summary_rows:
-        row += 1
-        summary.write(row, 0, category, check_fmt)
-        summary.write(row, 1, overall_status, status_format(overall_status))
-        summary.write_number(row, 2, int(counts.get("PASS", 0)), integer_fmt)
-        summary.write_number(row, 3, int(counts.get("REVIEW", 0)), integer_fmt)
-        summary.write_number(row, 4, int(counts.get("FAIL", 0)), integer_fmt)
-        summary.write_number(row, 5, int(rule_count), integer_fmt)
+    for category, overall_status, counts, rule_count in summary_data:
+        row_num += 1
+        summary_rows_xml.append(
+            row_xml(
+                row_num,
+                [
+                    inline_cell(row_num, 1, category, STYLE_CHECK),
+                    inline_cell(row_num, 2, overall_status, status_style(overall_status)),
+                    number_cell(row_num, 3, int(counts.get("PASS", 0))),
+                    number_cell(row_num, 4, int(counts.get("REVIEW", 0))),
+                    number_cell(row_num, 5, int(counts.get("FAIL", 0))),
+                    number_cell(row_num, 6, int(rule_count)),
+                ],
+                28,
+            )
+        )
 
-    row += 2
-    summary.merge_range(row, 0, row, 5, "How to Read This Report", section_fmt)
-    row += 1
-    summary.merge_range(
-        row,
-        0,
-        row + 3,
-        5,
-        (
-            "PASS means no issue was found by that rule. REVIEW means the rule found "
-            "something that needs checking or improvement. FAIL means a clear issue was "
-            "detected. Start with the Issues Only sheet for the action list, then use "
-            "Spam, SEO and Content for the complete Result, Action Needed and Why details."
-        ),
-        note_fmt,
+    row_num += 2
+    summary_merges.append(f"A{row_num}:F{row_num}")
+    summary_rows_xml.append(
+        row_xml(
+            row_num,
+            [inline_cell(row_num, 1, "How to Read This Report", STYLE_SECTION)],
+            24,
+        )
     )
 
-    summary.set_column("A:A", 24)
-    summary.set_column("B:B", 20)
-    summary.set_column("C:F", 14)
-    summary.freeze_panes(4, 0)
+    row_num += 1
+    summary_merges.append(f"A{row_num}:F{row_num + 3}")
+    summary_rows_xml.append(
+        row_xml(
+            row_num,
+            [
+                inline_cell(
+                    row_num,
+                    1,
+                    (
+                        "PASS means no issue was found by that rule. REVIEW means the rule found "
+                        "something that needs checking or improvement. FAIL means a clear issue was "
+                        "detected. Start with the Issues Only sheet for the action list, then use "
+                        "Spam, SEO and Content for the complete Result, Action Needed and Why details."
+                    ),
+                    STYLE_NOTE,
+                )
+            ],
+            72,
+        )
+    )
+    summary_rows_xml.extend(
+        [
+            row_xml(row_num + 1, [], 20),
+            row_xml(row_num + 2, [], 20),
+            row_xml(row_num + 3, [], 20),
+        ]
+    )
 
-    # ========================================================
-    # DETAIL SHEETS
-    # ========================================================
-    def write_detail_sheet(sheet_name, rows):
-        ws = workbook.add_worksheet(sheet_name)
-        ws.hide_gridlines(2)
-        ws.set_zoom(85)
-        ws.freeze_panes(1, 2)
+    summary_xml = worksheet_xml(
+        rows=summary_rows_xml,
+        column_widths=[24, 24, 14, 14, 14, 14],
+        merges=summary_merges,
+        freeze_rows=4,
+    )
 
-        headers = ["Check", "Status", "Result", "Action Needed", "Why"]
-        for col, header in enumerate(headers):
-            ws.write(0, col, header, header_fmt)
+    # Detail sheets.
+    detail_headers = ["Check", "Status", "Result", "Action Needed", "Why"]
 
-        for r_idx, item in enumerate(rows, start=1):
+    def build_detail_sheet(category_rows):
+        rows_xml = [
+            row_xml(
+                1,
+                [
+                    inline_cell(1, idx, header, STYLE_HEADER)
+                    for idx, header in enumerate(detail_headers, start=1)
+                ],
+                28,
+            )
+        ]
+
+        row_number = 2
+        for item in category_rows:
             check = safe_text(item.get("Check"))
             status = safe_text(item.get("Status"))
             result_value = safe_text(item.get("Result"))
             action_value = safe_text(item.get("Action Needed"))
             why_value = safe_text(item.get("Why"))
 
-            ws.write(r_idx, 0, check, check_fmt)
-            ws.write(r_idx, 1, status, status_format(status))
-            ws.write(r_idx, 2, result_value, text_fmt)
-            ws.write(r_idx, 3, action_value, text_fmt)
-            ws.write(r_idx, 4, why_value, text_fmt)
-
-            ws.set_row(
-                r_idx,
-                row_height_from_values(result_value, action_value, why_value),
+            rows_xml.append(
+                row_xml(
+                    row_number,
+                    [
+                        inline_cell(row_number, 1, check, STYLE_CHECK),
+                        inline_cell(row_number, 2, status, status_style(status)),
+                        inline_cell(row_number, 3, result_value, STYLE_TEXT),
+                        inline_cell(row_number, 4, action_value, STYLE_TEXT),
+                        inline_cell(row_number, 5, why_value, STYLE_TEXT),
+                    ],
+                    row_height_from_values(result_value, action_value, why_value),
+                )
             )
+            row_number += 1
 
-        ws.set_row(0, 28)
-        ws.set_column("A:A", 27)
-        ws.set_column("B:B", 12)
-        ws.set_column("C:C", 58)
-        ws.set_column("D:D", 48)
-        ws.set_column("E:E", 58)
+        last_row = max(1, row_number - 1)
 
-        # Excel table already supplies filtering, so no separate autofilter.
-        if rows:
-            table_name = re.sub(r"[^A-Za-z0-9_]", "", f"{sheet_name}AuditTable")
-            ws.add_table(
-                0,
-                0,
-                len(rows),
-                4,
-                {
-                    "name": table_name,
-                    "style": "Table Style Medium 4",
-                    "columns": [{"header": h} for h in headers],
-                },
-            )
+        return worksheet_xml(
+            rows=rows_xml,
+            column_widths=[28, 13, 62, 52, 62],
+            freeze_rows=1,
+            freeze_cols=2,
+            auto_filter=f"A1:E{last_row}",
+        )
 
-    # ========================================================
-    # ISSUES ONLY
-    # ========================================================
+    # Issues Only.
     issues = []
     for category, category_rows in [
         ("Spam", spam_rows),
@@ -392,24 +424,22 @@ def build_audit_excel_report(
             if item.get("Status") in {"REVIEW", "FAIL"}:
                 issues.append({"Category": category, **item})
 
-    issues_ws = workbook.add_worksheet("Issues Only")
-    issues_ws.hide_gridlines(2)
-    issues_ws.set_zoom(85)
-    issues_ws.freeze_panes(1, 3)
-
-    issue_headers = [
-        "Category",
-        "Check",
-        "Status",
-        "Result",
-        "Action Needed",
-        "Why",
+    issue_headers = ["Category", "Check", "Status", "Result", "Action Needed", "Why"]
+    issues_rows_xml = [
+        row_xml(
+            1,
+            [
+                inline_cell(1, idx, header, STYLE_HEADER)
+                for idx, header in enumerate(issue_headers, start=1)
+            ],
+            28,
+        )
     ]
-    for col, header in enumerate(issue_headers):
-        issues_ws.write(0, col, header, header_fmt)
+    issues_merges = []
 
     if issues:
-        for r_idx, item in enumerate(issues, start=1):
+        row_number = 2
+        for item in issues:
             category = safe_text(item.get("Category"))
             check = safe_text(item.get("Check"))
             status = safe_text(item.get("Status"))
@@ -417,51 +447,184 @@ def build_audit_excel_report(
             action_value = safe_text(item.get("Action Needed"))
             why_value = safe_text(item.get("Why"))
 
-            issues_ws.write(r_idx, 0, category, check_fmt)
-            issues_ws.write(r_idx, 1, check, check_fmt)
-            issues_ws.write(r_idx, 2, status, status_format(status))
-            issues_ws.write(r_idx, 3, result_value, text_fmt)
-            issues_ws.write(r_idx, 4, action_value, text_fmt)
-            issues_ws.write(r_idx, 5, why_value, text_fmt)
-
-            issues_ws.set_row(
-                r_idx,
-                row_height_from_values(result_value, action_value, why_value),
+            issues_rows_xml.append(
+                row_xml(
+                    row_number,
+                    [
+                        inline_cell(row_number, 1, category, STYLE_CHECK),
+                        inline_cell(row_number, 2, check, STYLE_CHECK),
+                        inline_cell(row_number, 3, status, status_style(status)),
+                        inline_cell(row_number, 4, result_value, STYLE_TEXT),
+                        inline_cell(row_number, 5, action_value, STYLE_TEXT),
+                        inline_cell(row_number, 6, why_value, STYLE_TEXT),
+                    ],
+                    row_height_from_values(result_value, action_value, why_value),
+                )
             )
-
-        issues_ws.add_table(
-            0,
-            0,
-            len(issues),
-            5,
-            {
-                "name": "IssuesOnlyTable",
-                "style": "Table Style Medium 4",
-                "columns": [{"header": h} for h in issue_headers],
-            },
-        )
+            row_number += 1
+        issue_last_row = row_number - 1
     else:
-        issues_ws.merge_range(
-            "A2:F4",
-            "No REVIEW or FAIL items were found in this audit.",
-            note_fmt,
+        issues_merges.append("A2:F4")
+        issues_rows_xml.append(
+            row_xml(
+                2,
+                [
+                    inline_cell(
+                        2,
+                        1,
+                        "No REVIEW or FAIL items were found in this audit.",
+                        STYLE_NOTE,
+                    )
+                ],
+                55,
+            )
         )
+        issues_rows_xml.extend([row_xml(3, [], 20), row_xml(4, [], 20)])
+        issue_last_row = 1
 
-    issues_ws.set_row(0, 28)
-    issues_ws.set_column("A:A", 14)
-    issues_ws.set_column("B:B", 27)
-    issues_ws.set_column("C:C", 12)
-    issues_ws.set_column("D:D", 58)
-    issues_ws.set_column("E:E", 48)
-    issues_ws.set_column("F:F", 58)
+    issues_xml = worksheet_xml(
+        rows=issues_rows_xml,
+        column_widths=[15, 28, 13, 62, 52, 62],
+        merges=issues_merges,
+        freeze_rows=1,
+        freeze_cols=3,
+        auto_filter=f"A1:F{issue_last_row}" if issues else None,
+    )
 
-    write_detail_sheet("Spam", spam_rows)
-    write_detail_sheet("SEO", seo_rows)
-    write_detail_sheet("Content", content_rows)
+    spam_xml = build_detail_sheet(spam_rows)
+    seo_xml = build_detail_sheet(seo_rows)
+    content_xml = build_detail_sheet(content_rows)
 
-    workbook.close()
+    sheet_names = ["Summary", "Issues Only", "Spam", "SEO", "Content"]
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        + "".join(
+            f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            for i in range(1, 6)
+        )
+        + '</Types>'
+    )
+
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/>'
+        '</Relationships>'
+    )
+
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<bookViews><workbookView/></bookViews>'
+        '<sheets>'
+        + "".join(
+            f'<sheet name="{xml_escape(name)}" sheetId="{idx}" r:id="rId{idx}"/>'
+            for idx, name in enumerate(sheet_names, start=1)
+        )
+        + '</sheets>'
+        '</workbook>'
+    )
+
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + "".join(
+            f'<Relationship Id="rId{i}" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+            f'Target="worksheets/sheet{i}.xml"/>'
+            for i in range(1, 6)
+        )
+        + '<Relationship Id="rId6" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+        'Target="styles.xml"/>'
+        '</Relationships>'
+    )
+
+    styles_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="12">
+    <font><sz val="11"/><name val="Calibri"/><family val="2"/></font>
+    <font><b/><sz val="18"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
+    <font><b/><sz val="12"/><color rgb="FF1F2D2A"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><color rgb="FF33413D"/><name val="Calibri"/></font>
+    <font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><color rgb="FF1F2D2A"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><color rgb="FF14804A"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><color rgb="FF9A6700"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><color rgb="FFB42318"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><color rgb="FF475467"/><name val="Calibri"/></font>
+    <font><i/><sz val="11"/><color rgb="FF66736F"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="9">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF00A66A"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFEAF7F1"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFF6F9F7"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFE9F8EF"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFFF6D8"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFDECEC"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFF2F4F7"/><bgColor indexed="64"/></patternFill></fill>
+  </fills>
+  <borders count="2">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+    <border>
+      <left style="thin"><color rgb="FFE4E9E7"/></left>
+      <right style="thin"><color rgb="FFE4E9E7"/></right>
+      <top style="thin"><color rgb="FFE4E9E7"/></top>
+      <bottom style="thin"><color rgb="FFE4E9E7"/></bottom>
+      <diagonal/>
+    </border>
+  </borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="15">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="5" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="6" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="7" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="8" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="9" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="10" fillId="8" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="11" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
+
+    output = io.BytesIO()
+
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as xlsx:
+        xlsx.writestr("[Content_Types].xml", content_types)
+        xlsx.writestr("_rels/.rels", root_rels)
+        xlsx.writestr("xl/workbook.xml", workbook_xml)
+        xlsx.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        xlsx.writestr("xl/styles.xml", styles_xml)
+        xlsx.writestr("xl/worksheets/sheet1.xml", summary_xml)
+        xlsx.writestr("xl/worksheets/sheet2.xml", issues_xml)
+        xlsx.writestr("xl/worksheets/sheet3.xml", spam_xml)
+        xlsx.writestr("xl/worksheets/sheet4.xml", seo_xml)
+        xlsx.writestr("xl/worksheets/sheet5.xml", content_xml)
+
     output.seek(0)
     return output.getvalue()
+
 
 
 st.set_page_config(
@@ -7262,7 +7425,7 @@ if run:
         st.download_button(
             "Download audit report Excel",
             data=excel_report,
-            file_name="url_audit_report_v18_25.xlsx",
+            file_name="url_audit_report_v18_26.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
