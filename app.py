@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.5 REMOVE PAID LINKS"
-ENGINE_BUILD = "2026.08.12.8"
+APP_VERSION = "V18.6 COUNT HIDDEN INSTANCES"
+ENGINE_BUILD = "2026.08.12.9"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -458,7 +458,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. Self references to the current article are ignored. PASS when no other hidden or empty links are found."),
+    ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. Every actual <a href> occurrence is counted separately, even when several links point to the same URL. Self references to the current article are ignored."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
@@ -522,7 +522,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Fetched HTML <a href> elements, same-page URL exclusion, empty anchors and HTML/CSS hiding signals",
+    "Hidden Links": "Fetched HTML <a href> elements, per-element occurrence counting, same-page exclusion, empty anchors and HTML/CSS hiding signals",
     "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
@@ -2138,15 +2138,21 @@ def static_hidden_link_details(soup, base_url):
     """
     Detect hidden/effectively invisible links directly from fetched HTML.
 
-    A link is flagged when either:
-    1. the anchor or an HTML ancestor has a supported hiding signal, or
-    2. the anchor has a real HTTP(S) href but contains no visible text,
-       image, SVG or other visible media/content.
+    IMPORTANT:
+    Each actual <a href> element is counted separately.
+
+    Four empty anchors pointing to the same URL = four hidden-link instances.
+
+    A single anchor may have more than one issue, e.g.
+    "Empty anchor, Hidden HTML link", but it is still counted as one HTML
+    link instance.
     """
     details = []
-    seen = set()
 
-    for anchor in soup.find_all("a", href=True):
+    for occurrence_index, anchor in enumerate(
+        soup.find_all("a", href=True),
+        start=1,
+    ):
         href = normalized_link_url(
             anchor.get("href"),
             base_url,
@@ -2155,8 +2161,7 @@ def static_hidden_link_details(soup, base_url):
         if not href:
             continue
 
-        # Self references such as #respond, #comments or the article URL
-        # itself are not hidden-link findings.
+        # Ignore links back to the current article, including fragments.
         if is_same_page_link(href, base_url):
             continue
 
@@ -2166,89 +2171,45 @@ def static_hidden_link_details(soup, base_url):
             anchor.get_text(" ", strip=True),
         ).strip()
 
-        # ----------------------------------------------------
-        # Case 1: Empty <a href="..."></a>
-        # ----------------------------------------------------
-        if is_empty_href_anchor(anchor, base_url):
-            context = nearest_editorial_context(anchor)
-
-            anchor_html = re.sub(
-                r"\s+",
-                " ",
-                str(anchor),
-            ).strip()
-
-            key = (
-                href,
-                "empty-anchor",
-                anchor_html[:220],
-            )
-
-            if key not in seen:
-                seen.add(key)
-
-                details.append({
-                    "url": href,
-                    "anchor_text": "(empty)",
-                    "hidden_element": element_label(anchor),
-                    "hidden_because": "empty anchor element with no visible content",
-                    "purpose": "Empty hyperlink",
-                    "status": FAIL,
-                    "explanation": "The HTML contains a real hyperlink but the anchor has no visible text, image or other visible content.",
-                    "source": "Fetched HTML source",
-                    "anchor_html": anchor_html[:500],
-                    "hidden_html": anchor_html[:500],
-                    "context": context,
-                    "issue_type": "Empty anchor",
-                })
-
-        # ----------------------------------------------------
-        # Case 2: Anchor/ancestor contains HTML hiding signal
-        # ----------------------------------------------------
-        hidden_element, reasons = hidden_ancestor_info(anchor)
-
-        if hidden_element is None:
-            continue
-
         anchor_html = re.sub(
             r"\s+",
             " ",
             str(anchor),
         ).strip()
 
-        hidden_html = re.sub(
-            r"\s+",
-            " ",
-            str(hidden_element),
-        ).strip()
+        issues = []
+        reasons = []
+        hidden_element = None
+
+        # Case 1: empty <a href="..."></a>
+        if is_empty_href_anchor(anchor, base_url):
+            issues.append("Empty anchor")
+            reasons.append("no visible text or media inside the anchor")
+
+        # Case 2: anchor or ancestor hidden by source-level HTML/CSS
+        detected_hidden_element, hidden_reasons = hidden_ancestor_info(anchor)
+
+        if detected_hidden_element is not None:
+            hidden_element = detected_hidden_element
+            issues.append("Hidden HTML link")
+            reasons.extend(hidden_reasons)
+
+        if not issues:
+            continue
 
         context = nearest_editorial_context(anchor)
 
-        key = (
-            href,
-            "hidden-style",
-            element_label(hidden_element),
-            ", ".join(reasons),
-        )
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-
         details.append({
+            "occurrence": occurrence_index,
             "url": href,
             "anchor_text": anchor_text or "(empty)",
-            "hidden_element": element_label(hidden_element),
-            "hidden_because": ", ".join(reasons) if reasons else "hidden HTML signal",
-            "purpose": "Hidden hyperlink",
+            "hidden_element": element_label(hidden_element or anchor),
+            "hidden_because": ", ".join(reasons),
             "status": FAIL,
-            "explanation": "The hyperlink or one of its HTML ancestors contains a source-level hiding signal.",
             "source": "Fetched HTML source",
             "anchor_html": anchor_html[:500],
-            "hidden_html": hidden_html[:500],
             "context": context,
-            "issue_type": "Hidden HTML link",
+            "issue_type": ", ".join(issues),
         })
 
     return details
@@ -4025,33 +3986,20 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
     if hidden_links:
         hidden_status = FAIL
 
-        # Group duplicate findings by URL so the same URL is shown once.
-        grouped_hidden = {}
+        issue_lines = [
+            f"{len(hidden_links)} hidden link instance(s) found."
+        ]
 
-        for item in hidden_links:
+        for index, item in enumerate(hidden_links, start=1):
             link_url = item.get("url") or "(URL unavailable)"
             issue_type = item.get("issue_type") or "Hidden link"
 
-            grouped_hidden.setdefault(
-                link_url,
-                [],
-            )
-
-            if issue_type not in grouped_hidden[link_url]:
-                grouped_hidden[link_url].append(issue_type)
-
-        issue_lines = []
-
-        for index, (link_url, issues) in enumerate(
-            grouped_hidden.items(),
-            start=1,
-        ):
             issue_lines.append(
-                f"{index}. {link_url} | {', '.join(issues)}"
+                f"{index}. {link_url} | {issue_type}"
             )
 
         hidden_result = "\n".join(issue_lines)
-        hidden_action = "Remove or fix only the URLs listed in Result."
+        hidden_action = "Remove or fix the hidden link instances listed in Result."
 
     else:
         hidden_status = PASS
@@ -6107,7 +6055,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_5_remove_paid_links.json",
+            file_name="url_audit_v18_6_count_hidden_instances.json",
             mime="application/json",
         )
 
