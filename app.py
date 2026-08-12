@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.1 HIDDEN LINKS FIX"
-ENGINE_BUILD = "2026.08.12.4"
+APP_VERSION = "V18.2 SIMPLE HIDDEN URLS"
+ENGINE_BUILD = "2026.08.12.5"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -458,7 +458,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "HTML source rule: FAIL when the fetched HTML contains either a hyperlink hidden by an HTML/CSS source-level hiding signal or an empty HTTP(S) <a href> element with no visible text, image, SVG or other visible content. PASS only when neither case is found. Result shows only the exact URL, issue type and nearby article context."),
+    ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. PASS when none are found."),
     ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
@@ -523,7 +523,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Fetched HTML source, actual <a href> elements, visible anchor text/media presence, empty-anchor detection, hidden and inert attributes, inline CSS hiding signals, ancestor HTML elements and nearest editorial context",
+    "Hidden Links": "Fetched HTML <a href> elements, empty anchors and HTML/CSS hiding signals",
     "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Paid Links": "External links, surrounding text, sponsored and affiliate terms, rel sponsored attribute, rel nofollow attribute",
@@ -1705,12 +1705,24 @@ def action_for(name, status, specific_action=""):
 
 def result(name, status, finding, rule, action_needed=""):
     method = SYSTEM_USES.get(name, "Rule based page analysis")
+
+    if name == "Hidden Links":
+        why_text = (
+            "Checked the fetched HTML for empty <a href> links "
+            "and links hidden by HTML/CSS."
+        )
+    else:
+        why_text = (
+            f"The system used {method}. "
+            f"The fixed rule applied is: {rule}"
+        )
+
     return {
         "Check": name,
         "Status": status,
         "Result": finding,
         "Action Needed": action_for(name, status, action_needed),
-        "Why": f"The system used {method}. The fixed rule applied is: {rule}",
+        "Why": why_text,
         "_internal_status": status,
         "_rule": rule,
         "_system_uses": method,
@@ -3973,30 +3985,38 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
 
     if hidden_links:
         hidden_status = FAIL
-        issue_lines = []
 
-        for item in hidden_links[:30]:
+        # Group duplicate findings by URL so the same URL is shown once.
+        grouped_hidden = {}
+
+        for item in hidden_links:
             link_url = item.get("url") or "(URL unavailable)"
             issue_type = item.get("issue_type") or "Hidden link"
-            context = item.get("context") or ""
 
-            line = f"{link_url} | Issue: {issue_type}"
+            grouped_hidden.setdefault(
+                link_url,
+                [],
+            )
 
-            if context:
-                line += f" | Near: {context}"
+            if issue_type not in grouped_hidden[link_url]:
+                grouped_hidden[link_url].append(issue_type)
 
-            issue_lines.append(line)
+        issue_lines = []
 
-        if len(hidden_links) > 30:
+        for index, (link_url, issues) in enumerate(
+            grouped_hidden.items(),
+            start=1,
+        ):
             issue_lines.append(
-                f"{len(hidden_links) - 30} additional hidden link(s) not shown."
+                f"{index}. {link_url} | {', '.join(issues)}"
             )
 
         hidden_result = "\n".join(issue_lines)
-        hidden_action = "Remove or correctly attach only the hidden/empty links listed in Result."
+        hidden_action = "Remove or fix only the URLs listed in Result."
+
     else:
         hidden_status = PASS
-        hidden_result = "No hidden or empty links found in the fetched HTML."
+        hidden_result = "No hidden links found."
         hidden_action = ""
 
     rows.append(result(
@@ -6081,7 +6101,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_1_hidden_links_fix.json",
+            file_name="url_audit_v18_2_simple_hidden_urls.json",
             mime="application/json",
         )
 
