@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.11 INTERNAL LINKS CONFIRMED BROKEN ONLY"
-ENGINE_BUILD = "2026.08.12.15"
+APP_VERSION = "V18.13 REMOVE DATEMODIFIED"
+ENGINE_BUILD = "2026.08.12.17"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -481,9 +481,7 @@ SEO_RULES = [
     ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, GET-confirmed HTTP 404/410 internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. Timeouts, connection failures, temporary 5xx responses and HTTP 401/403/405/406/429 automated restrictions are not treated as broken."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
     ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
-    ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
     ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
-    ("dateModified", "Compare schema dateModified with visible update metadata, sitemap lastmod and HTTP Last Modified when available. PASS when signals are consistent. REVIEW missing dates or material freshness inconsistencies. HTTP Last Modified mismatch is treated as a technical inconsistency, not a spam violation."),
     ("Sitemap", "Follow sitemap indexes and prioritise editorial post or article sitemap families before generic page, category and tag sitemaps. PASS when the preferred canonical URL is found in an accessible sitemap. REVIEW only when inspection remains incomplete or the URL is not found after the configured inspection budget."),
     ("Mobile Content", "REVIEW/FAIL when mobile receives materially less main content than desktop."),
     ("JavaScript Rendering", "REVIEW when the initial HTML contains very little article text and depends heavily on scripts."),
@@ -544,9 +542,7 @@ SYSTEM_USES = {
     "Internal Links": "Only inline editorial text hyperlinks inside paragraph, list and table text in the isolated article body; non-editorial modules are excluded; HEAD is followed by normal GET confirmation when needed; only GET-confirmed HTTP 404/410 is treated as a broken destination",
     "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
     "Images": "Isolated editorial article images, TruBroker and broker/property widget exclusion by asset URL and DOM ancestry, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
-    "Structured Data": "JSON LD parsing, Article BlogPosting or NewsArticle type detection, schema headline, schema URL and mainEntityOfPage comparison with the visible preferred page",
     "datePublished": "Schema datePublished, article published metadata, visible time elements and date consistency comparison",
-    "dateModified": "Schema dateModified, article modified metadata, visible time elements, sitemap lastmod, HTTP Last Modified and date consistency comparison",
     "Sitemap": "robots.txt sitemap declarations, common sitemap locations, recursive sitemap index traversal, editorial post and article sitemap prioritisation, preferred URL lookup, lastmod extraction, caching and bounded parallel requests",
     "Mobile Content": "Desktop User Agent, Mobile User Agent, extracted main content, text similarity",
     "JavaScript Rendering": "Extracted article word count, script count, initial HTML content availability",
@@ -1691,9 +1687,7 @@ DEFAULT_ACTIONS = {
     "Internal Links": "Fix only the internal hyperlinks reported inside the article content. Correct broken destinations, replace empty or generic anchors with descriptive text and rewrite spammy or misleading anchor text.",
     "External Links": "Fix, replace or remove each confirmed problematic external destination. Social platform anti bot responses do not need fixing by themselves.",
     "Images": "For each meaningful image reported, add useful alt text or fix the broken image resource. Decorative images can use empty alt treatment.",
-    "Structured Data": "Fix JSON LD parsing or add a valid Article or BlogPosting object. Align schema headline and page identity with the visible article.",
     "datePublished": "Add or correct the editorial publication date so schema and visible metadata agree.",
-    "dateModified": "Align editorial modification signals. Fix the backend HTTP Last Modified source if it changes without a real editorial update. Do not change schema dates only to match a server cache date.",
     "Sitemap": "Ensure the preferred canonical URL is included in an accessible editorial sitemap and that the sitemap can be completed within the audit.",
     "Mobile Content": "Restore any primary article content missing from mobile so desktop and mobile present materially equivalent information.",
     "JavaScript Rendering": "Ensure important article content is present in initial HTML or reliably server rendered, not dependent on client JavaScript alone.",
@@ -4993,74 +4987,12 @@ def audit_seo(
         image_action,
     ))
 
-    jsonld, json_errors = parse_jsonld(soup)
-    article_objects = article_schema_objects(jsonld)
-    visible_title = title_text(soup)
-    visible_h1 = page_primary_h1(soup)
-    sd = PASS
-    schema_notes = []
-
-    if json_errors:
-        sd = REVIEW
-        schema_notes.append(f"{json_errors} JSON LD parse error(s) detected.")
-    if not jsonld:
-        sd = REVIEW
-        schema_notes.append("No valid JSON LD block was found.")
-    elif not article_objects and word_count(body_text) >= 300:
-        sd = REVIEW
-        schema_notes.append(
-            f"{len(jsonld)} JSON LD block(s) are parseable, but no Article, BlogPosting or NewsArticle type was identified for this editorial page."
-        )
-    else:
-        schema_notes.append(
-            f"{len(jsonld)} valid JSON LD block(s); {len(article_objects)} article type schema object(s)."
-        )
-
-    if article_objects:
-        obj = article_objects[0]
-        headline = obj.get("headline")
-        if isinstance(headline, str) and headline.strip():
-            headline_score = max(
-                semantic_overlap(headline, visible_title),
-                semantic_overlap(headline, visible_h1),
-                keyword_overlap(headline, visible_title),
-                keyword_overlap(headline, visible_h1),
-            )
-            if headline_score < 0.45:
-                sd = REVIEW
-                schema_notes.append(
-                    f"Schema headline has weak agreement with visible title and H1 ({headline_score:.0%})."
-                )
-            else:
-                schema_notes.append(
-                    f"Schema headline agrees with visible page topic at {headline_score:.0%}."
-                )
-
-        schema_urls = [
-            normalized_link_url(value, desktop_r.url)
-            for value in schema_object_urls(obj)
-        ]
-        schema_urls = [u for u in schema_urls if u]
-        if schema_urls:
-            if not any(
-                normalized_destination(u) == normalized_destination(desktop_r.url)
-                for u in schema_urls
-            ):
-                sd = REVIEW
-                schema_notes.append(
-                    "Article schema URL or mainEntityOfPage does not match the preferred final page URL."
-                )
-
-    rows.append(result("Structured Data", sd, " ".join(schema_notes), rules["Structured Data"]))
+    # JSON LD remains only as a source for datePublished and other internal freshness signals.
+    jsonld, _json_errors = parse_jsonld(soup)
 
     published = [
         str(value)
         for value in get_schema_values(jsonld, "datePublished")
-        if isinstance(value, (str, int, float))
-    ]
-    modified = [
-        str(value)
-        for value in get_schema_values(jsonld, "dateModified")
         if isinstance(value, (str, int, float))
     ]
     visible_dates = visible_date_signals(soup)
@@ -5081,60 +5013,6 @@ def audit_seo(
                 published_status = REVIEW
                 published_notes.append("Publication date signals differ by more than 24 hours.")
     rows.append(result("datePublished", published_status, " ".join(published_notes), rules["datePublished"]))
-
-    modified_status = PASS if modified else REVIEW
-    modified_notes = [
-        f"Schema dateModified: {modified[:3] if modified else 'not found'}."
-    ]
-    if visible_dates["modified"]:
-        modified_notes.append(f"Visible or metadata modified dates: {visible_dates['modified'][:3]}.")
-
-    sitemap_lastmod = sitemap_result.get("lastmod") if sitemap_result else ""
-    if sitemap_lastmod:
-        modified_notes.append(f"Sitemap lastmod: {sitemap_lastmod}.")
-        if modified:
-            diff = datetime_difference_hours(modified[0], sitemap_lastmod)
-            if diff is not None and diff > 24:
-                modified_status = REVIEW
-                modified_notes.append("Schema dateModified and sitemap lastmod differ by more than 24 hours.")
-
-    http_last_modified = desktop_r.headers.get("Last-Modified") or desktop_r.headers.get("last-modified")
-    if http_last_modified:
-        modified_notes.append(f"HTTP Last Modified: {http_last_modified}.")
-        if modified:
-            diff = datetime_difference_hours(modified[0], http_last_modified)
-            if diff is not None and diff > 24:
-                modified_status = REVIEW
-                modified_notes.append(
-                    "HTTP Last Modified differs materially from the editorial modification date. "
-                    "This is a technical freshness inconsistency, not a spam violation."
-                )
-
-    if visible_dates["modified"] and modified:
-        diffs = [
-            datetime_difference_hours(modified[0], value)
-            for value in visible_dates["modified"]
-        ]
-        diffs = [d for d in diffs if d is not None]
-        if diffs and min(diffs) > 24:
-            modified_status = REVIEW
-            modified_notes.append("Visible modified date and schema dateModified differ by more than 24 hours.")
-
-    if modified_status == REVIEW:
-        modified_action = (
-            "Check what generates the HTTP Last Modified header. If it changes because of cache, deployment, template regeneration or server behaviour rather than an editorial update, "
-            "fix the backend header logic or stop emitting a misleading Last Modified value. Keep schema dateModified and sitemap lastmod tied to real editorial changes."
-        )
-    else:
-        modified_action = ""
-
-    rows.append(result(
-        "dateModified",
-        modified_status,
-        " ".join(modified_notes),
-        rules["dateModified"],
-        modified_action,
-    ))
 
     if sitemap_result is None:
         sitemap_result = find_url_in_sitemaps(desktop_r.url)
@@ -5450,7 +5328,7 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         if time_sensitive:
             outdated_action = (
                 "Refresh the current time sensitive data in this article: prices, rents, ROI, fees, routes and project status wherever present. "
-                "Use the current approved Bayut or authoritative source, then update dateModified only after the article content is actually changed."
+                "Use the current approved Bayut or authoritative source, then update the article content and its editorial freshness signals only when a real change is made."
             )
         else:
             outdated_action = "Review the old year references shown in Result and either update the current claim or make the historical context explicit."
@@ -6380,7 +6258,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_11_internal_links_confirmed_broken_only.json",
+            file_name="url_audit_v18_13_remove_datemodified.json",
             mime="application/json",
         )
 
@@ -6435,7 +6313,7 @@ else:
     a, b, c = st.columns(3, gap="medium")
     cards = [
         (a, ICON_SHIELD, f'<span>Spam</span> {len(SPAM_RULES)} rules', 'Cloaking, redirects, hidden content, links, hacked content, scripts, UGC, malware and related spam risks.'),
-        (b, ICON_SEARCH, f'<span>SEO</span> {len(SEO_RULES)} rules', 'Status, indexability, canonical, titles, headings, keyword stuffing, links, images, schema, dates, sitemap, mobile, HTTPS and more.'),
+        (b, ICON_SEARCH, f'<span>SEO</span> {len(SEO_RULES)} rules', 'Status, indexability, canonical, titles, headings, keyword stuffing, links, images, dates, sitemap, mobile, HTTPS and more.'),
         (c, ICON_DOC, f'<span>Content</span> {len(CONTENT_RULES)} rules', 'Intent, relevance, thinness, originality, freshness, repetition, FAQs, sourcing, accuracy and readability.'),
     ]
     for col, icon, title, desc in cards:
