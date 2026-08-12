@@ -41,8 +41,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.26 EXCEL NO DEPENDENCY"
-ENGINE_BUILD = "2026.08.12.30"
+APP_VERSION = "V18.27 HIDDEN LINK FALSE POSITIVE FIX"
+ENGINE_BUILD = "2026.08.12.31"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -1024,7 +1024,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. Every actual <a href> occurrence is counted separately, even when several links point to the same URL. Self references to the current article are ignored."),
+    ("Hidden Links", "FAIL only when an actual <a href> link is deliberately concealed by supported HTML/CSS hiding signals and no legitimate interface, responsive or accessibility purpose is detected. Empty anchors are not hidden links by themselves. Self references to the current article are ignored."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
@@ -1082,7 +1082,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Fetched HTML <a href> elements, per-element occurrence counting, same-page exclusion, empty anchors and HTML/CSS hiding signals",
+    "Hidden Links": "Fetched HTML <a href> elements, same-page exclusion, HTML/CSS hiding signals, and legitimate UI/accessibility context classification; empty anchors alone are excluded",
     "Keyword Stuffing": "Editorial article text only, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context; TruBroker/property widgets, banners, newsletter, social UI and other embedded modules are excluded",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
@@ -2593,7 +2593,7 @@ DEFAULT_ACTIONS = {
     "Sneaky Redirect": "Remove deceptive or crawler specific redirects. Keep legitimate redirects consistent for users and crawlers.",
     "Device Spam Redirect": "Use the same relevant destination and primary content for desktop and mobile users.",
     "Hidden Text": "Make editorial text visible unless it is legitimately hidden for interface, responsive or accessibility reasons.",
-    "Hidden Links": "Remove deliberately concealed links. Keep hidden interface links only when their UI or accessibility purpose is clear.",
+    "Hidden Links": "Remove only deliberately concealed links. Do not treat empty anchors, visible card links, image/icon links, or recognised interface/accessibility controls as hidden-link spam.",
     "Keyword Stuffing": "Reduce repeated query phrases that read unnaturally. Keep necessary location and entity names when editorially justified.",
     "Link Spam": "Remove or rewrite manipulative keyword rich links and repeated commercial anchor patterns. Keep editorial links relevant and natural.",
     "Hacked Content": "Remove injected spam content, secure the CMS and plugins, rotate credentials and verify the clean page after remediation.",
@@ -2697,8 +2697,9 @@ def result(name, status, finding, rule, action_needed=""):
 
     if name == "Hidden Links":
         why_text = (
-            "Checked the fetched HTML for empty <a href> links "
-            "and links hidden by HTML/CSS."
+            "Checked actual <a href> elements for supported HTML/CSS hiding signals. "
+            "Empty anchors alone are not classified as hidden links, and recognised "
+            "interface, responsive and accessibility controls are excluded."
         )
     else:
         why_text = (
@@ -3128,16 +3129,16 @@ def is_same_page_link(url, base_url):
 
 def static_hidden_link_details(soup, base_url):
     """
-    Detect hidden/effectively invisible links directly from fetched HTML.
+    Detect deliberately concealed links directly from fetched HTML.
 
     IMPORTANT:
-    Each actual <a href> element is counted separately.
-
-    Four empty anchors pointing to the same URL = four hidden-link instances.
-
-    A single anchor may have more than one issue, e.g.
-    "Empty anchor, Hidden HTML link", but it is still counted as one HTML
-    link instance.
+    - An empty <a href> is NOT a hidden link by itself.
+    - Visible property/listing cards, image links, icon links and CTA wrappers are
+      not hidden-link spam merely because the anchor has no text.
+    - A link is reported only when the anchor or an ancestor has a supported
+      source-level hiding signal and there is no recognised legitimate UI,
+      responsive or accessibility reason for that hiding.
+    - Each genuinely concealed <a href> occurrence is counted separately.
     """
     details = []
 
@@ -3157,6 +3158,12 @@ def static_hidden_link_details(soup, base_url):
         if is_same_page_link(href, base_url):
             continue
 
+        # Empty anchors are not hidden links. Hidden Links requires an actual
+        # concealment signal on the anchor or one of its ancestors.
+        hidden_element, hidden_reasons = hidden_ancestor_info(anchor)
+        if hidden_element is None:
+            continue
+
         anchor_text = re.sub(
             r"\s+",
             " ",
@@ -3169,39 +3176,47 @@ def static_hidden_link_details(soup, base_url):
             str(anchor),
         ).strip()
 
-        issues = []
-        reasons = []
-        hidden_element = None
-
-        # Case 1: empty <a href="..."></a>
-        if is_empty_href_anchor(anchor, base_url):
-            issues.append("Empty anchor")
-            reasons.append("no visible text or media inside the anchor")
-
-        # Case 2: anchor or ancestor hidden by source-level HTML/CSS
-        detected_hidden_element, hidden_reasons = hidden_ancestor_info(anchor)
-
-        if detected_hidden_element is not None:
-            hidden_element = detected_hidden_element
-            issues.append("Hidden HTML link")
-            reasons.extend(hidden_reasons)
-
-        if not issues:
-            continue
-
+        # Determine whether the hiding is a recognised interface/accessibility
+        # behaviour rather than an SEO concealment pattern.
         context = nearest_editorial_context(anchor)
+        ui_context = _token_string(
+            element_label(anchor),
+            element_label(hidden_element),
+            anchor_text,
+            anchor.get("aria-label"),
+            anchor.get("title"),
+            anchor.get("role"),
+            href,
+            context,
+        )
+        legitimate_reason = known_ui_reason_from_text(ui_context)
+
+        # Property/listing modules can contain hidden inactive carousel cards or
+        # clickable wrappers. Treat those as legitimate UI, not hidden-link spam.
+        widget_context = ui_context.casefold()
+        property_widget_patterns = (
+            "property-card", "property_card", "listing-card", "listing_card",
+            "property-listing", "property_listing", "listing-widget",
+            "listing_widget", "trubroker", "featured-property",
+            "featured_property", "property/details-",
+        )
+        if not legitimate_reason and any(p in widget_context for p in property_widget_patterns):
+            legitimate_reason = "Property/listing widget"
+
+        if legitimate_reason:
+            continue
 
         details.append({
             "occurrence": occurrence_index,
             "url": href,
             "anchor_text": anchor_text or "(empty)",
-            "hidden_element": element_label(hidden_element or anchor),
-            "hidden_because": ", ".join(reasons),
+            "hidden_element": element_label(hidden_element),
+            "hidden_because": ", ".join(hidden_reasons),
             "status": FAIL,
             "source": "Fetched HTML source",
             "anchor_html": anchor_html[:500],
             "context": context,
-            "issue_type": ", ".join(issues),
+            "issue_type": "Hidden HTML link",
         })
 
     return details
