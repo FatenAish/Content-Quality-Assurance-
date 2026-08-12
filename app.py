@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.2 SIMPLE HIDDEN URLS"
-ENGINE_BUILD = "2026.08.12.5"
+APP_VERSION = "V18.3 IGNORE SELF LINKS"
+ENGINE_BUILD = "2026.08.12.6"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -458,7 +458,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. PASS when none are found."),
+    ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. Self references to the current article are ignored. PASS when no other hidden or empty links are found."),
     ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
@@ -523,7 +523,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Fetched HTML <a href> elements, empty anchors and HTML/CSS hiding signals",
+    "Hidden Links": "Fetched HTML <a href> elements, same-page URL exclusion, empty anchors and HTML/CSS hiding signals",
     "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Paid Links": "External links, surrounding text, sponsored and affiliate terms, rel sponsored attribute, rel nofollow attribute",
@@ -2100,6 +2100,43 @@ def hidden_ancestor_info(anchor):
 
     return None, []
 
+
+def is_same_page_link(url, base_url):
+    """
+    Treat links back to the current article as self-links and ignore them
+    in Hidden Links.
+
+    Fragments and query strings do not make the same article a different
+    destination for this rule.
+
+    Examples ignored:
+      #respond
+      current-article-url
+      current-article-url#comments
+      current-article-url?replytocom=123
+    """
+    try:
+        target = urlparse(url)
+        base = urlparse(base_url)
+
+        target_host = target.netloc.lower().replace("www.", "")
+        base_host = base.netloc.lower().replace("www.", "")
+
+        target_path = re.sub(r"/+$", "", target.path or "/")
+        base_path = re.sub(r"/+$", "", base.path or "/")
+
+        if not target_path:
+            target_path = "/"
+        if not base_path:
+            base_path = "/"
+
+        return (
+            target_host == base_host
+            and target_path == base_path
+        )
+    except Exception:
+        return False
+
 def static_hidden_link_details(soup, base_url):
     """
     Detect hidden/effectively invisible links directly from fetched HTML.
@@ -2119,6 +2156,11 @@ def static_hidden_link_details(soup, base_url):
         )
 
         if not href:
+            continue
+
+        # Self references such as #respond, #comments or the article URL
+        # itself are not hidden-link findings.
+        if is_same_page_link(href, base_url):
             continue
 
         anchor_text = re.sub(
@@ -6101,7 +6143,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_2_simple_hidden_urls.json",
+            file_name="url_audit_v18_3_ignore_self_links.json",
             mime="application/json",
         )
 
