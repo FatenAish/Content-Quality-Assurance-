@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17.8 STRICT HIDDEN LINKS"
-ENGINE_BUILD = "2026.08.12.1"
+APP_VERSION = "V18 EMPTY ANCHOR HIDDEN LINKS"
+ENGINE_BUILD = "2026.08.12.3"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -458,7 +458,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "Strict rule: PASS only when no hidden hyperlink is detected. FAIL when any hyperlink is hidden from normal view. Result must show the exact URL, anchor text, HTML location and hiding reason."),
+    ("Hidden Links", "HTML source rule: FAIL when the fetched HTML contains either a hyperlink hidden by an HTML/CSS source-level hiding signal or an empty HTTP(S) <a href> element with no visible text, image, SVG or other visible content. PASS only when neither case is found. Result shows only the exact URL, issue type and nearby article context."),
     ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
@@ -523,7 +523,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Fix or remove each hidden hyperlink listed in Result.",
+    "Hidden Links": "Fetched HTML source, actual <a href> elements, visible anchor text/media presence, empty-anchor detection, hidden and inert attributes, inline CSS hiding signals, ancestor HTML elements and nearest editorial context",
     "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Paid Links": "External links, surrounding text, sponsored and affiliate terms, rel sponsored attribute, rel nofollow attribute",
@@ -1909,529 +1909,226 @@ def known_ui_reason_from_text(context_text):
             return label
     return ""
 
+
+VISIBLE_ANCHOR_CHILD_TAGS = {
+    "img", "svg", "picture", "video", "audio",
+    "canvas", "object", "embed", "iframe",
+}
+
+def anchor_has_visible_html_content(anchor):
+    """
+    HTML-source test for whether an anchor contains any content that could
+    normally be visible to the user.
+
+    Text counts as visible content.
+    Common visual media descendants count as visible content.
+
+    aria-label/title do not count as visible page content.
+    """
+    text_value = re.sub(
+        r"\s+",
+        " ",
+        anchor.get_text(" ", strip=True),
+    ).strip()
+
+    if text_value:
+        return True
+
+    for tag_name in VISIBLE_ANCHOR_CHILD_TAGS:
+        if anchor.find(tag_name) is not None:
+            return True
+
+    return False
+
+def nearest_editorial_context(anchor, max_chars=140):
+    """
+    Return a short nearby text label so the editor can locate the empty
+    anchor in the article, e.g. the project paragraph immediately before it.
+    """
+    # First prefer the closest previous paragraph/list/heading/table text.
+    previous = anchor.find_previous(
+        ["p", "li", "h2", "h3", "h4", "td", "th"]
+    )
+
+    if previous is not None:
+        value = re.sub(
+            r"\s+",
+            " ",
+            previous.get_text(" ", strip=True),
+        ).strip()
+
+        if value:
+            if len(value) > max_chars:
+                value = value[: max_chars - 3].rstrip() + "..."
+            return value
+
+    parent = anchor.parent
+    if parent is not None:
+        value = re.sub(
+            r"\s+",
+            " ",
+            parent.get_text(" ", strip=True),
+        ).strip()
+
+        if value:
+            if len(value) > max_chars:
+                value = value[: max_chars - 3].rstrip() + "..."
+            return value
+
+    return ""
+
+def is_empty_href_anchor(anchor, base_url):
+    """
+    Detect an effectively invisible HTML hyperlink:
+    an actual HTTP(S) href with no visible text/media content inside <a>.
+    """
+    href = normalized_link_url(
+        anchor.get("href"),
+        base_url,
+    )
+
+    if not href:
+        return False
+
+    if urlparse(href).scheme not in {"http", "https"}:
+        return False
+
+    return not anchor_has_visible_html_content(anchor)
+
 def static_hidden_link_details(soup, base_url):
+    """
+    Detect hidden/effectively invisible links directly from fetched HTML.
+
+    A link is flagged when either:
+    1. the anchor or an HTML ancestor has a supported hiding signal, or
+    2. the anchor has a real HTTP(S) href but contains no visible text,
+       image, SVG or other visible media/content.
+    """
     details = []
     seen = set()
 
     for anchor in soup.find_all("a", href=True):
-        hidden_element = None
-        node = anchor
+        href = normalized_link_url(
+            anchor.get("href"),
+            base_url,
+        )
 
-        while node is not None and getattr(node, "name", None):
-            if obvious_hidden(node):
-                hidden_element = node
-                break
-            node = node.parent
+        if not href:
+            continue
+
+        anchor_text = re.sub(
+            r"\s+",
+            " ",
+            anchor.get_text(" ", strip=True),
+        ).strip()
+
+        # ----------------------------------------------------
+        # Case 1: Empty <a href="..."></a>
+        # ----------------------------------------------------
+        if is_empty_href_anchor(anchor, base_url):
+            context = nearest_editorial_context(anchor)
+
+            anchor_html = re.sub(
+                r"\s+",
+                " ",
+                str(anchor),
+            ).strip()
+
+            key = (
+                href,
+                "empty-anchor",
+                anchor_html[:220],
+            )
+
+            if key not in seen:
+                seen.add(key)
+
+                details.append({
+                    "url": href,
+                    "anchor_text": "(empty)",
+                    "hidden_element": element_label(anchor),
+                    "hidden_because": "empty anchor element with no visible content",
+                    "purpose": "Empty hyperlink",
+                    "status": FAIL,
+                    "explanation": "The HTML contains a real hyperlink but the anchor has no visible text, image or other visible content.",
+                    "source": "Fetched HTML source",
+                    "anchor_html": anchor_html[:500],
+                    "hidden_html": anchor_html[:500],
+                    "context": context,
+                    "issue_type": "Empty anchor",
+                })
+
+        # ----------------------------------------------------
+        # Case 2: Anchor/ancestor contains HTML hiding signal
+        # ----------------------------------------------------
+        hidden_element, reasons = hidden_ancestor_info(anchor)
 
         if hidden_element is None:
             continue
 
-        href = urljoin(base_url, anchor.get("href"))
-        anchor_text = anchor.get_text(" ", strip=True) or "(no visible anchor text)"
-        reasons = hidden_reasons(hidden_element)
+        anchor_html = re.sub(
+            r"\s+",
+            " ",
+            str(anchor),
+        ).strip()
 
-        context_parts = [
-            element_label(anchor),
+        hidden_html = re.sub(
+            r"\s+",
+            " ",
+            str(hidden_element),
+        ).strip()
+
+        context = nearest_editorial_context(anchor)
+
+        key = (
+            href,
+            "hidden-style",
             element_label(hidden_element),
-            anchor_text,
-            anchor.get("aria-label"),
-            anchor.get("title"),
-            hidden_element.get("aria-label"),
-            hidden_element.get("role"),
-        ]
-        context = _token_string(*context_parts)
-        known_reason = known_ui_reason_from_text(context)
+            ", ".join(reasons),
+        )
 
-        status = REVIEW
-        purpose = "The reason for hiding could not be confirmed from static HTML alone."
-
-        if anchor.get("id") == "cancel-comment-reply-link":
-            status = PASS
-            known_reason = "WordPress comment reply control"
-            purpose = "This is the standard WordPress Cancel Reply control. It is hidden when the user is not actively replying to a comment."
-        elif known_reason:
-            status = PASS
-            purpose = f"The link appears to belong to a legitimate {known_reason.lower()}."
-        elif any(r in SUSPICIOUS_HIDE_REASONS for r in reasons):
-            status = FAIL
-            purpose = "The link uses a hiding method associated with intentionally invisible links and no legitimate interface purpose was detected."
-
-        key = (href, anchor_text, element_label(hidden_element), tuple(reasons), status)
         if key in seen:
             continue
+
         seen.add(key)
 
         details.append({
             "url": href,
-            "anchor_text": anchor_text,
+            "anchor_text": anchor_text or "(empty)",
             "hidden_element": element_label(hidden_element),
-            "hidden_because": ", ".join(reasons) if reasons else "hidden element rule matched",
-            "purpose": known_reason or "Unknown",
-            "status": status,
-            "explanation": purpose,
-            "source": "Static HTML fallback",
+            "hidden_because": ", ".join(reasons) if reasons else "hidden HTML signal",
+            "purpose": "Hidden hyperlink",
+            "status": FAIL,
+            "explanation": "The hyperlink or one of its HTML ancestors contains a source-level hiding signal.",
+            "source": "Fetched HTML source",
+            "anchor_html": anchor_html[:500],
+            "hidden_html": hidden_html[:500],
+            "context": context,
+            "issue_type": "Hidden HTML link",
         })
 
     return details
 
-@lru_cache(maxsize=128)
-def _rendered_hidden_inventory_cached(url, _bucket):
-    """
-    Uses a real browser when Playwright and Chromium are available.
-    It checks computed visibility on desktop and mobile. It also records
-    ancestor context so the system can identify why an element is hidden.
-    """
-    if not PLAYWRIGHT_AVAILABLE:
-        return {"available": False, "error": "Playwright is not installed", "desktop": [], "mobile": []}
-
-    js = r"""
-    () => {
-      function safeText(v) {
-        return (v || "").replace(/\s+/g, " ").trim().slice(0, 300);
-      }
-
-      function nodeInfo(el) {
-        if (!el || el.nodeType !== 1) return null;
-        const cs = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-
-        return {
-          tag: (el.tagName || "").toLowerCase(),
-          id: el.id || "",
-          classes: Array.from(el.classList || []).slice(0, 12),
-          role: el.getAttribute("role") || "",
-          ariaHidden: el.getAttribute("aria-hidden") || "",
-          ariaExpanded: el.getAttribute("aria-expanded") || "",
-          ariaControls: el.getAttribute("aria-controls") || "",
-          ariaHaspopup: el.getAttribute("aria-haspopup") || "",
-          ariaLabel: el.getAttribute("aria-label") || "",
-          title: el.getAttribute("title") || "",
-          hiddenAttr: el.hasAttribute("hidden"),
-          hiddenValue: el.getAttribute("hidden") || "",
-          inert: el.hasAttribute("inert"),
-          open: el.tagName === "DETAILS" ? el.hasAttribute("open") : null,
-          dataState: el.getAttribute("data-state") || "",
-          display: cs.display,
-          visibility: cs.visibility,
-          opacity: cs.opacity,
-          fontSize: cs.fontSize,
-          position: cs.position,
-          textIndent: cs.textIndent,
-          clip: cs.clip,
-          clipPath: cs.clipPath,
-          contentVisibility: cs.contentVisibility || "",
-          transform: cs.transform,
-          maxHeight: cs.maxHeight,
-          overflow: cs.overflow,
-          pointerEvents: cs.pointerEvents,
-          color: cs.color,
-          backgroundColor: cs.backgroundColor,
-          rect: {
-            x: Math.round(rect.x * 100) / 100,
-            y: Math.round(rect.y * 100) / 100,
-            width: Math.round(rect.width * 100) / 100,
-            height: Math.round(rect.height * 100) / 100
-          }
-        };
-      }
-
-      function hiddenReasons(anchor) {
-        const reasons = [];
-        const ancestors = [];
-        let el = anchor;
-        let hiddenNode = null;
-
-        while (el && el.nodeType === 1) {
-          const info = nodeInfo(el);
-          ancestors.push(info);
-          const cs = getComputedStyle(el);
-
-          if (el.hasAttribute("hidden")) {
-            reasons.push(el.getAttribute("hidden") === "until-found" ? "hidden until found" : "hidden attribute");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if (el.hasAttribute("inert")) {
-            reasons.push("inert inactive interface region");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if (el.tagName === "DETAILS" && !el.hasAttribute("open") && anchor !== el.querySelector("summary")) {
-            reasons.push("closed details disclosure");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if (cs.display === "none") {
-            reasons.push("display none");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if (cs.visibility === "hidden") {
-            reasons.push("visibility hidden");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if (cs.visibility === "collapse") {
-            reasons.push("visibility collapse");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if (parseFloat(cs.opacity || "1") <= 0.01) {
-            reasons.push("opacity zero");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if (parseFloat(cs.fontSize || "16") <= 0.5) {
-            reasons.push("font size zero");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if ((cs.contentVisibility || "") === "hidden") {
-            reasons.push("content visibility hidden");
-            hiddenNode = hiddenNode || info;
-          }
-
-          if ((cs.transform || "").includes("matrix(0") || (cs.transform || "").includes("scale(0")) {
-            reasons.push("scaled to zero");
-            hiddenNode = hiddenNode || info;
-          }
-
-          const ti = parseFloat(cs.textIndent || "0");
-          if (!Number.isNaN(ti) && ti < -1000) {
-            reasons.push("text indented outside the visible screen");
-            hiddenNode = hiddenNode || info;
-          }
-
-          const clip = (cs.clip || "").replace(/\s+/g, "").toLowerCase();
-          const clipPath = (cs.clipPath || "").replace(/\s+/g, "").toLowerCase();
-          if (clip.includes("rect(0") || clipPath.includes("inset(50")) {
-            reasons.push("visually clipped");
-            hiddenNode = hiddenNode || info;
-          }
-
-          el = el.parentElement;
-        }
-
-        const rect = anchor.getBoundingClientRect();
-        if (rect.width <= 0.5) reasons.push("zero visible width");
-        if (rect.height <= 0.5) reasons.push("zero visible height");
-
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        if (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          (rect.right < -50 || rect.left > vw + 50 || rect.bottom < -50 || rect.top > vh + 5000)
-        ) {
-          reasons.push("positioned outside the visible screen");
-        }
-
-        let covered = false;
-        let coveringElement = "";
-        if (rect.width > 2 && rect.height > 2) {
-          const cx = Math.max(0, Math.min(vw - 1, rect.left + rect.width / 2));
-          const cy = Math.max(0, Math.min(vh - 1, rect.top + rect.height / 2));
-          if (cx >= 0 && cy >= 0 && cx < vw && cy < vh) {
-            const top = document.elementFromPoint(cx, cy);
-            if (top && top !== anchor && !anchor.contains(top) && !top.contains(anchor)) {
-              covered = true;
-              coveringElement = `${top.tagName.toLowerCase()}#${top.id || ""}.${Array.from(top.classList || []).slice(0,4).join(".")}`;
-            }
-          }
-        }
-
-        const visualHidden =
-          reasons.some(r => [
-            "hidden attribute",
-            "hidden until found",
-            "inert inactive interface region",
-            "closed details disclosure",
-            "display none",
-            "visibility hidden",
-            "visibility collapse",
-            "opacity zero",
-            "font size zero",
-            "content visibility hidden",
-            "scaled to zero",
-            "text indented outside the visible screen",
-            "visually clipped",
-            "zero visible width",
-            "zero visible height",
-            "positioned outside the visible screen"
-          ].includes(r));
-
-        return {
-          reasons: Array.from(new Set(reasons)),
-          ancestors,
-          hiddenNode,
-          visualHidden,
-          covered,
-          coveringElement
-        };
-      }
-
-      function controllerInfo(ancestors) {
-        const found = [];
-        for (const a of ancestors) {
-          if (!a || !a.id) continue;
-          const esc = (window.CSS && CSS.escape) ? CSS.escape(a.id) : a.id.replace(/"/g, '\\"');
-          const controls = document.querySelectorAll(`[aria-controls="${esc}"]`);
-          for (const c of controls) {
-            found.push({
-              tag: (c.tagName || "").toLowerCase(),
-              id: c.id || "",
-              classes: Array.from(c.classList || []).slice(0, 8),
-              text: safeText(c.innerText || c.textContent),
-              ariaExpanded: c.getAttribute("aria-expanded") || "",
-              ariaHaspopup: c.getAttribute("aria-haspopup") || ""
-            });
-          }
-        }
-        return found.slice(0, 5);
-      }
-
-      return Array.from(document.querySelectorAll("a[href]")).map((a, index) => {
-        const hidden = hiddenReasons(a);
-        const info = nodeInfo(a);
-        const ancestryText = hidden.ancestors.map(x => {
-          if (!x) return "";
-          return [
-            x.tag, x.id, ...(x.classes || []), x.role, x.ariaLabel,
-            x.ariaExpanded, x.ariaControls, x.ariaHaspopup, x.dataState
-          ].join(" ");
-        }).join(" ");
-
-        return {
-          index,
-          href: a.href,
-          text: safeText(a.innerText || a.textContent) || "(no visible anchor text)",
-          id: a.id || "",
-          classes: Array.from(a.classList || []).slice(0, 12),
-          rel: a.getAttribute("rel") || "",
-          ariaLabel: a.getAttribute("aria-label") || "",
-          title: a.getAttribute("title") || "",
-          role: a.getAttribute("role") || "",
-          info,
-          reasons: hidden.reasons,
-          visualHidden: hidden.visualHidden,
-          hiddenNode: hidden.hiddenNode,
-          ancestors: hidden.ancestors,
-          ancestryText,
-          controllers: controllerInfo(hidden.ancestors),
-          covered: hidden.covered,
-          coveringElement: hidden.coveringElement
-        };
-      }).filter(x => x.visualHidden);
-    }
-    """
-
-    result = {"available": True, "error": "", "desktop": [], "mobile": []}
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-
-            for label, viewport, user_agent in [
-                ("desktop", {"width": 1440, "height": 1100}, UA_DESKTOP["User-Agent"]),
-                ("mobile", {"width": 390, "height": 844}, UA_MOBILE["User-Agent"]),
-            ]:
-                context = browser.new_context(
-                    viewport=viewport,
-                    user_agent=user_agent,
-                    ignore_https_errors=True,
-                )
-                page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAV_TIMEOUT)
-                page.wait_for_timeout(PLAYWRIGHT_SETTLE_MS)
-                result[label] = page.evaluate(js)
-                context.close()
-
-            browser.close()
-
-    except Exception as exc:
-        result["available"] = False
-        result["error"] = str(exc)
-        result["desktop"] = []
-        result["mobile"] = []
-
-    return result
-
-def rendered_hidden_inventory(url):
-    # Rendered visibility can change as the page changes, so cache only 5 minutes.
-    return _rendered_hidden_inventory_cached(url, cache_bucket(300))
-
-def _rendered_key(item):
-    if item.get("id"):
-        return "id:" + item["id"]
-    return "|".join([
-        item.get("href", ""),
-        item.get("text", ""),
-        " ".join(item.get("classes") or [])[:160]
-    ])
-
-def classify_rendered_hidden_link(item, visible_in_other_viewport=False):
-    href = item.get("href", "")
-    text = item.get("text", "")
-    item_id = item.get("id", "")
-    classes = " ".join(item.get("classes") or [])
-    ancestry = item.get("ancestryText", "")
-    reasons = item.get("reasons") or []
-    controllers = item.get("controllers") or []
-    hidden_node = item.get("hiddenNode") or {}
-
-    context = _token_string(
-        href,
-        text,
-        item_id,
-        classes,
-        ancestry,
-        item.get("ariaLabel"),
-        item.get("title"),
-        item.get("role"),
-        hidden_node.get("id"),
-        " ".join(hidden_node.get("classes") or []),
-        hidden_node.get("role"),
-        hidden_node.get("ariaLabel"),
-        hidden_node.get("dataState"),
-        " ".join(c.get("text", "") for c in controllers),
-    )
-
-    # Exact known WordPress UI
-    if item_id == "cancel-comment-reply-link" or "cancel-comment-reply-link" in context:
-        return PASS, "WordPress comment reply control", (
-            "This is the standard WordPress Cancel Reply control. "
-            "It is hidden when the visitor is not actively replying to a comment and appears when needed."
-        )
-
-    # Responsive desktop or mobile duplication
-    if visible_in_other_viewport:
-        return PASS, "Responsive interface", (
-            "The link is hidden in one viewport but available in the other viewport. "
-            "This is consistent with responsive desktop and mobile interface behaviour."
-        )
-
-    # Native disclosure
-    if "closed details disclosure" in reasons:
-        return PASS, "Native disclosure control", (
-            "The link is inside a closed details element and becomes available when the user opens that disclosure."
-        )
-
-    # Explicit controller relationship
-    if controllers:
-        collapsed = any((c.get("ariaExpanded") or "").lower() == "false" for c in controllers)
-        popup = any((c.get("ariaHaspopup") or "").lower() not in {"", "false"} for c in controllers)
-        if collapsed or popup:
-            return PASS, "Controlled interactive panel", (
-                "The hidden element is connected to a visible interface control through ARIA controls. "
-                "It is hidden while that panel is closed and becomes available through user interaction."
-            )
-
-    known_reason = known_ui_reason_from_text(context)
-    if known_reason:
-        return PASS, known_reason, (
-            f"The link belongs to a recognised {known_reason.lower()} pattern. "
-            "This type of content can legitimately be hidden until the relevant interface state is active."
-        )
-
-    # Accessibility semantics
-    if any("accessibility" in x.lower() or "screen reader" in x.lower() for x in [known_reason]):
-        return PASS, "Accessibility only content", (
-            "The link is intentionally available for assistive technology or accessibility navigation."
-        )
-
-    # hidden until found is a browser supported disclosure state
-    if "hidden until found" in reasons:
-        return PASS, "Hidden until found", (
-            "The element uses the browser hidden until found state and can be revealed by Find in Page or fragment navigation."
-        )
-
-    if "inert inactive interface region" in reasons:
-        return PASS, "Inactive interface region", (
-            "The link is inside an inert interface region. It is intentionally inactive while another interface state is active."
-        )
-
-    # Strong suspicious methods when no legitimate UI purpose is found
-    strong_suspicious = [r for r in reasons if r in SUSPICIOUS_HIDE_REASONS]
-    tiny_anchor = len(tokenize(text)) == 0 and len(text.strip()) <= 2
-
-    if strong_suspicious or tiny_anchor:
-        return FAIL, "Unexplained concealed link", (
-            "The link uses a strongly concealed presentation method and the scanner found no recognised interface or accessibility reason for hiding it."
-        )
-
-    # A link hidden only by display or visibility can be legitimate, but requires context
-    return REVIEW, "Unconfirmed hidden interface element", (
-        "The link is not visible in the current interface state, but the scanner could not confirm a recognised user interface, responsive or accessibility reason."
-    )
-
-def rendered_hidden_link_details(url):
-    inventory = rendered_hidden_inventory(url)
-
-    if not inventory.get("available"):
-        return [], inventory
-
-    desktop = inventory.get("desktop") or []
-    mobile = inventory.get("mobile") or []
-
-    desktop_map = {_rendered_key(x): x for x in desktop}
-    mobile_map = {_rendered_key(x): x for x in mobile}
-
-    keys = list(dict.fromkeys(list(desktop_map.keys()) + list(mobile_map.keys())))
-    details = []
-
-    for key in keys:
-        d = desktop_map.get(key)
-        m = mobile_map.get(key)
-        item = d or m
-
-        hidden_desktop = d is not None
-        hidden_mobile = m is not None
-
-        # If the same element is hidden in only one viewport, treat it as visible in the other.
-        visible_other = hidden_desktop != hidden_mobile
-
-        status, purpose, explanation = classify_rendered_hidden_link(
-            item,
-            visible_in_other_viewport=visible_other
-        )
-
-        hidden_node = item.get("hiddenNode") or {}
-        hidden_element_parts = [
-            hidden_node.get("tag") or item.get("info", {}).get("tag") or "element"
-        ]
-        if hidden_node.get("id"):
-            hidden_element_parts.append("id " + hidden_node["id"])
-        if hidden_node.get("classes"):
-            hidden_element_parts.append("class " + " ".join(hidden_node["classes"][:8]))
-        if hidden_node.get("role"):
-            hidden_element_parts.append("role " + hidden_node["role"])
-
-        details.append({
-            "url": item.get("href", ""),
-            "anchor_text": item.get("text", ""),
-            "hidden_element": ", ".join(hidden_element_parts),
-            "hidden_because": ", ".join(item.get("reasons") or []) or "computed browser visibility",
-            "purpose": purpose,
-            "status": status,
-            "explanation": explanation,
-            "desktop_hidden": hidden_desktop,
-            "mobile_hidden": hidden_mobile,
-            "controllers": item.get("controllers") or [],
-            "source": "Rendered browser inspection",
-        })
-
-    return details, inventory
-
 def hidden_link_details(soup, base_url):
     """
-    Preferred path: rendered browser inspection.
-    Fallback path: static HTML and inline style inspection.
-    """
-    rendered, inventory = rendered_hidden_link_details(base_url)
-    if inventory.get("available"):
-        return rendered, inventory
+    Hidden Links uses fetched HTML source only.
 
-    return static_hidden_link_details(soup, base_url), inventory
+    A link is reported only when an actual <a href> exists in the fetched
+    HTML and that anchor or one of its HTML ancestors contains a supported
+    source-level hiding signal.
+
+    Rendered browser state is intentionally NOT used for this rule.
+    """
+    details = static_hidden_link_details(
+        soup,
+        base_url,
+    )
+
+    return details, {
+        "available": True,
+        "source": "Fetched HTML source only",
+        "error": "",
+    }
 
 def classify_hidden_text_static(node):
     reasons = hidden_reasons(node)
@@ -4185,27 +3882,28 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         hidden_status = FAIL
         issue_lines = []
 
-        for item in hidden_links[:20]:
-            location = item.get("hidden_element") or "HTML element"
-            reason = item.get("hidden_because") or "hidden from normal view"
-            anchor_text = item.get("anchor_text") or "(empty)"
+        for item in hidden_links[:30]:
             link_url = item.get("url") or "(URL unavailable)"
+            issue_type = item.get("issue_type") or "Hidden link"
+            context = item.get("context") or ""
 
-            issue_lines.append(
-                f'{link_url} | Anchor: "{anchor_text}" | '
-                f'Location: {location} | Issue: Hidden link ({reason})'
-            )
+            line = f"{link_url} | Issue: {issue_type}"
 
-        if len(hidden_links) > 20:
+            if context:
+                line += f" | Near: {context}"
+
+            issue_lines.append(line)
+
+        if len(hidden_links) > 30:
             issue_lines.append(
-                f"{len(hidden_links) - 20} additional hidden link(s) not shown."
+                f"{len(hidden_links) - 30} additional hidden link(s) not shown."
             )
 
         hidden_result = "\n".join(issue_lines)
-        hidden_action = "Fix or remove only the hidden links listed in Result."
+        hidden_action = "Remove or correctly attach only the hidden/empty links listed in Result."
     else:
         hidden_status = PASS
-        hidden_result = "No hidden links found."
+        hidden_result = "No hidden or empty links found in the fetched HTML."
         hidden_action = ""
 
     rows.append(result(
@@ -6290,7 +5988,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_8_strict_hidden_links.json",
+            file_name="url_audit_v18_empty_anchor_hidden_links.json",
             mime="application/json",
         )
 
