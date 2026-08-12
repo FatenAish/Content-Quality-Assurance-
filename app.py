@@ -39,7 +39,7 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V17.8 BODY IMAGES ONLY"
+APP_VERSION = "V17.8 STRICT HIDDEN LINKS"
 ENGINE_BUILD = "2026.08.12.1"
 CURRENT_YEAR = 2026
 
@@ -458,7 +458,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "Inspect the exact link and the reason it is hidden. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Deliberately concealed links intended to manipulate rankings should FAIL."),
+    ("Hidden Links", "Strict rule: PASS only when no hidden hyperlink is detected. FAIL when any hyperlink is hidden from normal view. Result must show the exact URL, anchor text, HTML location and hiding reason."),
     ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
@@ -482,7 +482,7 @@ SEO_RULES = [
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
     ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, confirmed broken internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
-    ("Images", "Inspect only real editorial images inside the article body. Exclude Bayut app-download banners, mobile and desktop promotional banners, TruBroker assets, CTA images, widgets, social/share assets and other non-editorial UI images. Result shows only the exact editorial image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource."),
+    ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
     ("Structured Data", "Parse JSON LD, identify an Article, BlogPosting or NewsArticle object on editorial pages, and compare headline and schema URL signals with the visible preferred page. REVIEW parse errors, missing article type data or material schema to page mismatch."),
     ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
     ("dateModified", "Compare schema dateModified with visible update metadata, sitemap lastmod and HTTP Last Modified when available. PASS when signals are consistent. REVIEW missing dates or material freshness inconsistencies. HTTP Last Modified mismatch is treated as a technical inconsistency, not a spam violation."),
@@ -523,7 +523,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Rendered DOM when available, computed CSS, desktop and mobile visibility, link URL, anchor text, element and parent context, interface controls, accessibility attributes and hiding reason classification",
+    "Hidden Links": "Fix or remove each hidden hyperlink listed in Result.",
     "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Paid Links": "External links, surrounding text, sponsored and affiliate terms, rel sponsored attribute, rel nofollow attribute",
@@ -3160,75 +3160,13 @@ def robots_access_result(page_url):
     return _robots_access_cached(page_url, cache_bucket(600))
 
 
-
-NON_EDITORIAL_IMAGE_URL_PATTERNS = [
-    "download-bayut-app-banner",
-    "bayut-app-banner",
-    "download-app-banner",
-    "app-download-banner",
-    "mobile-app-banner",
-    "desktop-app-banner",
-    "trubroker",
-    "tru-broker",
-    "tru_broker",
-]
-
-NON_EDITORIAL_IMAGE_CONTAINER_PATTERNS = [
-    "banner",
-    "advert",
-    "advertisement",
-    "promo",
-    "promotion",
-    "download-app",
-    "app-download",
-    "mobile-app",
-    "bayut-app",
-    "trubroker",
-    "tru-broker",
-    "cta",
-    "call-to-action",
-    "widget",
-    "sidebar",
-    "share",
-    "social",
-    "agent",
-    "broker",
-    "newsletter",
-    "subscribe",
-    "carousel",
-    "slider",
-]
-
-def image_has_non_editorial_container(node):
-    current = node
-
-    while current is not None:
-        if getattr(current, "name", None) in {
-            "nav", "aside", "footer", "form", "button",
-        }:
-            return True
-
-        attrs = " ".join([
-            str(current.get("id") or ""),
-            " ".join(current.get("class") or []),
-            str(current.get("role") or ""),
-            str(current.get("aria-label") or ""),
-        ]).casefold()
-
-        if any(
-            pattern in attrs
-            for pattern in NON_EDITORIAL_IMAGE_CONTAINER_PATTERNS
-        ):
-            return True
-
-        current = getattr(current, "parent", None)
-
-    return False
-
 def image_should_be_ignored(node, base_url=""):
     """
-    Exclude non-editorial assets even when they are nested somewhere inside
-    the broad article container.
+    Ignore known Bayut TruBroker promotional/interface assets from the
+    article image quality audit.
+
+    This covers English and Arabic variants, mobile and desktop, because
+    matching is based on 'trubroker' in the resolved image URL/file name.
     """
     src = image_source_url(node, base_url) if base_url else (
         node.get("src")
@@ -3238,61 +3176,13 @@ def image_should_be_ignored(node, base_url=""):
         or ""
     )
 
-    low_src = str(src).casefold()
+    low = str(src).lower()
 
-    if any(
-        pattern in low_src
-        for pattern in NON_EDITORIAL_IMAGE_URL_PATTERNS
-    ):
-        return True
-
-    return image_has_non_editorial_container(node)
-
-def is_editorial_body_image(node, base_url=""):
-    """
-    Audit only real editorial images that belong to the article body.
-
-    Accepted:
-    WordPress editorial images, figure images, or images directly embedded
-    inside paragraph/list/table copy.
-
-    Excluded:
-    App banners, mobile/desktop promo banners, TruBroker, CTA, widgets,
-    social/share, broker/agent modules, newsletter assets and generic UI.
-    """
-    if image_should_be_ignored(node, base_url):
-        return False
-
-    role = (node.get("role") or "").casefold()
-    aria_hidden = (node.get("aria-hidden") or "").casefold()
-
-    if role in {"presentation", "none"} or aria_hidden == "true":
-        return False
-
-    classes = " ".join(node.get("class") or []).casefold()
-
-    # Strong WordPress editorial-image markers.
-    if any(marker in classes for marker in [
-        "wp-image",
-        "aligncenter",
-        "alignleft",
-        "alignright",
-        "size-full",
-        "size-large",
-        "size-medium",
-    ]):
-        return True
-
-    # Normal article figures.
-    if node.find_parent("figure") is not None:
-        return True
-
-    # Images embedded directly in editorial copy.
-    if node.find_parent(["p", "li", "td", "th"]) is not None:
-        return True
-
-    # A generic image inside a div is not assumed to be editorial.
-    return False
+    return (
+        "trubroker" in low
+        or "tru-broker" in low
+        or "tru_broker" in low
+    )
 
 def image_is_decorative(node):
     role = (node.get("role") or "").lower()
@@ -3349,8 +3239,9 @@ def meaningful_image_inventory(soup, base_url, resource_validation=None):
     for node in article.find_all("img"):
         src = image_source_url(node, base_url)
 
-        # Only real editorial body images are audited.
-        if not is_editorial_body_image(node, base_url):
+        # Known Bayut TruBroker promotional/interface images are excluded
+        # entirely from the editorial image quality check.
+        if image_should_be_ignored(node, base_url):
             continue
 
         alt_present = node.has_attr("alt")
@@ -4285,56 +4176,45 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
             rules["Hidden Text"],
         ))
 
-    hidden_links, hidden_inventory = hidden_link_details(soup, desktop_r.url)
+    hidden_links, hidden_inventory = hidden_link_details(
+        soup,
+        desktop_r.url,
+    )
+
     if hidden_links:
-        statuses = [item["status"] for item in hidden_links]
-        hidden_status = FAIL if FAIL in statuses else REVIEW if REVIEW in statuses else PASS
+        hidden_status = FAIL
+        issue_lines = []
 
-        detail_lines = []
-        for index, item in enumerate(hidden_links[:10], 1):
-            viewport_note = ""
-            if "desktop_hidden" in item:
-                viewport_note = (
-                    f" Desktop Hidden: {'Yes' if item['desktop_hidden'] else 'No'}. "
-                    f"Mobile Hidden: {'Yes' if item['mobile_hidden'] else 'No'}."
-                )
-            detail_lines.append(
-                f"Link {index}. Status: {item['status']}. URL: {item['url']}. "
-                f"Anchor Text: {item['anchor_text']}. Hidden Element: {item['hidden_element']}. "
-                f"Hidden Because: {item['hidden_because']}. Detected Purpose: {item['purpose']}. "
-                f"Reason Assessment: {item['explanation']}.{viewport_note}"
+        for item in hidden_links[:20]:
+            location = item.get("hidden_element") or "HTML element"
+            reason = item.get("hidden_because") or "hidden from normal view"
+            anchor_text = item.get("anchor_text") or "(empty)"
+            link_url = item.get("url") or "(URL unavailable)"
+
+            issue_lines.append(
+                f'{link_url} | Anchor: "{anchor_text}" | '
+                f'Location: {location} | Issue: Hidden link ({reason})'
             )
 
-        summary = (
-            f"Found {len(hidden_links)} hidden link(s). "
-            + (
-                "Every detected hidden link had a recognised legitimate reason. "
-                if hidden_status == PASS
-                else "At least one hidden link needs manual review. "
-                if hidden_status == REVIEW
-                else "At least one hidden link uses a strongly concealed method without a recognised legitimate reason. "
-            )
-        )
-        if not hidden_inventory.get("available"):
-            summary += (
-                "Rendered browser inspection was unavailable, so static HTML fallback was used. "
-                f"Browser inspection note: {hidden_inventory.get('error', 'not available')}. "
+        if len(hidden_links) > 20:
+            issue_lines.append(
+                f"{len(hidden_links) - 20} additional hidden link(s) not shown."
             )
 
-        rows.append(result("Hidden Links", hidden_status, summary + " ".join(detail_lines), rules["Hidden Links"]))
+        hidden_result = "\n".join(issue_lines)
+        hidden_action = "Fix or remove only the hidden links listed in Result."
     else:
-        browser_note = ""
-        if not hidden_inventory.get("available"):
-            browser_note = (
-                " Rendered browser inspection was unavailable; static HTML fallback was used. "
-                f"Browser inspection note: {hidden_inventory.get('error', 'not available')}."
-            )
-        rows.append(result(
-            "Hidden Links",
-            PASS,
-            "No visually hidden links were detected by the available checks." + browser_note,
-            rules["Hidden Links"],
-        ))
+        hidden_status = PASS
+        hidden_result = "No hidden links found."
+        hidden_action = ""
+
+    rows.append(result(
+        "Hidden Links",
+        hidden_status,
+        hidden_result,
+        rules["Hidden Links"],
+        hidden_action,
+    ))
 
     title_for_kw = title_text(soup)
     h1_for_kw = page_primary_h1(soup)
@@ -5009,10 +4889,10 @@ def audit_seo(
             simple_image_issues.append(cleaned)
 
         image_finding = "\n".join(simple_image_issues)
-        image_action = "Fix only the editorial body images listed in Result."
+        image_action = "Fix only the images listed in Result."
     else:
         image_status = PASS
-        image_finding = "No image issues found inside the article body."
+        image_finding = "No image issues found inside the article content."
         image_action = ""
 
     rows.append(result(
@@ -6410,7 +6290,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v17_8_body_images_only.json",
+            file_name="url_audit_v17_8_strict_hidden_links.json",
             mime="application/json",
         )
 
