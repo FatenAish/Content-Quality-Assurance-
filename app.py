@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.15 KEYWORD USE EDITORIAL ONLY"
-ENGINE_BUILD = "2026.08.12.19"
+APP_VERSION = "V18.16 REMOVE FOUR CONTENT RULES"
+ENGINE_BUILD = "2026.08.12.20"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -498,13 +498,9 @@ CONTENT_RULES = [
     ("Outdated Information", "Evaluate old year references in context and also compare time sensitive claims with the latest editorial publication or modification date. Historical dates alone PASS. REVIEW stale or undated prices, rents, ROI, fees, laws, routes or project status using an internal freshness heuristic."),
     ("Keyword Use", "Evaluate Focus Keyword and Secondary Keyword use only in the editorial article text. Exclude TruBroker, property widgets, banners, newsletters, social UI and other embedded modules. Exact matching is not required for every secondary phrase. PASS natural use, REVIEW unusually repetitive target wording, FAIL clearly manipulative repetition."),
     ("Repetition", "REVIEW/FAIL when sentences or paragraphs are unnecessarily repeated."),
-    ("Generic / Filler Content", "REVIEW when a high share of text adds little topic specific information."),
     ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
     ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
-    ("Introduction Quality", "PASS when the opening quickly establishes the promised topic."),
-    ("FAQ Quality", "Extract question and answer pairs from the FAQ hierarchy. REVIEW empty or very short answers, heavy answer duplication or a predominantly unrelated FAQ section."),
-    ("Unsupported Superlatives", "Evaluate the exact claim context. Objective ranking claims such as cheapest, highest, lowest or most popular require nearby attribution or a source link. Editorial soft wording such as best is not automatically treated as an unsupported factual claim."),
     ("Source Quality", "Judge support at the claim level using nearby attribution and source links, not raw external link count. REVIEW poorly supported quantitative or regulatory claims where sourcing is reasonably expected."),
     ("Data Accuracy", "Check internal numeric consistency by finding substantially repeated statements with conflicting values. PASS when no internal contradiction is detected. External truth verification remains part of Factual Accuracy."),
     ("Entity Accuracy", "Normalize generic property wording and leading prepositions around entity names, merge exact normalized duplicates, and compare only materially different spellings for suspicious near duplicates. REVIEW remaining entities that need external verification or possible inconsistent naming. FAIL only when a connected verification source confirms an entity is incorrect."),
@@ -558,13 +554,9 @@ SYSTEM_USES = {
     "Outdated Information": "Old year context, time sensitive claim detection, schema and visible editorial dates, and age of the latest editorial freshness signal",
     "Keyword Use": "Editorial article text only, Focus Keyword, Secondary Keywords, semantic topic representation, target phrase frequency and N gram repetition; TruBroker, broker/property widgets, banners, newsletter and social UI are excluded",
     "Repetition": "Normalised sentences, normalised paragraphs, duplicate counts, repetition ratio",
-    "Generic / Filler Content": "Substantial paragraphs, Focus Keyword or main topic, paragraph topic overlap",
     "Title vs Content": "HTML title text, main article body, topic keyword overlap",
     "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
     "Heading Relevance": "Hierarchical H2 through H4 relationships, Focus Keyword or main topic, FAQ child content, entity heading recognition, semantic concept overlap and section context",
-    "Introduction Quality": "First section of the article, approximately the first 140 words, Focus Keyword or main topic, topic overlap",
-    "FAQ Quality": "FAQ heading hierarchy, extracted question and answer pairs, answer word count, duplicate answers and topic relevance",
-    "Unsupported Superlatives": "Exact superlative claim blocks, hard versus editorial soft superlatives, nearby attribution, local source links and section context",
     "Source Quality": "Concrete factual claim extraction, nearby visible attribution, local source links, regulatory claim detection and claim level support ratio",
     "Data Accuracy": "Repeated numeric statement templates, conflicting value tuples, percentages and internal consistency signals",
     "Entity Accuracy": "Normalized entity candidates from proper noun headings, anchor text and proper noun phrases, property wording and preposition removal, exact normalized de duplication, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
@@ -1702,13 +1694,9 @@ DEFAULT_ACTIONS = {
     "Outdated Information": "Refresh time sensitive prices, rents, ROI, fees, laws, routes or project status, then update the editorial modification date only after the content is actually updated.",
     "Keyword Use": "Reduce unnatural repeated target phrases while keeping necessary topic and entity wording.",
     "Repetition": "Remove or consolidate repeated sentences and paragraphs.",
-    "Generic / Filler Content": "Replace weak generic paragraphs with topic specific information, data, examples or useful guidance.",
     "Title vs Content": "Align the title with what the article actually covers, or update the article so it fulfils the title.",
     "H1 vs Content": "Align the H1 with the actual article body.",
     "Heading Relevance": "Rename, remove or rewrite weak headings and their sections so they clearly belong to the main topic.",
-    "Introduction Quality": "Rewrite the opening so it establishes the main topic and user need quickly.",
-    "FAQ Quality": "Add complete useful answers, remove duplicate answers and keep FAQ questions relevant to the article topic.",
-    "Unsupported Superlatives": "For every objective ranking claim reported, add nearby attribution or a supporting source. Otherwise soften or remove the claim.",
     "Source Quality": "Add an authoritative or first party source beside each important unsupported quantitative, ranking, regulatory or fee claim reported by the system.",
     "Data Accuracy": "Correct the specific conflicting numeric statements reported so the same fact does not appear with different values.",
     "Entity Accuracy": "Verify the exact entity names reported. Standardize possible typo variants to the official project, company, place or building name.",
@@ -5612,33 +5600,6 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         repetition_note += " Examples: " + " | ".join(x[:180] for x in examples) + "."
     rows.append(result("Repetition", rp, repetition_note, rules["Repetition"]))
 
-    paragraphs = [
-        p.get_text(" ", strip=True)
-        for p in article_soup.find_all("p")
-        if len(p.get_text(" ", strip=True)) >= 60
-    ]
-    if paragraphs:
-        low_specific = sum(
-            1
-            for p in paragraphs
-            if max(
-                keyword_overlap(target_topic, p),
-                semantic_overlap(target_topic, p),
-            ) < .08
-        )
-        filler_share = low_specific / len(paragraphs)
-    else:
-        filler_share = 1
-
-    filler_status = REVIEW if filler_share > .55 else PASS
-    rows.append(result(
-        "Generic / Filler Content",
-        filler_status,
-        f"{filler_share:.0%} of substantial paragraphs have very weak semantic and lexical relationship to the main topic. "
-        "This is a review signal, not proof of filler.",
-        rules["Generic / Filler Content"],
-    ))
-
     tc = max(keyword_overlap(title, body_text), semantic_overlap(title, body_text))
     rows.append(result(
         "Title vs Content",
@@ -5703,111 +5664,6 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         hstatus = REVIEW
         hfind = "No H2 to H4 headings were available for contextual heading relevance assessment."
     rows.append(result("Heading Relevance", hstatus, hfind, rules["Heading Relevance"]))
-
-    intro_words = " ".join(tokenize(body_text)[:140])
-    intro_overlap = max(
-        keyword_overlap(target_topic, intro_words),
-        semantic_overlap(target_topic, intro_words),
-    )
-    iq = PASS if intro_overlap >= .45 else REVIEW
-    rows.append(result(
-        "Introduction Quality",
-        iq,
-        f"Opening 140 word topic agreement: {intro_overlap:.0%}.",
-        rules["Introduction Quality"],
-    ))
-
-    faq_pairs = faq_question_answer_pairs(article_soup)
-    faq_headers = [h for h in headings if is_faq_heading(h)]
-    if faq_headers or faq_pairs:
-        short_answers = [
-            item for item in faq_pairs
-            if word_count(item["answer"]) < 15
-        ]
-        unrelated_answers = [
-            item for item in faq_pairs
-            if item["answer"]
-            and max(
-                semantic_overlap(target_topic, item["answer"]),
-                keyword_overlap(target_topic, item["answer"]),
-            ) < .12
-        ]
-        normalized_answers = [
-            re.sub(r"\W+", " ", item["answer"].lower()).strip()
-            for item in faq_pairs
-            if item["answer"]
-        ]
-        duplicate_answers = len(normalized_answers) - len(set(normalized_answers))
-
-        if not faq_pairs and faq_headers:
-            fq = REVIEW
-            ff = "FAQ heading detected but no question and answer pairs were extracted."
-        elif short_answers or duplicate_answers >= 2 or len(unrelated_answers) > len(faq_pairs) / 2:
-            fq = REVIEW
-            ff = (
-                f"{len(faq_pairs)} FAQ pair(s); {len(short_answers)} short or empty answer(s); "
-                f"{duplicate_answers} duplicate answer occurrence(s); {len(unrelated_answers)} weakly related answer(s)."
-            )
-        else:
-            fq = PASS
-            ff = (
-                f"{len(faq_pairs)} FAQ question and answer pair(s) checked. "
-                "No empty, very short, heavily duplicated or predominantly unrelated FAQ answer pattern was detected."
-            )
-    else:
-        fq = PASS
-        ff = "No FAQ section detected; no FAQ quality issue to evaluate."
-    rows.append(result("FAQ Quality", fq, ff, rules["FAQ Quality"]))
-
-    super_claims = superlative_claim_assessment(article_soup, url)
-    unsupported_hard = [
-        item for item in super_claims
-        if item["hard"] and not item["supported"]
-    ]
-    unsupported_soft = [
-        item for item in super_claims
-        if not item["hard"] and not item["supported"]
-    ]
-
-    if unsupported_hard:
-        ss = REVIEW
-        sf = (
-            f"{len(super_claims)} superlative claim(s) detected. "
-            f"{len(unsupported_hard)} objective or ranking superlative claim(s) lack nearby attribution or a source link. "
-            "Examples: " + " | ".join(item["text"] for item in unsupported_hard[:4])
-        )
-    else:
-        ss = PASS
-        sf = (
-            f"{len(super_claims)} superlative claim(s) detected. "
-            "No hard ranking, cheapest, highest, lowest or most popular claim was found without nearby attribution or a source link."
-        )
-        if unsupported_soft:
-            sf += (
-                f" {len(unsupported_soft)} editorial soft superlative wording instance(s), such as best, "
-                "were treated as editorial framing rather than automatically unsupported factual claims."
-            )
-    if unsupported_hard:
-        super_actions = []
-        for item in unsupported_hard[:8]:
-            claim_text = item["text"]
-            super_actions.append(
-                compact_claim_action(
-                    claim_text,
-                    prefix="Support or rewrite"
-                )
-            )
-        super_action = " || ".join(super_actions)
-    else:
-        super_action = ""
-
-    rows.append(result(
-        "Unsupported Superlatives",
-        ss,
-        sf,
-        rules["Unsupported Superlatives"],
-        super_action,
-    ))
 
     source_claims = factual_claim_examples(article_soup, url, limit=40)
     supported = [item for item in source_claims if item.get("supported")]
@@ -6484,7 +6340,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_15_keyword_use_editorial_only.json",
+            file_name="url_audit_v18_16_remove_four_content_rules.json",
             mime="application/json",
         )
 
