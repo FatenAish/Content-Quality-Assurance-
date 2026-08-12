@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.23 MISSPELLING FALSE POSITIVE FIX"
-ENGINE_BUILD = "2026.08.12.27"
+APP_VERSION = "V18.24 MISSPELLING HIGH PRECISION"
+ENGINE_BUILD = "2026.08.12.28"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -504,7 +504,7 @@ CONTENT_RULES = [
     ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
     ("Source Quality", "Check only claims that depend on an official authority or regulation. Examples include laws, government eligibility requirements, visas, permits, licences, official fees, fines and mandatory thresholds. Do not flag project specifications, property details, distances, amenities, unit counts, market data, investment commentary or ordinary descriptive information."),
     ("Data Accuracy", "Check internal numeric consistency only within the same editorial section or project context. Do not compare repeated sentence patterns across different projects, areas or headings. REVIEW only when substantially the same statement inside the same context contains conflicting numeric values."),
-    ("Misspelling", "Check high confidence English spelling errors in editorial article text only. Ignore proper names, project and place names, brands, acronyms, URLs, numbers, contractions, normal word inflections, British English, common real estate terminology and embedded widgets. REVIEW only when a token is not recognized as a valid word or normal inflection and has a plausible correction."),
+    ("Misspelling", "Check only high confidence English spelling errors in editorial article text. Unknown words are not automatically treated as misspellings. Ignore proper names, brands, project and place names, loanwords, short ambiguous terms, acronyms, URLs, contractions, normal inflections, British English, property terminology and embedded widgets. REVIEW only when a strong correction candidate exists."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
     ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
 ]
@@ -957,6 +957,12 @@ SPELLING_ALLOW_WORDS = {
 
     # Common editorial / property words
     "metro", "metros",
+    "emirate", "emirates", "emirati",
+    "expansive", "expansively",
+    "gym", "gyms",
+    "onsen", "onsens",
+    "pod", "pods",
+    "vida",
     "handover", "handovers",
     "launch", "launches", "launched", "launching",
     "finish", "finishes", "finished", "finishing",
@@ -1069,6 +1075,56 @@ def _spelling_edits1(word):
     return set(deletes + transposes + replaces + inserts)
 
 
+SPELLING_NEVER_AUTOCORRECT = {
+    "emirate", "emirates", "emirati",
+    "expansive", "expansively",
+    "gym", "gyms",
+    "onsen", "onsens",
+    "pod", "pods",
+    "vida",
+    "spa", "spas", "polo", "eco", "metro", "metros",
+    "blog", "blogs", "handover", "handovers",
+    "landscaped", "capitalise", "capitalised", "capitalising",
+    "emphasise", "emphasises", "emphasised", "emphasising",
+}
+
+
+def _correction_is_high_confidence(word, candidate):
+    """
+    Unknown does not mean misspelled.
+
+    Only accept a spelling suggestion when the source token is not already
+    recognised and the replacement is a reasonably established word.
+    """
+    word = (word or "").lower().strip()
+    candidate = (candidate or "").lower().strip()
+
+    if not word or not candidate or word == candidate:
+        return False
+
+    if word in SPELLING_NEVER_AUTOCORRECT:
+        return False
+
+    if _known_spelling_word(word):
+        return False
+
+    # Short tokens are too risky: many are brands, acronyms, loanwords,
+    # amenities or product names.
+    if len(word) <= 4:
+        return False
+
+    freq = spelling_frequency_dictionary()
+    candidate_freq = freq.get(candidate, 0)
+
+    # Explicit Bayut allow-list words are trusted. Otherwise require a
+    # meaningful dictionary signal. Threshold 10 still catches clear errors
+    # such as apartmant -> apartment while avoiding weak dictionary guesses.
+    if candidate not in SPELLING_ALLOW_WORDS and candidate_freq < 10:
+        return False
+
+    return True
+
+
 @lru_cache(maxsize=4096)
 def likely_spelling_correction(word):
     """Return a high confidence one edit correction, otherwise None."""
@@ -1104,6 +1160,9 @@ def likely_spelling_correction(word):
     if best not in SPELLING_ALLOW_WORDS and best_freq < 2:
         return None
 
+    if not _correction_is_high_confidence(low, best):
+        return None
+
     return best
 
 
@@ -1116,32 +1175,30 @@ def _word_is_sentence_initial(source_text, start_index):
 
 
 def _looks_like_title_case_entity(source_text, match):
-    """
-    Protect title-case entity phrases, including when the entity begins a sentence.
-
-    Examples:
-    Livia Residences
-    Binghatti Skyblade
-    Dubai Marina
-    Azizi Abraham
-    """
+    """Protect likely brands, project names, place names and proper nouns."""
     raw = match.group(0)
+
     if not raw[:1].isupper():
         return False
 
-    # Capitalised word away from sentence start is usually a proper noun.
     if not _word_is_sentence_initial(source_text, match.start()):
         return True
 
-    # At sentence start, inspect the next word. Two consecutive title-case
-    # words strongly indicate a project, place, brand or person's name.
     tail = source_text[match.end():match.end() + 60]
     next_match = re.search(r"^\s+([A-Za-z][A-Za-z'’\-]{2,})", tail)
+
     if next_match:
         next_word = next_match.group(1)
         next_low = next_word.lower()
+
         if next_word[:1].isupper() or next_low in SPELLING_ENTITY_SUFFIXES:
             return True
+
+    # Sentence-initial unknown title-case tokens are too ambiguous to
+    # autocorrect. This protects standalone brands such as Vida.
+    low = raw.lower()
+    if len(raw) <= 12 and low not in spelling_frequency_dictionary():
+        return True
 
     return False
 
@@ -6802,7 +6859,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_23_misspelling_false_positive_fix.json",
+            file_name="url_audit_v18_24_misspelling_high_precision.json",
             mime="application/json",
         )
 
