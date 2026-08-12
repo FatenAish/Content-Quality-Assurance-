@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.14 FACTUAL ACCURACY NON MARKET ONLY"
-ENGINE_BUILD = "2026.08.12.18"
+APP_VERSION = "V18.15 KEYWORD USE EDITORIAL ONLY"
+ENGINE_BUILD = "2026.08.12.19"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -496,7 +496,7 @@ CONTENT_RULES = [
     ("Original Value", "PASS when the page adds useful data, examples, analysis or first hand value. External/site comparison may be required."),
     ("Factual Accuracy", "Check non market factual information in the editorial article, such as transport, locations, institutions, laws, routes, services and historical facts. Exclude property prices, rents, ROI, yields and other market data. Do not treat the absence of a nearby source link as a factual error. REVIEW only when the article contains an internal factual contradiction or another concrete factual inconsistency that the system can demonstrate."),
     ("Outdated Information", "Evaluate old year references in context and also compare time sensitive claims with the latest editorial publication or modification date. Historical dates alone PASS. REVIEW stale or undated prices, rents, ROI, fees, laws, routes or project status using an internal freshness heuristic."),
-    ("Keyword Use", "Evaluate Focus Keyword and Secondary Keyword use in context. Exact matching is not required for every secondary phrase. Repetition of the primary topic or named entity is allowed when editorially necessary. PASS natural use, REVIEW unusually repetitive wording, FAIL clearly manipulative repetition."),
+    ("Keyword Use", "Evaluate Focus Keyword and Secondary Keyword use only in the editorial article text. Exclude TruBroker, property widgets, banners, newsletters, social UI and other embedded modules. Exact matching is not required for every secondary phrase. PASS natural use, REVIEW unusually repetitive target wording, FAIL clearly manipulative repetition."),
     ("Repetition", "REVIEW/FAIL when sentences or paragraphs are unnecessarily repeated."),
     ("Generic / Filler Content", "REVIEW when a high share of text adds little topic specific information."),
     ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
@@ -556,7 +556,7 @@ SYSTEM_USES = {
     "Original Value": "Main content word count, tables, lists, numeric references, useful information signals",
     "Factual Accuracy": "Editorial non market factual claims only, including transport, locations, institutions, laws, routes, services and historical facts; property prices, rents, ROI, yields and market statistics are excluded; nearby source links are optional and are not used as a failure condition",
     "Outdated Information": "Old year context, time sensitive claim detection, schema and visible editorial dates, and age of the latest editorial freshness signal",
-    "Keyword Use": "Focus Keyword, Secondary Keywords, exact phrase counts, semantic topic representation, repetition per 1,000 words, N gram frequency and primary topic phrase detection",
+    "Keyword Use": "Editorial article text only, Focus Keyword, Secondary Keywords, semantic topic representation, target phrase frequency and N gram repetition; TruBroker, broker/property widgets, banners, newsletter and social UI are excluded",
     "Repetition": "Normalised sentences, normalised paragraphs, duplicate counts, repetition ratio",
     "Generic / Filler Content": "Substantial paragraphs, Focus Keyword or main topic, paragraph topic overlap",
     "Title vs Content": "HTML title text, main article body, topic keyword overlap",
@@ -5538,31 +5538,62 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         outdated_action,
     ))
 
+    keyword_use_text = keyword_stuffing_editorial_text(soup)
+
     kw_assessment = keyword_repetition_assessment(
-        body_text,
+        keyword_use_text,
         focus_keyword,
         secondary_keywords,
         title=title,
         h1=h1,
         url=url,
     )
-    semantic_note = ""
-    if focus_keyword:
-        focus_semantic = semantic_overlap(focus_keyword, body_text)
-        semantic_note = f" Focus Keyword concept coverage in the article is {focus_semantic:.0%}."
 
-    target_note = ""
-    if kw_assessment["targets"]:
-        target_note = " Target phrase use: " + "; ".join(
-            f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
-            for kw, exact, per_1000 in kw_assessment["targets"][:12]
-        ) + "."
+    if kw_assessment["status"] == PASS:
+        keyword_use_finding = (
+            "Keywords are used naturally in the editorial content."
+        )
+    else:
+        keyword_use_parts = []
+
+        # Show only target phrases that are actually repeated enough to matter.
+        material_targets = [
+            (kw, exact, per_1000)
+            for kw, exact, per_1000 in kw_assessment["targets"]
+            if exact > 0 and per_1000 >= 10
+        ]
+
+        if material_targets:
+            keyword_use_parts.append(
+                "Repeated target phrase(s): "
+                + "; ".join(
+                    f"{kw}: {exact} use(s), {per_1000:.1f} per 1,000 words"
+                    for kw, exact, per_1000 in material_targets[:5]
+                )
+            )
+
+        # If the issue comes from a non-target repeated phrase, show it only
+        # after widgets and interface content have already been excluded.
+        if (
+            not material_targets
+            and kw_assessment["gram"]
+            and not kw_assessment["primary_topic"]
+        ):
+            keyword_use_parts.append(
+                f"Repeated phrase: '{kw_assessment['gram']}' "
+                f"({kw_assessment['count']} uses; "
+                f"{kw_assessment['density']:.1%} of two word phrases)"
+            )
+
+        if not keyword_use_parts:
+            keyword_use_parts.append(kw_assessment["reason"])
+
+        keyword_use_finding = ". ".join(keyword_use_parts) + "."
 
     rows.append(result(
         "Keyword Use",
         kw_assessment["status"],
-        f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
-        f"({kw_assessment['density']:.1%}). {kw_assessment['reason']}{semantic_note}{target_note}",
+        keyword_use_finding,
         rules["Keyword Use"],
     ))
 
@@ -6453,7 +6484,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_14_factual_accuracy_non_market_only.json",
+            file_name="url_audit_v18_15_keyword_use_editorial_only.json",
             mime="application/json",
         )
 
