@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.22 ADD MISSPELLING"
-ENGINE_BUILD = "2026.08.12.26"
+APP_VERSION = "V18.23 MISSPELLING FALSE POSITIVE FIX"
+ENGINE_BUILD = "2026.08.12.27"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -504,7 +504,7 @@ CONTENT_RULES = [
     ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
     ("Source Quality", "Check only claims that depend on an official authority or regulation. Examples include laws, government eligibility requirements, visas, permits, licences, official fees, fines and mandatory thresholds. Do not flag project specifications, property details, distances, amenities, unit counts, market data, investment commentary or ordinary descriptive information."),
     ("Data Accuracy", "Check internal numeric consistency only within the same editorial section or project context. Do not compare repeated sentence patterns across different projects, areas or headings. REVIEW only when substantially the same statement inside the same context contains conflicting numeric values."),
-    ("Misspelling", "Check likely English spelling errors in editorial article text only. Ignore proper names, project and place names, brands, acronyms, URLs, numbers, common real estate terminology and embedded widgets. REVIEW only high confidence misspellings with a plausible one edit correction."),
+    ("Misspelling", "Check high confidence English spelling errors in editorial article text only. Ignore proper names, project and place names, brands, acronyms, URLs, numbers, contractions, normal word inflections, British English, common real estate terminology and embedded widgets. REVIEW only when a token is not recognized as a valid word or normal inflection and has a plausible correction."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
     ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
 ]
@@ -954,6 +954,27 @@ SPELLING_ALLOW_WORDS = {
     # Publishing / SEO terminology
     "seo", "faq", "faqs", "url", "urls", "html", "json", "schema",
     "blogpost", "wordpress", "mybayut",
+
+    # Common editorial / property words
+    "metro", "metros",
+    "handover", "handovers",
+    "launch", "launches", "launched", "launching",
+    "finish", "finishes", "finished", "finishing",
+    "combine", "combines", "combined", "combining",
+    "eco", "eco-friendly",
+    "emphasise", "emphasises", "emphasised", "emphasising",
+    "emphasize", "emphasizes", "emphasized", "emphasizing",
+    "landscape", "landscapes", "landscaped", "landscaping",
+    "polo", "spa", "spas", "blog", "blogs",
+    "capitalise", "capitalises", "capitalised", "capitalising",
+    "capitalize", "capitalizes", "capitalized", "capitalizing",
+
+    # Common contractions
+    "it's", "that's", "there's", "here's", "what's", "who's",
+    "isn't", "aren't", "wasn't", "weren't", "doesn't", "don't",
+    "didn't", "can't", "cannot", "couldn't", "shouldn't", "wouldn't",
+    "won't", "hasn't", "haven't", "hadn't", "we're", "they're",
+    "you're", "i'm", "i've", "we've", "they've", "you've",
 }
 
 SPELLING_ENTITY_SUFFIXES = {
@@ -963,6 +984,62 @@ SPELLING_ENTITY_SUFFIXES = {
     "park", "centre", "center", "developers", "developer",
     "properties", "realty", "house", "houses", "place", "plaza",
 }
+
+
+def _known_spelling_word(word):
+    """Return True for a dictionary word, approved term or normal inflection."""
+    word = (word or "").lower().strip()
+    if not word:
+        return True
+
+    freq = spelling_frequency_dictionary()
+
+    if word in SPELLING_ALLOW_WORDS or word in freq:
+        return True
+
+    if word.endswith("'s") and word[:-2] in freq:
+        return True
+
+    candidates = set()
+
+    # Plural / third-person singular
+    if word.endswith("ies") and len(word) > 4:
+        candidates.add(word[:-3] + "y")
+    if word.endswith("es") and len(word) > 4:
+        candidates.add(word[:-2])
+        candidates.add(word[:-1])
+    if word.endswith("s") and len(word) > 3:
+        candidates.add(word[:-1])
+
+    # Past tense
+    if word.endswith("ied") and len(word) > 4:
+        candidates.add(word[:-3] + "y")
+    if word.endswith("ed") and len(word) > 4:
+        candidates.add(word[:-2])
+        candidates.add(word[:-1])
+        if len(word) > 5 and word[-3] == word[-4]:
+            candidates.add(word[:-3])
+
+    # Continuous form
+    if word.endswith("ing") and len(word) > 5:
+        candidates.add(word[:-3])
+        candidates.add(word[:-3] + "e")
+        if len(word) > 6 and word[-4] == word[-5]:
+            candidates.add(word[:-4])
+
+    # Comparative / superlative
+    if word.endswith("er") and len(word) > 4:
+        candidates.add(word[:-2])
+        candidates.add(word[:-1])
+    if word.endswith("est") and len(word) > 5:
+        candidates.add(word[:-3])
+        candidates.add(word[:-2])
+
+    return any(
+        candidate in SPELLING_ALLOW_WORDS or candidate in freq
+        for candidate in candidates
+        if candidate
+    )
 
 
 def _spelling_edits1(word):
@@ -998,7 +1075,7 @@ def likely_spelling_correction(word):
     freq = spelling_frequency_dictionary()
     low = (word or "").lower().strip()
 
-    if not low or low in SPELLING_ALLOW_WORDS or low in freq:
+    if not low or _known_spelling_word(low):
         return None
 
     candidates = [
@@ -1103,7 +1180,7 @@ def likely_misspellings(source_text, limit=12):
         if "-" in normalized:
             parts = [part for part in normalized.split("-") if len(part) >= 3]
             for part in parts:
-                if part in SPELLING_ALLOW_WORDS or part in freq:
+                if _known_spelling_word(part):
                     continue
                 suggestion = likely_spelling_correction(part)
                 if suggestion and suggestion != part:
@@ -1123,17 +1200,7 @@ def likely_misspellings(source_text, limit=12):
         if _looks_like_title_case_entity(source_text, match):
             continue
 
-        if normalized in SPELLING_ALLOW_WORDS or normalized in freq:
-            continue
-
-        # Common inflections of explicit allow-list words.
-        if normalized.endswith("s") and normalized[:-1] in SPELLING_ALLOW_WORDS:
-            continue
-        if normalized.endswith("es") and normalized[:-2] in SPELLING_ALLOW_WORDS:
-            continue
-        if normalized.endswith("ed") and normalized[:-2] in SPELLING_ALLOW_WORDS:
-            continue
-        if normalized.endswith("ing") and normalized[:-3] in SPELLING_ALLOW_WORDS:
+        if _known_spelling_word(normalized):
             continue
 
         suggestion = likely_spelling_correction(normalized)
@@ -6735,7 +6802,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_22_add_misspelling.json",
+            file_name="url_audit_v18_23_misspelling_false_positive_fix.json",
             mime="application/json",
         )
 
