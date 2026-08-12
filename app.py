@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.16 REMOVE FOUR CONTENT RULES"
-ENGINE_BUILD = "2026.08.12.20"
+APP_VERSION = "V18.17 HEADING SOURCE QUALITY FIX"
+ENGINE_BUILD = "2026.08.12.21"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -501,7 +501,7 @@ CONTENT_RULES = [
     ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
     ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
-    ("Source Quality", "Judge support at the claim level using nearby attribution and source links, not raw external link count. REVIEW poorly supported quantitative or regulatory claims where sourcing is reasonably expected."),
+    ("Source Quality", "Check source support only for genuinely source sensitive non market information. Exclude property prices, rents, ROI, yields and other property market data. Do not require a source beside ordinary descriptive or location statements. REVIEW only unsourced regulatory, official requirement, historical or specific non market quantitative claims where attribution is reasonably expected."),
     ("Data Accuracy", "Check internal numeric consistency by finding substantially repeated statements with conflicting values. PASS when no internal contradiction is detected. External truth verification remains part of Factual Accuracy."),
     ("Entity Accuracy", "Normalize generic property wording and leading prepositions around entity names, merge exact normalized duplicates, and compare only materially different spellings for suspicious near duplicates. REVIEW remaining entities that need external verification or possible inconsistent naming. FAIL only when a connected verification source confirms an entity is incorrect."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
@@ -557,7 +557,7 @@ SYSTEM_USES = {
     "Title vs Content": "HTML title text, main article body, topic keyword overlap",
     "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
     "Heading Relevance": "Hierarchical H2 through H4 relationships, Focus Keyword or main topic, FAQ child content, entity heading recognition, semantic concept overlap and section context",
-    "Source Quality": "Concrete factual claim extraction, nearby visible attribution, local source links, regulatory claim detection and claim level support ratio",
+    "Source Quality": "Non market source sensitive claim extraction, nearby attribution and source links; property prices, rents, ROI, yields and other property market data are excluded; ordinary descriptive and location statements do not require nearby citations",
     "Data Accuracy": "Repeated numeric statement templates, conflicting value tuples, percentages and internal consistency signals",
     "Entity Accuracy": "Normalized entity candidates from proper noun headings, anchor text and proper noun phrases, property wording and preposition removal, exact normalized de duplication, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
     "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
@@ -1697,7 +1697,7 @@ DEFAULT_ACTIONS = {
     "Title vs Content": "Align the title with what the article actually covers, or update the article so it fulfils the title.",
     "H1 vs Content": "Align the H1 with the actual article body.",
     "Heading Relevance": "Rename, remove or rewrite weak headings and their sections so they clearly belong to the main topic.",
-    "Source Quality": "Add an authoritative or first party source beside each important unsupported quantitative, ranking, regulatory or fee claim reported by the system.",
+    "Source Quality": "Add an authoritative source only beside the specific source sensitive non market claim listed in Result.",
     "Data Accuracy": "Correct the specific conflicting numeric statements reported so the same fact does not appear with different values.",
     "Entity Accuracy": "Verify the exact entity names reported. Standardize possible typo variants to the official project, company, place or building name.",
     "Grammar / Readability": "Rewrite the reported difficult or malformed sentences for clarity and readability.",
@@ -3857,6 +3857,80 @@ def is_property_market_data_claim(value):
     return False
 
 
+
+def is_source_sensitive_non_market_claim(value):
+    """
+    Return True only when Source Quality should reasonably expect attribution.
+
+    Property market figures are excluded. Regulatory/official claims remain
+    source-sensitive even when they contain a fee amount.
+    """
+    value = re.sub(r"\s+", " ", value or "").strip()
+    low = value.lower()
+
+    if not value:
+        return False
+
+    regulatory = bool(re.search(
+        r"\b(?:law|laws|regulation|regulations|rule|rules|visa|permit|licen[cs]e|"
+        r"requirement|requirements|mandatory|fine|fines|fee|fees|authority|"
+        r"government|municipality|ministry)\b",
+        low,
+        flags=re.I,
+    )) or bool(re.search(
+        r"\b(?:قانون|قوانين|لائحة|لوائح|تأشيرة|تاشيرة|تصريح|ترخيص|"
+        r"إلزامي|الزامي|غرامة|غرامات|رسوم|هيئة|حكومة|بلدية|وزارة)\b",
+        value,
+        flags=re.I,
+    ))
+
+    # Regulatory and official requirement claims should still be sourced,
+    # including claims that contain a fee amount.
+    if regulatory:
+        return True
+
+    # Property prices, rents, ROI, yields and market stats are excluded.
+    if is_property_market_data_claim(value):
+        return False
+
+    historical = bool(re.search(
+        r"\b(?:opened|launched|established|founded|introduced|inaugurated|"
+        r"completed|since)\b.*\b20(?:0\d|1\d|2\d)\b",
+        low,
+        flags=re.I,
+    )) or bool(re.search(
+        r"\b(?:افتتح|أطلق|اطلق|تأسس|تاسس|اكتمل|منذ)\b.*\b20(?:0\d|1\d|2\d)\b",
+        value,
+        flags=re.I,
+    ))
+
+    ranking_or_data = bool(re.search(
+        r"\b(?:according to|according to our data|data shows?|data indicates?|"
+        r"most searched|ranked|ranking|survey|study|report)\b",
+        low,
+        flags=re.I,
+    )) or bool(re.search(
+        r"\b(?:وفقا لبيانات|وفقاً لبيانات|بحسب البيانات|الأكثر بحثا|"
+        r"الاكثر بحثا|دراسة|تقرير|استطلاع)\b",
+        value,
+        flags=re.I,
+    ))
+
+    quantitative = bool(re.search(
+        r"\b\d+(?:\.\d+)?\s*(?:minutes?|mins?|km|kilometres?|kilometers?|"
+        r"metres?|meters?|%|stations?|routes?|floors?|units?|seats?)\b",
+        low,
+        flags=re.I,
+    )) or bool(re.search(
+        r"\b\d+(?:\.\d+)?\s*(?:دقيقة|دقائق|كم|كيلومتر|متر|٪|%)\b",
+        value,
+        flags=re.I,
+    ))
+
+    return historical or ranking_or_data or quantitative
+
+
+
 def non_market_factual_claim_examples(article_soup, limit=30):
     """
     Extract concrete non-market factual claims.
@@ -5652,68 +5726,50 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
 
         hr = relevant / len(section_items)
         hstatus = PASS if hr >= 0.70 else REVIEW if hr >= 0.45 else FAIL
-        hfind = (
-            f"{relevant}/{len(section_items)} H2 to H4 sections are related to the main topic. "
-            f"{contextual} section(s) were accepted through contextual relevance."
-        )
-        if detail_examples:
-            hfind += " Context examples: " + " ".join(detail_examples)
-        if weak_examples:
-            hfind += " Weakest sections: " + "; ".join(weak_examples) + "."
+
+        if hstatus == PASS and relevant == len(section_items):
+            hfind = f"All {len(section_items)} article sections are relevant to the main topic."
+        elif hstatus == PASS:
+            hfind = f"{relevant} of {len(section_items)} article sections are relevant to the main topic."
+        else:
+            hfind = (
+                f"{len(section_items) - relevant} of {len(section_items)} article sections may be weakly related to the main topic."
+            )
+            if weak_examples:
+                hfind += " Examples: " + "; ".join(weak_examples) + "."
     else:
         hstatus = REVIEW
         hfind = "No H2 to H4 headings were available for contextual heading relevance assessment."
     rows.append(result("Heading Relevance", hstatus, hfind, rules["Heading Relevance"]))
 
-    source_claims = factual_claim_examples(article_soup, url, limit=40)
-    supported = [item for item in source_claims if item.get("supported")]
-    unsupported = [item for item in source_claims if not item.get("supported")]
+    raw_source_claims = factual_claim_examples(article_soup, url, limit=60)
 
-    regulatory_terms = [
-        "law", "regulation", "visa", "fee", "fees", "rule",
-        "قانون", "قوانين", "رسوم", "تأشيرة", "تاشيرة",
-    ]
-    regulatory_unsourced = [
-        item for item in unsupported
-        if any(term in item["claim"].lower() for term in regulatory_terms)
+    source_claims = [
+        item for item in raw_source_claims
+        if is_source_sensitive_non_market_claim(item.get("claim", ""))
     ]
 
-    support_ratio = len(supported) / len(source_claims) if source_claims else 1.0
+    unsupported_source_claims = [
+        item for item in source_claims
+        if not item.get("supported")
+    ]
 
-    if regulatory_unsourced:
+    if unsupported_source_claims:
         sq = REVIEW
-        source_targets = regulatory_unsourced
+        source_targets = unsupported_source_claims
         sf = (
-            f"{len(source_claims)} concrete source sensitive statement(s) assessed; "
-            f"{len(supported)} have nearby attribution or source links. "
-            f"{len(regulatory_unsourced)} regulatory or fee statement(s) lack visible support. "
-            "Unsupported examples: " + " | ".join(item["claim"] for item in source_targets[:6])
+            f"{len(unsupported_source_claims)} source sensitive non market statement(s) need attribution. "
+            "Examples: "
+            + " | ".join(item["claim"] for item in source_targets[:5])
         )
-    elif len(source_claims) >= 4 and support_ratio < .35:
-        sq = REVIEW
-        source_targets = unsupported
-        sf = (
-            f"{len(source_claims)} concrete source sensitive statement(s) assessed; only {len(supported)} "
-            f"({support_ratio:.0%}) have nearby attribution or source links. "
-            f"{len(unsupported)} statement(s) need stronger local sourcing. "
-            "Unsupported examples: " + " | ".join(item["claim"] for item in source_targets[:6])
+        source_action = " || ".join(
+            compact_claim_action(item["claim"], prefix="Add source beside")
+            for item in source_targets[:8]
         )
     else:
         sq = PASS
         source_targets = []
-        sf = (
-            f"{len(source_claims)} concrete source sensitive statement(s) assessed; {len(supported)} "
-            f"({support_ratio:.0%} if statements exist) have nearby visible attribution or source links. "
-            "Source Quality is based on statement level support, not raw external link count."
-        )
-
-    if sq == REVIEW:
-        source_actions = [
-            compact_claim_action(item["claim"], prefix="Add source beside")
-            for item in source_targets[:10]
-        ]
-        source_action = " || ".join(source_actions)
-    else:
+        sf = "No source quality issues found in the non market editorial information."
         source_action = ""
 
     rows.append(result(
@@ -6340,7 +6396,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_16_remove_four_content_rules.json",
+            file_name="url_audit_v18_17_heading_source_quality_fix.json",
             mime="application/json",
         )
 
