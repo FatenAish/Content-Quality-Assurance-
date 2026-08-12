@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.19 SOURCE QUALITY OFFICIAL ONLY"
-ENGINE_BUILD = "2026.08.12.23"
+APP_VERSION = "V18.20 DATA ACCURACY CONTEXTUAL"
+ENGINE_BUILD = "2026.08.12.24"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -502,7 +502,7 @@ CONTENT_RULES = [
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
     ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
     ("Source Quality", "Check only claims that depend on an official authority or regulation. Examples include laws, government eligibility requirements, visas, permits, licences, official fees, fines and mandatory thresholds. Do not flag project specifications, property details, distances, amenities, unit counts, market data, investment commentary or ordinary descriptive information."),
-    ("Data Accuracy", "Check internal numeric consistency by finding substantially repeated statements with conflicting values. PASS when no internal contradiction is detected. External truth verification remains part of Factual Accuracy."),
+    ("Data Accuracy", "Check internal numeric consistency only within the same editorial section or project context. Do not compare repeated sentence patterns across different projects, areas or headings. REVIEW only when substantially the same statement inside the same context contains conflicting numeric values."),
     ("Entity Accuracy", "Normalize generic property wording and leading prepositions around entity names, merge exact normalized duplicates, and compare only materially different spellings for suspicious near duplicates. REVIEW remaining entities that need external verification or possible inconsistent naming. FAIL only when a connected verification source confirms an entity is incorrect."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
     ("Broken Content", "FAIL obvious placeholders/unfinished output; REVIEW empty headings or duplicated content blocks."),
@@ -558,7 +558,7 @@ SYSTEM_USES = {
     "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
     "Heading Relevance": "Hierarchical H2 through H4 relationships, Focus Keyword or main topic, FAQ child content, entity heading recognition, semantic concept overlap and section context",
     "Source Quality": "Sentence level official authority claim extraction. Checks laws, regulations, government eligibility requirements, visas, permits, licences, official fees, fines and mandatory thresholds. Project specifications, distances, property details, amenities, market data and investment commentary are excluded",
-    "Data Accuracy": "Repeated numeric statement templates, conflicting value tuples, percentages and internal consistency signals",
+    "Data Accuracy": "Repeated numeric statement templates scoped to the nearest editorial H2, H3 or H4 context; different projects, areas and sections are not compared against each other",
     "Entity Accuracy": "Normalized entity candidates from proper noun headings, anchor text and proper noun phrases, property wording and preposition removal, exact normalized de duplication, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
     "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
     "Broken Content": "Placeholder terms, unfinished content indicators, empty headings, repeated paragraphs"
@@ -1698,7 +1698,7 @@ DEFAULT_ACTIONS = {
     "H1 vs Content": "Align the H1 with the actual article body.",
     "Heading Relevance": "Rename, remove or rewrite weak headings and their sections so they clearly belong to the main topic.",
     "Source Quality": "Add an official or authoritative source beside each numbered official requirement listed in Result.",
-    "Data Accuracy": "Correct the specific conflicting numeric statements reported so the same fact does not appear with different values.",
+    "Data Accuracy": "Verify and correct only the numbered numeric contradiction listed within the same article section.",
     "Entity Accuracy": "Verify the exact entity names reported. Standardize possible typo variants to the official project, company, place or building name.",
     "Grammar / Readability": "Rewrite the reported difficult or malformed sentences for clarity and readability.",
     "Broken Content": "Remove placeholders, fill empty headings and remove duplicated unfinished content blocks.",
@@ -3551,8 +3551,20 @@ def superlative_claim_assessment(article_soup, base_url):
 
 def numeric_statement_conflicts(article_soup):
     """
-    Detect internal contradictions where essentially the same statement appears
-    more than once with different numeric values.
+    Detect internal numeric contradictions only inside the same editorial context.
+
+    The previous implementation compared repeated sentence templates across the
+    whole article. That caused false positives when different projects or areas
+    legitimately had different values, for example:
+
+    Property types: Studios to 3-bedroom apartments
+    Property types: Studios to 2-bedroom apartments
+
+    These are not contradictions when they appear under different project or
+    area headings.
+
+    Comparison is now scoped to the nearest H2/H3/H4 heading. If no editorial
+    heading exists, the statement is placed in a document-level context.
     """
     templates = {}
     conflicts = []
@@ -3562,33 +3574,59 @@ def numeric_statement_conflicts(article_soup):
         flags=re.I,
     )
 
+    def nearest_editorial_context(node):
+        heading = node.find_previous(["h2", "h3", "h4"])
+        if not heading:
+            return "__document__"
+
+        heading_text = re.sub(
+            r"\s+",
+            " ",
+            heading.get_text(" ", strip=True),
+        ).strip().casefold()
+
+        return heading_text or "__document__"
+
     for node in article_soup.find_all(["p", "li", "td", "th"]):
         value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+
         numbers = number_pattern.findall(value)
         if not numbers or len(value) < 35:
             continue
 
-        template = number_pattern.sub("<num>", value.lower())
+        template = number_pattern.sub("<num>", value.casefold())
         template = re.sub(r"\s+", " ", template).strip()
 
         if len(template) < 25:
             continue
 
         normalized_numbers = tuple(
-            re.sub(r"\s+", "", n.lower())
-            for n in numbers
+            re.sub(r"\s+", "", number.casefold())
+            for number in numbers
         )
 
-        if template in templates and templates[template] != normalized_numbers:
+        context = nearest_editorial_context(node)
+        key = (context, template)
+
+        previous = templates.get(key)
+
+        if previous and previous["numbers"] != normalized_numbers:
             conflicts.append({
+                "section": context if context != "__document__" else "Article body",
                 "statement": value[:300],
-                "previous_values": templates[template],
+                "previous_statement": previous["statement"][:300],
+                "previous_values": previous["numbers"],
                 "current_values": normalized_numbers,
             })
         else:
-            templates[template] = normalized_numbers
+            templates[key] = {
+                "numbers": normalized_numbers,
+                "statement": value,
+            }
 
     return conflicts[:8]
+
+
 
 def parse_datetime_value(value):
     if not value:
@@ -5859,28 +5897,32 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     ))
 
     conflicts = numeric_statement_conflicts(article_soup)
-    percents = re.findall(r"\b\d+(?:\.\d+)?%", body_text)
+
     if conflicts:
         data_status = REVIEW
-        data_finding = (
-            f"{len(conflicts)} possible internal numeric contradiction(s) were detected where substantially the same statement "
-            "appears with different values. Examples: "
-            + " | ".join(
-                f"{item['statement']} | previous values {item['previous_values']} | current values {item['current_values']}"
-                for item in conflicts[:5]
+        data_targets = conflicts[:8]
+
+        numbered_conflicts = [
+            (
+                f"{index}: Section: {item['section']} | "
+                f"Previous: {item['previous_statement']} | "
+                f"Current: {item['statement']}"
             )
+            for index, item in enumerate(data_targets, start=1)
+        ]
+
+        data_finding = (
+            f"{len(conflicts)} internal numeric contradiction(s) found within the same article section.\n"
+            + "\n".join(numbered_conflicts)
         )
-        data_action = " || ".join(
-            f"Check and correct: {item['statement']} | choose the verified value between previous {item['previous_values']} and current {item['current_values']}."
-            for item in conflicts[:8]
+
+        data_action = "\n".join(
+            f"{index}: Verify which value is correct within this section."
+            for index, _item in enumerate(data_targets, start=1)
         )
     else:
         data_status = PASS
-        data_finding = (
-            f"No repeated statement template with conflicting numeric values was detected. "
-            f"{len(percents)} percentage reference(s) were found. "
-            "This checks internal consistency only; external data verification remains part of Factual Accuracy."
-        )
+        data_finding = "No internal numeric contradictions found within the same article context."
         data_action = ""
 
     rows.append(result(
@@ -6474,7 +6516,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_19_source_quality_official_only.json",
+            file_name="url_audit_v18_20_data_accuracy_contextual.json",
             mime="application/json",
         )
 
