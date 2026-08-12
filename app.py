@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.9 EXTERNAL LINKS SIMPLE PASS"
-ENGINE_BUILD = "2026.08.12.13"
+APP_VERSION = "V18.10 IGNORE TRUBROKER WIDGET IMAGES"
+ENGINE_BUILD = "2026.08.12.14"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -543,7 +543,7 @@ SYSTEM_USES = {
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
     "Internal Links": "Only inline editorial text hyperlinks inside paragraph, list and table text in the isolated article body; non-editorial cards, banners, CTA, image links, social sharing and widgets are excluded before same-domain validation, HTTP checks and anchor relevance analysis",
     "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
-    "Images": "Isolated article images, known TruBroker asset exclusion, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
+    "Images": "Isolated editorial article images, TruBroker and broker/property widget exclusion by asset URL and DOM ancestry, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
     "Structured Data": "JSON LD parsing, Article BlogPosting or NewsArticle type detection, schema headline, schema URL and mainEntityOfPage comparison with the visible preferred page",
     "datePublished": "Schema datePublished, article published metadata, visible time elements and date consistency comparison",
     "dateModified": "Schema dateModified, article modified metadata, visible time elements, sitemap lastmod, HTTP Last Modified and date consistency comparison",
@@ -3038,11 +3038,12 @@ def robots_access_result(page_url):
 
 def image_should_be_ignored(node, base_url=""):
     """
-    Ignore known Bayut TruBroker promotional/interface assets from the
-    article image quality audit.
+    Ignore Bayut interface/widget images that are not editorial article images.
 
-    This covers English and Arabic variants, mobile and desktop, because
-    matching is based on 'trubroker' in the resolved image URL/file name.
+    TruBroker images must be excluded in two ways:
+    1. Asset filename/URL contains a TruBroker marker.
+    2. Image is inside a TruBroker/broker/property widget, even when the
+       image URL itself is a generic S3 URL with no TruBroker text.
     """
     src = image_source_url(node, base_url) if base_url else (
         node.get("src")
@@ -3054,11 +3055,44 @@ def image_should_be_ignored(node, base_url=""):
 
     low = str(src).lower()
 
-    return (
+    # Direct TruBroker promotional assets.
+    if (
         "trubroker" in low
         or "tru-broker" in low
         or "tru_broker" in low
-    )
+    ):
+        return True
+
+    # Dynamic broker/profile images use generic S3 URLs, so identify them
+    # by their widget ancestry instead of the image filename.
+    ignored_widget_markers = {
+        "area-property-details",
+        "bayut-tru-broker-slider",
+        "property-similar",
+        "broker-image",
+        "tru-broker-label",
+        "listing-heading",
+    }
+
+    parent = node.parent
+    while parent is not None and getattr(parent, "name", None):
+        classes = {
+            str(value).strip().lower()
+            for value in (parent.get("class") or [])
+            if str(value).strip()
+        }
+
+        parent_id = str(parent.get("id") or "").strip().lower()
+
+        if classes.intersection(ignored_widget_markers):
+            return True
+
+        if any(marker in parent_id for marker in ignored_widget_markers):
+            return True
+
+        parent = parent.parent
+
+    return False
 
 def image_is_decorative(node):
     role = (node.get("role") or "").lower()
@@ -6145,7 +6179,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_9_external_links_simple_pass.json",
+            file_name="url_audit_v18_10_ignore_trubroker_widget_images.json",
             mime="application/json",
         )
 
