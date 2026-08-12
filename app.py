@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.7.1 CLEAN DEPLOY"
-ENGINE_BUILD = "2026.08.12.11"
+APP_VERSION = "V18.8 KEYWORD STUFFING EDITORIAL ONLY"
+ENGINE_BUILD = "2026.08.12.12"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -477,7 +477,7 @@ SEO_RULES = [
     ("H1", "PASS when one clear H1 exists and it represents the Focus Keyword meaning or the page topic. Exact phrase matching is not required. REVIEW multiple H1 elements or a weak semantic relationship. FAIL when the H1 is missing or clearly unrelated."),
     ("Heading Structure", "Evaluate the editorial heading hierarchy rather than navigation or sidebar headings. REVIEW empty headings, heavy duplication or clear heading level jumps."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
-    ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
+    ("Keyword Stuffing", "Analyse editorial article text only. Exclude embedded widgets and interface content. PASS when keyword use is natural. REVIEW when query phrases are unusually repetitive. FAIL when repetition is clearly excessive and manipulative."),
     ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, confirmed broken internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
     ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
@@ -522,7 +522,7 @@ SYSTEM_USES = {
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
     "Hidden Links": "Fetched HTML <a href> elements, per-element occurrence counting, same-page exclusion, empty anchors and HTML/CSS hiding signals",
-    "Keyword Stuffing": "Article text, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context",
+    "Keyword Stuffing": "Editorial article text only, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context; TruBroker/property widgets, banners, newsletter, social UI and other embedded modules are excluded",
     "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
     "Spam JavaScript": "Inline JavaScript, redirect patterns, obfuscation patterns, location functions, encoded script indicators",
@@ -677,6 +677,29 @@ ARTICLE_REMOVE_SELECTORS = [
     ".author-box", ".author-bio",
     ".breadcrumb", ".breadcrumbs",
     ".post-navigation", ".pagination",
+]
+
+KEYWORD_STUFFING_REMOVE_SELECTORS = [
+    # Bayut dynamic property / broker widgets injected inside article content
+    ".area-property-details",
+    ".bayut-tru-broker-slider",
+    ".property-similar",
+    ".property",
+    ".listing-heading",
+    ".tru-broker-label",
+
+    # Promotional banners / utility modules inside the article body
+    ".dubai-transations-banner",
+    ".dubai-transactions-banner",
+    ".mobile-grid-newsletter-subscription",
+    ".newsletter-mobile-listing-wrapper",
+    ".google-preferred-source-btn",
+
+    # Social / feedback UI that can sit inside entry-content
+    ".swp_social_panel",
+    ".swp-content-locator",
+    ".current-article-rating",
+    ".article-rating",
 ]
 
 ARTICLE_BOILERPLATE_PATTERNS = [
@@ -868,6 +891,27 @@ def main_content_node(soup):
 
 def main_content_text(soup):
     return clean_text(article_content_node(soup))
+
+def keyword_stuffing_editorial_text(soup):
+    """
+    Return only writer/editorial prose for Keyword Stuffing analysis.
+
+    Dynamic Bayut widgets embedded inside .entry-content are removed so
+    repeated interface labels such as TruBroker do not affect keyword
+    repetition calculations.
+    """
+    article = article_content_node(soup)
+    clone = BeautifulSoup(str(article), "html.parser")
+
+    for selector in KEYWORD_STUFFING_REMOVE_SELECTORS:
+        for node in clone.select(selector):
+            node.decompose()
+
+    # Remove remaining forms/buttons and interactive UI text.
+    for node in clone.find_all(["form", "button"]):
+        node.decompose()
+
+    return clean_text(clone)
 
 def similarity(a, b):
     a, b = (a or "")[:40000], (b or "")[:40000]
@@ -4551,26 +4595,45 @@ def audit_seo(
 
     title_for_kw = title_text(soup)
     h1_for_kw = page_primary_h1(soup)
+    keyword_body_text = keyword_stuffing_editorial_text(soup)
+
     kw_assessment = keyword_repetition_assessment(
-        body_text,
+        keyword_body_text,
         focus_keyword,
         secondary_keywords,
         title=title_for_kw,
         h1=h1_for_kw,
         url=url,
     )
-    target_note = ""
-    if kw_assessment["targets"]:
-        target_note = " Target phrases: " + "; ".join(
-            f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
-            for kw, exact, per_1000 in kw_assessment["targets"][:12]
-        ) + "."
+
+    if kw_assessment["status"] == PASS:
+        keyword_result = "No unnatural keyword repetition found in the editorial content."
+    else:
+        keyword_result = kw_assessment["reason"]
+
+        if kw_assessment["gram"]:
+            keyword_result += (
+                f" Repeated phrase: '{kw_assessment['gram']}' "
+                f"({kw_assessment['count']} uses; {kw_assessment['density']:.1%} of two word phrases)."
+            )
+
+        # Show only target phrases that are actually repeated enough to matter.
+        material_targets = [
+            (kw, exact, per_1000)
+            for kw, exact, per_1000 in kw_assessment["targets"]
+            if exact > 0 and per_1000 >= 10
+        ]
+
+        if material_targets:
+            keyword_result += " Target phrase repetition: " + "; ".join(
+                f"{kw}: {exact} use(s), {per_1000:.1f} per 1,000 words"
+                for kw, exact, per_1000 in material_targets[:5]
+            ) + "."
+
     rows.append(result(
         "Keyword Stuffing",
         kw_assessment["status"],
-        f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
-        f"({kw_assessment['density']:.1%} of two word phrases). "
-        f"{kw_assessment['reason']}{target_note}",
+        keyword_result,
         rules["Keyword Stuffing"],
     ))
 
@@ -6087,7 +6150,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_7_1_clean_deploy.json",
+            file_name="url_audit_v18_8_keyword_stuffing_editorial_only.json",
             mime="application/json",
         )
 
