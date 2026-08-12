@@ -39,8 +39,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.3 IGNORE SELF LINKS"
-ENGINE_BUILD = "2026.08.12.6"
+APP_VERSION = "V18.4 KEYWORD STUFFING SEO"
+ENGINE_BUILD = "2026.08.12.7"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -459,7 +459,6 @@ SPAM_RULES = [
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
     ("Hidden Links", "FAIL when the fetched HTML contains an empty hyperlink or a link hidden by HTML/CSS. Self references to the current article are ignored. PASS when no other hidden or empty links are found."),
-    ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
     ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
     ("Paid Links", "FAIL when identifiable paid or sponsored links pass ranking credit without appropriate sponsored or nofollow qualification."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
@@ -480,6 +479,7 @@ SEO_RULES = [
     ("H1", "PASS when one clear H1 exists and it represents the Focus Keyword meaning or the page topic. Exact phrase matching is not required. REVIEW multiple H1 elements or a weak semantic relationship. FAIL when the H1 is missing or clearly unrelated."),
     ("Heading Structure", "Evaluate the editorial heading hierarchy rather than navigation or sidebar headings. REVIEW empty headings, heavy duplication or clear heading level jumps."),
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
+    ("Keyword Stuffing", "Evaluate repetition in context. Repetition of the primary topic, location or named entity does not trigger REVIEW by frequency alone. PASS when target phrases are used naturally. REVIEW when repeated query phrases appear unusually frequent without a clear editorial reason. FAIL when repetition is clearly excessive and manipulative."),
     ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, confirmed broken internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. HTTP 401, 403 and 429 from automated requests are not treated as broken by themselves."),
     ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
     ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
@@ -4069,32 +4069,6 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         hidden_action,
     ))
 
-    title_for_kw = title_text(soup)
-    h1_for_kw = page_primary_h1(soup)
-    kw_assessment = keyword_repetition_assessment(
-        body_text,
-        focus_keyword,
-        secondary_keywords,
-        title=title_for_kw,
-        h1=h1_for_kw,
-        url=url,
-    )
-    target_note = ""
-    if kw_assessment["targets"]:
-        target_note = " Target phrases: " + "; ".join(
-            f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
-            for kw, exact, per_1000 in kw_assessment["targets"][:12]
-        ) + "."
-    rows.append(result(
-        "Keyword Stuffing",
-        kw_assessment["status"],
-        f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
-        f"({kw_assessment['density']:.1%} of two word phrases). "
-        f"{kw_assessment['reason']}{target_note}",
-        rules["Keyword Stuffing"],
-    ))
-
-
     article_soup = main_content_node(soup)
     page_internal, page_external = extract_page_links(soup, url)
     article_internal, article_external = extract_page_links(article_soup, url)
@@ -4630,6 +4604,32 @@ def audit_seo(
         f"Path: {parsed.path}" + (f" | Query: {q[:120]}" if q else ""),
         rules["URL Structure"],
     ))
+
+    title_for_kw = title_text(soup)
+    h1_for_kw = page_primary_h1(soup)
+    kw_assessment = keyword_repetition_assessment(
+        body_text,
+        focus_keyword,
+        secondary_keywords,
+        title=title_for_kw,
+        h1=h1_for_kw,
+        url=url,
+    )
+    target_note = ""
+    if kw_assessment["targets"]:
+        target_note = " Target phrases: " + "; ".join(
+            f"{kw}: {exact} exact use(s), {per_1000:.1f} per 1,000 words"
+            for kw, exact, per_1000 in kw_assessment["targets"][:12]
+        ) + "."
+    rows.append(result(
+        "Keyword Stuffing",
+        kw_assessment["status"],
+        f"Most repeated two word phrase: '{kw_assessment['gram']}' with {kw_assessment['count']} uses "
+        f"({kw_assessment['density']:.1%} of two word phrases). "
+        f"{kw_assessment['reason']}{target_note}",
+        rules["Keyword Stuffing"],
+    ))
+
 
     internal, external = extract_page_links(soup, desktop_r.url)
 
@@ -6143,7 +6143,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_3_ignore_self_links.json",
+            file_name="url_audit_v18_4_keyword_stuffing_seo.json",
             mime="application/json",
         )
 
@@ -6197,9 +6197,9 @@ else:
     st.markdown('<div class="section-heading">What this version checks</div>', unsafe_allow_html=True)
     a, b, c = st.columns(3, gap="medium")
     cards = [
-        (a, ICON_SHIELD, '<span>Spam</span> 16 rules', 'Cloaking, redirects, hidden content, stuffing, links, hacked content, scripts, UGC, malware and related spam risks.'),
-        (b, ICON_SEARCH, '<span>SEO</span> 20 rules', 'Status, indexability, canonical, titles, headings, links, images, schema, dates, sitemap, mobile, HTTPS and more.'),
-        (c, ICON_DOC, '<span>Content</span> 20 rules', 'Intent, relevance, thinness, originality, freshness, repetition, FAQs, sourcing, accuracy and readability.'),
+        (a, ICON_SHIELD, f'<span>Spam</span> {len(SPAM_RULES)} rules', 'Cloaking, redirects, hidden content, links, hacked content, scripts, UGC, malware and related spam risks.'),
+        (b, ICON_SEARCH, f'<span>SEO</span> {len(SEO_RULES)} rules', 'Status, indexability, canonical, titles, headings, keyword stuffing, links, images, schema, dates, sitemap, mobile, HTTPS and more.'),
+        (c, ICON_DOC, f'<span>Content</span> {len(CONTENT_RULES)} rules', 'Intent, relevance, thinness, originality, freshness, repetition, FAQs, sourcing, accuracy and readability.'),
     ]
     for col, icon, title, desc in cards:
         with col:
