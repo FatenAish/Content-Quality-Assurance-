@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.17 HEADING SOURCE QUALITY FIX"
-ENGINE_BUILD = "2026.08.12.21"
+APP_VERSION = "V18.18 SOURCE QUALITY PRECISE CLAIMS"
+ENGINE_BUILD = "2026.08.12.22"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -501,7 +501,7 @@ CONTENT_RULES = [
     ("Title vs Content", "PASS when title terms/topic are strongly represented in the body."),
     ("H1 vs Content", "PASS when H1 accurately represents the main body."),
     ("Heading Relevance", "Respect heading hierarchy when evaluating H2 to H4 sections. FAQ headings include their child questions and answers. Project, building, place and other entity headings can PASS through related section context even without Focus Keyword wording."),
-    ("Source Quality", "Check source support only for genuinely source sensitive non market information. Exclude property prices, rents, ROI, yields and other property market data. Do not require a source beside ordinary descriptive or location statements. REVIEW only unsourced regulatory, official requirement, historical or specific non market quantitative claims where attribution is reasonably expected."),
+    ("Source Quality", "Check precise sentence level source sensitive claims only. Exclude property prices, rents, ROI, yields, investment commentary, project launch narrative and ordinary descriptive or location wording. REVIEW unsupported official or regulatory requirements, concrete historical facts and specific project specifications where attribution is reasonably expected."),
     ("Data Accuracy", "Check internal numeric consistency by finding substantially repeated statements with conflicting values. PASS when no internal contradiction is detected. External truth verification remains part of Factual Accuracy."),
     ("Entity Accuracy", "Normalize generic property wording and leading prepositions around entity names, merge exact normalized duplicates, and compare only materially different spellings for suspicious near duplicates. REVIEW remaining entities that need external verification or possible inconsistent naming. FAIL only when a connected verification source confirms an entity is incorrect."),
     ("Grammar / Readability", "REVIEW when sentence structure is consistently difficult to read or text is obviously malformed."),
@@ -557,7 +557,7 @@ SYSTEM_USES = {
     "Title vs Content": "HTML title text, main article body, topic keyword overlap",
     "H1 vs Content": "Main H1 text, main article body, topic keyword overlap",
     "Heading Relevance": "Hierarchical H2 through H4 relationships, Focus Keyword or main topic, FAQ child content, entity heading recognition, semantic concept overlap and section context",
-    "Source Quality": "Non market source sensitive claim extraction, nearby attribution and source links; property prices, rents, ROI, yields and other property market data are excluded; ordinary descriptive and location statements do not require nearby citations",
+    "Source Quality": "Sentence level source sensitive claim extraction; official requirements, regulatory claims, concrete historical facts and specific project specifications are checked; property market figures, investment commentary, launch narrative and ordinary descriptive or location statements are excluded",
     "Data Accuracy": "Repeated numeric statement templates, conflicting value tuples, percentages and internal consistency signals",
     "Entity Accuracy": "Normalized entity candidates from proper noun headings, anchor text and proper noun phrases, property wording and preposition removal, exact normalized de duplication, CTA and FAQ filtering, near duplicate spelling similarity and external or first party verification requirement",
     "Grammar / Readability": "Sentence splitting, words per sentence, average sentence length",
@@ -1697,7 +1697,7 @@ DEFAULT_ACTIONS = {
     "Title vs Content": "Align the title with what the article actually covers, or update the article so it fulfils the title.",
     "H1 vs Content": "Align the H1 with the actual article body.",
     "Heading Relevance": "Rename, remove or rewrite weak headings and their sections so they clearly belong to the main topic.",
-    "Source Quality": "Add an authoritative source only beside the specific source sensitive non market claim listed in Result.",
+    "Source Quality": "Add an authoritative source only beside the exact source sensitive claim listed in Result.",
     "Data Accuracy": "Correct the specific conflicting numeric statements reported so the same fact does not appear with different values.",
     "Entity Accuracy": "Verify the exact entity names reported. Standardize possible typo variants to the official project, company, place or building name.",
     "Grammar / Readability": "Rewrite the reported difficult or malformed sentences for clarity and readability.",
@@ -3860,10 +3860,19 @@ def is_property_market_data_claim(value):
 
 def is_source_sensitive_non_market_claim(value):
     """
-    Return True only when Source Quality should reasonably expect attribution.
+    Source Quality should flag only claims where attribution is reasonably expected.
 
-    Property market figures are excluded. Regulatory/official claims remain
-    source-sensitive even when they contain a fee amount.
+    Excluded:
+    property prices, rents, ROI and yields
+    investment commentary
+    broad launch narrative
+    ordinary descriptive and location statements
+
+    Included:
+    official and regulatory requirements
+    concrete historical opening or establishment facts
+    specific project specifications such as floors, units and amenities
+    precise non property operational quantities
     """
     value = re.sub(r"\s+", " ", value or "").strip()
     low = value.lower()
@@ -3871,63 +3880,164 @@ def is_source_sensitive_non_market_claim(value):
     if not value:
         return False
 
-    regulatory = bool(re.search(
-        r"\b(?:law|laws|regulation|regulations|rule|rules|visa|permit|licen[cs]e|"
-        r"requirement|requirements|mandatory|fine|fines|fee|fees|authority|"
-        r"government|municipality|ministry)\b",
-        low,
-        flags=re.I,
-    )) or bool(re.search(
-        r"\b(?:قانون|قوانين|لائحة|لوائح|تأشيرة|تاشيرة|تصريح|ترخيص|"
-        r"إلزامي|الزامي|غرامة|غرامات|رسوم|هيئة|حكومة|بلدية|وزارة)\b",
-        value,
-        flags=re.I,
-    ))
+    # Editorial / investment commentary is not a sourcing problem by itself.
+    commentary_terms = [
+        "gaining popularity",
+        "popular among investors",
+        "emerging area",
+        "emerging areas",
+        "off-plan investment",
+        "off plan investment",
+        "property landscape",
+        "real estate landscape",
+        "fresh wave",
+        "exciting project launches",
+        "innovation meets luxury",
+        "architectural brilliance",
+        "perfect time to assess",
+        "investment opportunity",
+        "investment opportunities",
+        "استثمار",
+        "المستثمرين",
+        "منطقة ناشئة",
+        "مناطق ناشئة",
+    ]
 
-    # Regulatory and official requirement claims should still be sourced,
-    # including claims that contain a fee amount.
-    if regulatory:
+    hard_official_terms = [
+        "law", "laws", "regulation", "regulations",
+        "requirement", "requirements", "mandatory",
+        "eligible", "eligibility", "threshold", "minimum",
+        "permit", "licence", "license", "fine", "fines",
+        "fee", "fees", "must meet", "required to",
+        "قانون", "قوانين", "لائحة", "لوائح",
+        "شرط", "شروط", "إلزامي", "الزامي",
+        "مؤهل", "أهلية", "اهلية", "حد أدنى", "حد ادنى",
+        "تصريح", "ترخيص", "غرامة", "غرامات", "رسوم",
+    ]
+
+    if any(term in low for term in commentary_terms) and not any(
+        term in low for term in hard_official_terms
+    ):
+        return False
+
+    # Official / legal / regulatory requirements.
+    regulatory = any(term in low for term in hard_official_terms)
+
+    # Visa statements are source sensitive only when they state a concrete
+    # eligibility, duration, requirement or threshold, not simply that a visa exists.
+    visa_specific = (
+        ("visa" in low or "تأشيرة" in value or "تاشيرة" in value)
+        and bool(re.search(
+            r"\b(?:eligible|eligibility|threshold|minimum|requirement|required|"
+            r"must|valid for|duration|years?|months?)\b|\b\d+\s*(?:years?|months?)\b",
+            low,
+            flags=re.I,
+        ))
+    )
+
+    if regulatory or visa_specific:
         return True
 
-    # Property prices, rents, ROI, yields and market stats are excluded.
+    # Property market data remains excluded.
     if is_property_market_data_claim(value):
         return False
 
+    # Broad property launch/date narrative is not treated as a historical
+    # source claim. Historical checks are limited to actual opening/founding facts.
     historical = bool(re.search(
-        r"\b(?:opened|launched|established|founded|introduced|inaugurated|"
-        r"completed|since)\b.*\b20(?:0\d|1\d|2\d)\b",
+        r"\b(?:opened|established|founded|inaugurated|completed|"
+        r"began operations|started operations)\b[^.]{0,120}\b20(?:0\d|1\d|2\d)\b",
         low,
         flags=re.I,
     )) or bool(re.search(
-        r"\b(?:افتتح|أطلق|اطلق|تأسس|تاسس|اكتمل|منذ)\b.*\b20(?:0\d|1\d|2\d)\b",
+        r"\b(?:افتتح|تأسس|تاسس|اكتمل|بدأ التشغيل|بدا التشغيل)\b[^.]{0,120}\b20(?:0\d|1\d|2\d)\b",
         value,
         flags=re.I,
     ))
 
-    ranking_or_data = bool(re.search(
-        r"\b(?:according to|according to our data|data shows?|data indicates?|"
-        r"most searched|ranked|ranking|survey|study|report)\b",
+    if historical:
+        return True
+
+    # Concrete project specifications.
+    project_spec = bool(re.search(
+        r"\b\d+(?:\.\d+)?\s*[- ]?\s*(?:(?:premium|luxury)\s+)?"
+        r"(?:storey|storeys|story|stories|floor|floors|unit|units|"
+        r"apartment|apartments|villa|villas|amenity|amenities|room|rooms|"
+        r"tower|towers|building|buildings)\b",
         low,
         flags=re.I,
     )) or bool(re.search(
-        r"\b(?:وفقا لبيانات|وفقاً لبيانات|بحسب البيانات|الأكثر بحثا|"
-        r"الاكثر بحثا|دراسة|تقرير|استطلاع)\b",
+        r"\b\d+(?:\.\d+)?\s*(?:طابق|طوابق|وحدة|وحدات|شقة|شقق|فيلا|فلل|"
+        r"مرفق|مرافق|غرفة|غرف|برج|أبراج|ابراج|مبنى|مبان)\b",
         value,
         flags=re.I,
     ))
 
-    quantitative = bool(re.search(
+    if project_spec:
+        return True
+
+    # Precise non-property operating/location quantities.
+    operational_quantitative = bool(re.search(
         r"\b\d+(?:\.\d+)?\s*(?:minutes?|mins?|km|kilometres?|kilometers?|"
-        r"metres?|meters?|%|stations?|routes?|floors?|units?|seats?)\b",
+        r"metres?|meters?|stations?|routes?|seats?)\b",
         low,
         flags=re.I,
     )) or bool(re.search(
-        r"\b\d+(?:\.\d+)?\s*(?:دقيقة|دقائق|كم|كيلومتر|متر|٪|%)\b",
+        r"\b\d+(?:\.\d+)?\s*(?:دقيقة|دقائق|كم|كيلومتر|متر|محطة|محطات|مقعد|مقاعد)\b",
         value,
         flags=re.I,
     ))
 
-    return historical or ranking_or_data or quantitative
+    return operational_quantitative
+
+
+def split_source_claim_sentences(value):
+    value = re.sub(r"\s+", " ", value or "").strip()
+    if not value:
+        return []
+    parts = re.split(r"(?<=[.!?؟])\s+", value)
+    return [part.strip() for part in parts if len(part.strip()) >= 25]
+
+
+def source_quality_claim_examples(article_soup, base_url, limit=40):
+    """
+    Extract focused sentence-level Source Quality claims.
+
+    Support is inherited from the containing editorial paragraph/list item.
+    The claim itself is always shown as one sentence instead of a long paragraph.
+    """
+    claims = []
+
+    for node in article_soup.find_all(["p", "li", "td"]):
+        paragraph = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        if len(paragraph) < 25:
+            continue
+
+        sources = []
+        for anchor in node.find_all("a", href=True):
+            resolved = urljoin(base_url, anchor.get("href", "").strip())
+            if resolved.startswith(("http://", "https://")):
+                sources.append(resolved)
+
+        nearby_context = nearby_support_context(node)
+        claim_links = unique_http_urls(sources)
+        supported = bool(claim_links) or has_attribution(nearby_context)
+
+        for sentence in split_source_claim_sentences(paragraph):
+            if not is_source_sensitive_non_market_claim(sentence):
+                continue
+
+            claims.append({
+                "claim": sentence[:420],
+                "source_links": claim_links,
+                "attributed": has_attribution(nearby_context),
+                "supported": supported,
+            })
+
+            if len(claims) >= limit:
+                return claims
+
+    return claims
 
 
 
@@ -5742,12 +5852,8 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         hfind = "No H2 to H4 headings were available for contextual heading relevance assessment."
     rows.append(result("Heading Relevance", hstatus, hfind, rules["Heading Relevance"]))
 
-    raw_source_claims = factual_claim_examples(article_soup, url, limit=60)
-
-    source_claims = [
-        item for item in raw_source_claims
-        if is_source_sensitive_non_market_claim(item.get("claim", ""))
-    ]
+    raw_source_claims = source_quality_claim_examples(article_soup, url, limit=60)
+    source_claims = raw_source_claims
 
     unsupported_source_claims = [
         item for item in source_claims
@@ -5758,8 +5864,8 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         sq = REVIEW
         source_targets = unsupported_source_claims
         sf = (
-            f"{len(unsupported_source_claims)} source sensitive non market statement(s) need attribution. "
-            "Examples: "
+            f"{len(unsupported_source_claims)} source sensitive claim(s) need attribution. "
+            "Claims: "
             + " | ".join(item["claim"] for item in source_targets[:5])
         )
         source_action = " || ".join(
@@ -6396,7 +6502,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_17_heading_source_quality_fix.json",
+            file_name="url_audit_v18_18_source_quality_precise_claims.json",
             mime="application/json",
         )
 
