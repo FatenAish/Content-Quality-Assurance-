@@ -1,5 +1,6 @@
 import re
 import json
+import io
 import time
 import html as html_lib
 import gzip
@@ -39,8 +40,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.24 MISSPELLING HIGH PRECISION"
-ENGINE_BUILD = "2026.08.12.28"
+APP_VERSION = "V18.25 EXCEL REPORT EXPORT"
+ENGINE_BUILD = "2026.08.12.29"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -60,6 +61,408 @@ INTERNAL_LINK_CHECK_WORKERS = 24
 ROBOTS_REQUEST_TIMEOUT = 4
 RESOURCE_CHECK_TIMEOUT = 3
 RESOURCE_CHECK_WORKERS = 24
+
+
+def build_audit_excel_report(
+    url_requested,
+    url_final,
+    focus_keyword,
+    secondary_keywords,
+    spam_rows,
+    seo_rows,
+    content_rows,
+    spam_status,
+    spam_counts,
+    seo_status,
+    seo_counts,
+    content_status,
+    content_counts,
+    generated_at_utc,
+    total_audit_time,
+    desktop_status_code,
+    extracted_words,
+):
+    """Build the audit as a clear XLSX workbook in memory."""
+    try:
+        import xlsxwriter
+    except ImportError as exc:
+        raise RuntimeError("Excel export requires the XlsxWriter package.") from exc
+
+    output = io.BytesIO()
+
+    workbook = xlsxwriter.Workbook(
+        output,
+        {
+            "in_memory": True,
+            "strings_to_urls": False,
+            "strings_to_formulas": False,
+        },
+    )
+
+    title_fmt = workbook.add_format({
+        "bold": True,
+        "font_size": 18,
+        "font_color": "#FFFFFF",
+        "bg_color": "#00A66A",
+        "align": "left",
+        "valign": "vcenter",
+    })
+    section_fmt = workbook.add_format({
+        "bold": True,
+        "font_size": 12,
+        "font_color": "#1F2D2A",
+        "bg_color": "#EAF7F1",
+        "border": 1,
+        "border_color": "#D7E7DF",
+        "valign": "vcenter",
+    })
+    label_fmt = workbook.add_format({
+        "bold": True,
+        "font_color": "#33413D",
+        "bg_color": "#F6F9F7",
+        "border": 1,
+        "border_color": "#E4E9E7",
+        "valign": "top",
+    })
+    value_fmt = workbook.add_format({
+        "font_color": "#1F2D2A",
+        "border": 1,
+        "border_color": "#E4E9E7",
+        "text_wrap": True,
+        "valign": "top",
+    })
+    url_fmt = workbook.add_format({
+        "font_color": "#0563C1",
+        "underline": True,
+        "border": 1,
+        "border_color": "#E4E9E7",
+        "text_wrap": True,
+        "valign": "top",
+    })
+    header_fmt = workbook.add_format({
+        "bold": True,
+        "font_color": "#FFFFFF",
+        "bg_color": "#00A66A",
+        "border": 1,
+        "border_color": "#008B59",
+        "align": "center",
+        "valign": "vcenter",
+        "text_wrap": True,
+    })
+    text_fmt = workbook.add_format({
+        "font_color": "#1F2D2A",
+        "border": 1,
+        "border_color": "#E4E9E7",
+        "text_wrap": True,
+        "valign": "top",
+    })
+    check_fmt = workbook.add_format({
+        "bold": True,
+        "font_color": "#1F2D2A",
+        "border": 1,
+        "border_color": "#E4E9E7",
+        "text_wrap": True,
+        "valign": "top",
+    })
+    pass_fmt = workbook.add_format({
+        "bold": True,
+        "font_color": "#14804A",
+        "bg_color": "#E9F8EF",
+        "border": 1,
+        "border_color": "#BFE8CF",
+        "align": "center",
+        "valign": "top",
+    })
+    review_fmt = workbook.add_format({
+        "bold": True,
+        "font_color": "#9A6700",
+        "bg_color": "#FFF6D8",
+        "border": 1,
+        "border_color": "#F0D88A",
+        "align": "center",
+        "valign": "top",
+    })
+    fail_fmt = workbook.add_format({
+        "bold": True,
+        "font_color": "#B42318",
+        "bg_color": "#FDECEC",
+        "border": 1,
+        "border_color": "#F4B8B3",
+        "align": "center",
+        "valign": "top",
+    })
+    neutral_status_fmt = workbook.add_format({
+        "bold": True,
+        "font_color": "#475467",
+        "bg_color": "#F2F4F7",
+        "border": 1,
+        "border_color": "#D0D5DD",
+        "align": "center",
+        "valign": "top",
+    })
+    note_fmt = workbook.add_format({
+        "font_color": "#66736F",
+        "italic": True,
+        "text_wrap": True,
+        "valign": "top",
+    })
+    integer_fmt = workbook.add_format({
+        "border": 1,
+        "border_color": "#E4E9E7",
+        "align": "center",
+        "valign": "vcenter",
+    })
+
+    status_formats = {
+        "PASS": pass_fmt,
+        "REVIEW": review_fmt,
+        "FAIL": fail_fmt,
+    }
+
+    def safe_text(value):
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple)):
+            return ", ".join(str(v) for v in value)
+        return str(value)
+
+    def status_format(status):
+        return status_formats.get(status, neutral_status_fmt)
+
+    def row_height_from_values(*values):
+        longest = max((len(safe_text(v)) for v in values), default=0)
+        if longest > 700:
+            return 120
+        if longest > 400:
+            return 95
+        if longest > 220:
+            return 75
+        if longest > 100:
+            return 56
+        return 36
+
+    # ========================================================
+    # SUMMARY
+    # ========================================================
+    summary = workbook.add_worksheet("Summary")
+    summary.hide_gridlines(2)
+    summary.set_zoom(90)
+
+    summary.merge_range("A1:F2", "Bayut URL Quality Audit Report", title_fmt)
+    summary.set_row(0, 25)
+    summary.set_row(1, 10)
+
+    summary.merge_range("A4:F4", "Audit Information", section_fmt)
+
+    info_rows = [
+        ("Requested URL", safe_text(url_requested)),
+        ("Final URL", safe_text(url_final)),
+        ("Focus Keyword", safe_text(focus_keyword)),
+        ("Secondary Keywords", safe_text(secondary_keywords)),
+        ("Generated UTC", safe_text(generated_at_utc)),
+        ("App Version", APP_VERSION),
+        ("Engine Build", ENGINE_BUILD),
+        ("HTTP Status", safe_text(desktop_status_code)),
+        ("Extracted Words", f"{int(extracted_words):,}"),
+        ("Total Audit Time", f"{float(total_audit_time):.1f} seconds"),
+    ]
+
+    row = 4
+    for label, value in info_rows:
+        summary.write(row, 0, label, label_fmt)
+        summary.merge_range(
+            row,
+            1,
+            row,
+            5,
+            value,
+            url_fmt if label in {"Requested URL", "Final URL"} else value_fmt,
+        )
+        summary.set_row(row, row_height_from_values(value))
+        row += 1
+
+    row += 1
+    summary.merge_range(row, 0, row, 5, "Audit Summary", section_fmt)
+    row += 1
+
+    summary_headers = ["Category", "Overall Status", "PASS", "REVIEW", "FAIL", "Rules"]
+    for col, header in enumerate(summary_headers):
+        summary.write(row, col, header, header_fmt)
+
+    summary_rows = [
+        ("Spam", spam_status, spam_counts, len(spam_rows)),
+        ("SEO", seo_status, seo_counts, len(seo_rows)),
+        ("Content", content_status, content_counts, len(content_rows)),
+    ]
+
+    for category, overall_status, counts, rule_count in summary_rows:
+        row += 1
+        summary.write(row, 0, category, check_fmt)
+        summary.write(row, 1, overall_status, status_format(overall_status))
+        summary.write_number(row, 2, int(counts.get("PASS", 0)), integer_fmt)
+        summary.write_number(row, 3, int(counts.get("REVIEW", 0)), integer_fmt)
+        summary.write_number(row, 4, int(counts.get("FAIL", 0)), integer_fmt)
+        summary.write_number(row, 5, int(rule_count), integer_fmt)
+
+    row += 2
+    summary.merge_range(row, 0, row, 5, "How to Read This Report", section_fmt)
+    row += 1
+    summary.merge_range(
+        row,
+        0,
+        row + 3,
+        5,
+        (
+            "PASS means no issue was found by that rule. REVIEW means the rule found "
+            "something that needs checking or improvement. FAIL means a clear issue was "
+            "detected. Start with the Issues Only sheet for the action list, then use "
+            "Spam, SEO and Content for the complete Result, Action Needed and Why details."
+        ),
+        note_fmt,
+    )
+
+    summary.set_column("A:A", 24)
+    summary.set_column("B:B", 20)
+    summary.set_column("C:F", 14)
+    summary.freeze_panes(4, 0)
+
+    # ========================================================
+    # DETAIL SHEETS
+    # ========================================================
+    def write_detail_sheet(sheet_name, rows):
+        ws = workbook.add_worksheet(sheet_name)
+        ws.hide_gridlines(2)
+        ws.set_zoom(85)
+        ws.freeze_panes(1, 2)
+
+        headers = ["Check", "Status", "Result", "Action Needed", "Why"]
+        for col, header in enumerate(headers):
+            ws.write(0, col, header, header_fmt)
+
+        for r_idx, item in enumerate(rows, start=1):
+            check = safe_text(item.get("Check"))
+            status = safe_text(item.get("Status"))
+            result_value = safe_text(item.get("Result"))
+            action_value = safe_text(item.get("Action Needed"))
+            why_value = safe_text(item.get("Why"))
+
+            ws.write(r_idx, 0, check, check_fmt)
+            ws.write(r_idx, 1, status, status_format(status))
+            ws.write(r_idx, 2, result_value, text_fmt)
+            ws.write(r_idx, 3, action_value, text_fmt)
+            ws.write(r_idx, 4, why_value, text_fmt)
+
+            ws.set_row(
+                r_idx,
+                row_height_from_values(result_value, action_value, why_value),
+            )
+
+        ws.set_row(0, 28)
+        ws.set_column("A:A", 27)
+        ws.set_column("B:B", 12)
+        ws.set_column("C:C", 58)
+        ws.set_column("D:D", 48)
+        ws.set_column("E:E", 58)
+
+        # Excel table already supplies filtering, so no separate autofilter.
+        if rows:
+            table_name = re.sub(r"[^A-Za-z0-9_]", "", f"{sheet_name}AuditTable")
+            ws.add_table(
+                0,
+                0,
+                len(rows),
+                4,
+                {
+                    "name": table_name,
+                    "style": "Table Style Medium 4",
+                    "columns": [{"header": h} for h in headers],
+                },
+            )
+
+    # ========================================================
+    # ISSUES ONLY
+    # ========================================================
+    issues = []
+    for category, category_rows in [
+        ("Spam", spam_rows),
+        ("SEO", seo_rows),
+        ("Content", content_rows),
+    ]:
+        for item in category_rows:
+            if item.get("Status") in {"REVIEW", "FAIL"}:
+                issues.append({"Category": category, **item})
+
+    issues_ws = workbook.add_worksheet("Issues Only")
+    issues_ws.hide_gridlines(2)
+    issues_ws.set_zoom(85)
+    issues_ws.freeze_panes(1, 3)
+
+    issue_headers = [
+        "Category",
+        "Check",
+        "Status",
+        "Result",
+        "Action Needed",
+        "Why",
+    ]
+    for col, header in enumerate(issue_headers):
+        issues_ws.write(0, col, header, header_fmt)
+
+    if issues:
+        for r_idx, item in enumerate(issues, start=1):
+            category = safe_text(item.get("Category"))
+            check = safe_text(item.get("Check"))
+            status = safe_text(item.get("Status"))
+            result_value = safe_text(item.get("Result"))
+            action_value = safe_text(item.get("Action Needed"))
+            why_value = safe_text(item.get("Why"))
+
+            issues_ws.write(r_idx, 0, category, check_fmt)
+            issues_ws.write(r_idx, 1, check, check_fmt)
+            issues_ws.write(r_idx, 2, status, status_format(status))
+            issues_ws.write(r_idx, 3, result_value, text_fmt)
+            issues_ws.write(r_idx, 4, action_value, text_fmt)
+            issues_ws.write(r_idx, 5, why_value, text_fmt)
+
+            issues_ws.set_row(
+                r_idx,
+                row_height_from_values(result_value, action_value, why_value),
+            )
+
+        issues_ws.add_table(
+            0,
+            0,
+            len(issues),
+            5,
+            {
+                "name": "IssuesOnlyTable",
+                "style": "Table Style Medium 4",
+                "columns": [{"header": h} for h in issue_headers],
+            },
+        )
+    else:
+        issues_ws.merge_range(
+            "A2:F4",
+            "No REVIEW or FAIL items were found in this audit.",
+            note_fmt,
+        )
+
+    issues_ws.set_row(0, 28)
+    issues_ws.set_column("A:A", 14)
+    issues_ws.set_column("B:B", 27)
+    issues_ws.set_column("C:C", 12)
+    issues_ws.set_column("D:D", 58)
+    issues_ws.set_column("E:E", 48)
+    issues_ws.set_column("F:F", 58)
+
+    write_detail_sheet("Spam", spam_rows)
+    write_detail_sheet("SEO", seo_rows)
+    write_detail_sheet("Content", content_rows)
+
+    workbook.close()
+    output.seek(0)
+    return output.getvalue()
+
 
 st.set_page_config(
     page_title=f"Bayut URL Quality Auditor {APP_VERSION}",
@@ -6834,39 +7237,39 @@ if run:
                     },
                 )
 
-        export = {
-            "app_version": APP_VERSION,
-            "engine_build": ENGINE_BUILD,
-            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-            "url_requested": url,
-            "url_final": desktop_r.url,
-            "focus_keyword": focus_keyword,
-            "secondary_keywords": secondary_keywords,
-            "spam": [
-                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
-                for r in spam_rows
-            ],
-            "seo": [
-                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
-                for r in seo_rows
-            ],
-            "content": [
-                {"Check": r["Check"], "Status": r["Status"], "Result": r["Result"], "Why": r["Why"]}
-                for r in content_rows
-            ],
-        }
+        report_generated_at = datetime.now(timezone.utc).isoformat()
+
+        excel_report = build_audit_excel_report(
+            url_requested=url,
+            url_final=desktop_r.url,
+            focus_keyword=focus_keyword,
+            secondary_keywords=secondary_keywords,
+            spam_rows=spam_rows,
+            seo_rows=seo_rows,
+            content_rows=content_rows,
+            spam_status=spam_status,
+            spam_counts=spam_counts,
+            seo_status=seo_status,
+            seo_counts=seo_counts,
+            content_status=content_status,
+            content_counts=content_counts,
+            generated_at_utc=report_generated_at,
+            total_audit_time=total_audit_time,
+            desktop_status_code=desktop_r.status_code,
+            extracted_words=word_count(body_text),
+        )
 
         st.download_button(
-            "Download audit JSON",
-            data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_24_misspelling_high_precision.json",
-            mime="application/json",
+            "Download audit report Excel",
+            data=excel_report,
+            file_name="url_audit_report_v18_25.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
         with st.expander("Important interpretation notes"):
             st.markdown(
                 """
-                This export was generated by the engine version displayed at the top of the app and stored in the JSON under app_version.
+                This Excel report was generated by the engine version displayed at the top of the app. Version details are stored in the Summary sheet.
 
                 Every rule receives one of three statuses: PASS, REVIEW or FAIL.
 
