@@ -38,8 +38,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.8 KEYWORD STUFFING EDITORIAL ONLY"
-ENGINE_BUILD = "2026.08.12.12"
+APP_VERSION = "V18.9 EXTERNAL LINKS SIMPLE PASS"
+ENGINE_BUILD = "2026.08.12.13"
 CURRENT_YEAR = 2026
 
 # Performance controls
@@ -4696,7 +4696,7 @@ def audit_seo(
 
     if not external:
         external_status = PASS
-        external_finding = "No external HTTP links were found."
+        external_finding = "No broken external links found."
     elif external_problem_items:
         external_status = REVIEW
         external_problems = validation_problem_examples({
@@ -4713,12 +4713,7 @@ def audit_seo(
         )
     else:
         external_status = PASS
-        external_finding = (
-            f"{len(external_classified['checked'])} unique external HTTP links were requested. "
-            f"{len(external_classified['working'])} resolved directly. "
-            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected login or anti bot responses and were not treated as broken. "
-            f"{len(external_classified['redirected'])} redirected to a working final destination."
-        )
+        external_finding = "No broken external links found."
     rows.append(result("External Links", external_status, external_finding, rules["External Links"]))
 
     image_inventory = meaningful_image_inventory(
@@ -6150,7 +6145,7 @@ if run:
         st.download_button(
             "Download audit JSON",
             data=json.dumps(export, ensure_ascii=False, indent=2),
-            file_name="url_audit_v18_8_keyword_stuffing_editorial_only.json",
+            file_name="url_audit_v18_9_external_links_simple_pass.json",
             mime="application/json",
         )
 
