@@ -12,7 +12,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from difflib import SequenceMatcher
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs, unquote
 import urllib.robotparser
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -42,35 +42,25 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.28 OFFICIAL SOURCE CONTENT QA"
-ENGINE_BUILD = "2026.08.13.1"
+APP_VERSION = "V18.29 FREE OFFICIAL SOURCE CONTENT QA"
+ENGINE_BUILD = "2026.08.13.2"
 CURRENT_YEAR = 2026
 
+# Free official-source Content QA. No API key is required.
+# The verifier uses public search result pages plus direct HTTP requests to source pages.
+# Search/network failures never stop the audit; unresolved claims become REVIEW.
+FREE_SEARCH_TIMEOUT = int(os.getenv("MYBAYUT_FREE_SEARCH_TIMEOUT", "10"))
+FREE_SOURCE_TIMEOUT = int(os.getenv("MYBAYUT_FREE_SOURCE_TIMEOUT", "8"))
+FREE_MAX_CLAIMS = int(os.getenv("MYBAYUT_FREE_MAX_CLAIMS", "12"))
+FREE_MAX_SEARCH_RESULTS = int(os.getenv("MYBAYUT_FREE_MAX_SEARCH_RESULTS", "8"))
+FREE_SEARCH_URL = os.getenv("MYBAYUT_FREE_SEARCH_URL", "https://html.duckduckgo.com/html/").strip()
 
-# Official-source Content QA. The app remains usable without a key.
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
-OPENAI_MODEL = os.getenv("MYBAYUT_AI_MODEL", "gpt-5.6").strip() or "gpt-5.6"
-AI_REQUEST_TIMEOUT = int(os.getenv("MYBAYUT_AI_TIMEOUT", "120"))
-AI_MAX_ARTICLE_CHARS = int(os.getenv("MYBAYUT_AI_MAX_ARTICLE_CHARS", "42000"))
 AI_BLOCKED_SOURCE_DOMAINS = [
     "bayut.com", "dubizzle.com", "propertyfinder.ae", "wikipedia.org",
     "reddit.com", "tripadvisor.com", "quora.com", "pinterest.com",
     "facebook.com", "instagram.com", "linkedin.com", "youtube.com", "x.com",
+    "medium.com", "thenationalnews.com", "gulfnews.com", "khaleejtimes.com",
 ]
-
-
-def configured_openai_api_key():
-    """Read the key safely from environment or Streamlit Cloud secrets."""
-    env_key = (os.getenv("OPENAI_API_KEY") or "").strip()
-    if env_key:
-        return env_key
-    try:
-        secret_key = str(st.secrets.get("OPENAI_API_KEY", "") or "").strip()
-        if secret_key:
-            return secret_key
-    except Exception:
-        pass
-    return ""
 
 # Performance controls
 PAGE_FETCH_TIMEOUT = 9
@@ -1089,7 +1079,7 @@ CONTENT_RULES = [
     ("Thin Content", "System heuristic: PASS at 600+ meaningful words, REVIEW at 300–599, FAIL below 300. This is not a Google word count rule."),
     ("Original Value", "PASS when the page adds useful data, examples, analysis or first hand value. External/site comparison may be required."),
     ("Factual Accuracy", "Check non market factual information in the editorial article, such as transport, locations, institutions, laws, routes, services and historical facts. Exclude property prices, rents, ROI, yields and other market data. Do not treat the absence of a nearby source link as a factual error. REVIEW only when the article contains an internal factual contradiction or another concrete factual inconsistency that the system can demonstrate."),
-    ("Official Source Verification", "Research factual claims and entity details against official or primary sources. FAIL only with direct official contradiction, REVIEW when official evidence is insufficient, and PASS when an official source confirms the claim."),
+    ("Official Source Verification", "Free official-source research for factual claims and entity details. FAIL only with a direct contradiction on an official page, REVIEW when official evidence is insufficient, and PASS when an official page directly confirms the claim. No paid API key is required."),
     ("Outdated Information", "Evaluate old year references in context and also compare time sensitive claims with the latest editorial publication or modification date. Historical dates alone PASS. REVIEW stale or undated prices, rents, ROI, fees, laws, routes or project status using an internal freshness heuristic."),
     ("Keyword Use", "Evaluate Focus Keyword and Secondary Keyword use only in the editorial article text. Exclude TruBroker, property widgets, banners, newsletters, social UI and other embedded modules. Exact matching is not required for every secondary phrase. PASS natural use, REVIEW unusually repetitive target wording, FAIL clearly manipulative repetition."),
     ("Repetition", "REVIEW/FAIL when sentences or paragraphs are unnecessarily repeated."),
@@ -1146,7 +1136,7 @@ SYSTEM_USES = {
     "Thin Content": "Main content extraction and meaningful article word count",
     "Original Value": "Main content word count, tables, lists, numeric references, useful information signals",
     "Factual Accuracy": "Editorial non market factual claims only, including transport, locations, institutions, laws, routes, services and historical facts; property prices, rents, ROI, yields and market statistics are excluded; nearby source links are optional and are not used as a failure condition",
-    "Official Source Verification": "OpenAI Responses API web_search with blocked secondary-source domains, structured findings, source URL reconciliation, article headings, body text, image ALT text and captions",
+    "Official Source Verification": "Free public web search result retrieval, blocked secondary-source domains, direct official-page HTTP fetching, claim/entity/numeric comparison, article headings, body text, image ALT text and captions; no paid API key",
     "Outdated Information": "Old year context, time sensitive claim detection, schema and visible editorial dates, and age of the latest editorial freshness signal",
     "Keyword Use": "Editorial article text only, Focus Keyword, Secondary Keywords, semantic topic representation, target phrase frequency and N gram repetition; TruBroker, broker/property widgets, banners, newsletter and social UI are excluded",
     "Repetition": "Normalised sentences, normalised paragraphs, duplicate counts, repetition ratio",
@@ -6684,148 +6674,575 @@ ARTICLE TEXT:
 """
 
 
+
+# -----------------------------
+# Free official-source verifier
+# -----------------------------
+
+_FREEQA_GENERIC_WORDS = {
+    "the", "a", "an", "and", "or", "of", "in", "at", "on", "to", "for", "with", "from",
+    "this", "that", "these", "those", "is", "are", "was", "were", "has", "have", "had",
+    "offers", "offer", "features", "feature", "includes", "include", "provides", "provide",
+    "dubai", "uae", "united", "arab", "emirates", "official", "website", "home",
+}
+
+_FREEQA_FACT_TERMS = {
+    "tower", "towers", "unit", "units", "floor", "floors", "building", "buildings",
+    "developed", "developer", "development", "project", "community", "located", "location",
+    "consists", "comprises", "contains", "completed", "completion", "handover", "opened",
+    "award", "awards", "awarded", "certified", "certification", "standard", "standards",
+    "school", "schools", "hospital", "clinic", "golf", "club", "station", "metro", "route",
+    "minutes", "minute", "km", "kilometres", "kilometers", "amenity", "amenities",
+    "studio", "studios", "bedroom", "bedrooms", "apartment", "apartments", "villa", "villas",
+}
+
+_FREEQA_MARKET_TERMS = {
+    "aed", "rent", "rents", "rental", "price", "prices", "roi", "yield", "yields",
+    "average rent", "average price", "sale price", "asking price",
+}
+
+_FREEQA_NONOFFICIAL_HINTS = {
+    "blog", "news", "guide", "broker", "real estate", "property portal", "listing", "listings",
+    "wikipedia", "tripadvisor", "reddit", "facebook", "instagram", "linkedin", "youtube",
+}
+
+_FREEQA_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
+
+
+def _freeqa_tokens(text):
+    return [x.lower() for x in re.findall(r"[A-Za-z0-9]+", text or "") if len(x) > 1]
+
+
+def _freeqa_content_tokens(text):
+    return [x for x in _freeqa_tokens(text) if x not in _FREEQA_GENERIC_WORDS]
+
+
+def _freeqa_entity_phrase(text):
+    """Best-effort proper-name extraction for English editorial copy."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    candidates = []
+    pattern = re.compile(
+        r"\b(?:The\s+)?(?:[A-Z][A-Za-z0-9&'’.-]*|[A-Z]{2,}|[A-Z]\d+|\d+[A-Z])"
+        r"(?:\s+(?:[A-Z][A-Za-z0-9&'’.-]*|[A-Z]{2,}|[A-Z]\d+|\d+[A-Z])){1,6}\b"
+    )
+    for m in pattern.finditer(text):
+        c = m.group(0).strip(" ,.;:()[]{}")
+        c = re.sub(r"^The\s+", "", c)
+        if len(c) < 5:
+            continue
+        if c.lower().startswith(("AED ", "FAQ ")):
+            continue
+        candidates.append(c)
+    if not candidates:
+        return ""
+    # Prefer names containing project/entity words, then longest meaningful phrase.
+    def score(c):
+        low = c.lower()
+        entity_bonus = 5 if any(k in low for k in [
+            "tower", "residence", "residences", "heights", "club", "school", "hospital",
+            "city", "community", "village", "golf", "hotel", "mall", "park", "academy"
+        ]) else 0
+        return entity_bonus + min(len(c.split()), 6)
+    return max(candidates, key=score)
+
+
+def _freeqa_split_sentences(text):
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text or "")
+    out = []
+    for part in parts:
+        part = re.sub(r"\s+", " ", part).strip()
+        if 30 <= len(part) <= 360 and len(part.split()) >= 5:
+            out.append(part)
+    return out
+
+
+def _freeqa_claim_candidates(article_soup, body_text, target_topic=""):
+    fields = _qa_editorial_fields(article_soup)
+    items = []
+
+    # Image ALT and captions are high-value because entity mistakes often live there.
+    for alt in fields.get("image_alts", [])[:80]:
+        alt = re.sub(r"\s+", " ", alt).strip()
+        if len(alt) >= 5:
+            items.append({"text": alt, "kind": "Image Alt Text", "priority": 7})
+    for cap in fields.get("image_captions", [])[:80]:
+        cap = re.sub(r"\s+", " ", cap).strip()
+        if len(cap) >= 5:
+            items.append({"text": cap, "kind": "Image Caption", "priority": 7})
+
+    for sentence in _freeqa_split_sentences(body_text):
+        low = sentence.lower()
+        # Market figures are handled by the data layer; avoid pretending free web research
+        # can validate live Bayut market data.
+        if any(term in low for term in _FREEQA_MARKET_TERMS):
+            continue
+        tokens = set(_freeqa_tokens(sentence))
+        score = 0
+        if re.search(r"\b\d+(?:[.,]\d+)?\b", sentence):
+            score += 4
+        if any(term in tokens or term in low for term in _FREEQA_FACT_TERMS):
+            score += 3
+        if _freeqa_entity_phrase(sentence):
+            score += 3
+        if any(x in low for x in ["consists of", "comprises", "developed by", "located in", "won", "award", "certified", "built to", "completed in"]):
+            score += 3
+        if score >= 6:
+            items.append({"text": sentence, "kind": "Factual Accuracy", "priority": score})
+
+    # Deduplicate while preserving priority.
+    seen = set()
+    unique = []
+    for item in sorted(items, key=lambda x: x["priority"], reverse=True):
+        key = re.sub(r"\W+", " ", item["text"].lower()).strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+        if len(unique) >= FREE_MAX_CLAIMS:
+            break
+    return unique
+
+
+def _freeqa_ddg_url(href):
+    href = html_lib.unescape(href or "").strip()
+    if not href:
+        return ""
+    if href.startswith("//"):
+        href = "https:" + href
+    try:
+        p = urlparse(href)
+        if "duckduckgo.com" in (p.hostname or "") and p.path.startswith("/l/"):
+            qs = parse_qs(p.query)
+            if qs.get("uddg"):
+                return unquote(qs["uddg"][0])
+    except Exception:
+        pass
+    return href
+
+
+@lru_cache(maxsize=256)
+def _freeqa_search(query):
+    """No-key public HTML search. Returns [] on rate limits/network blocks."""
+    try:
+        r = requests.post(
+            FREE_SEARCH_URL,
+            data={"q": query},
+            headers={**UA_DESKTOP, "Accept-Language": "en-US,en;q=0.8"},
+            timeout=FREE_SEARCH_TIMEOUT,
+        )
+        if r.status_code != 200 or not r.text:
+            return []
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        for box in soup.select(".result, .web-result"):
+            a = box.select_one("a.result__a") or box.find("a", href=True)
+            if not a:
+                continue
+            href = _freeqa_ddg_url(a.get("href", ""))
+            if not href.startswith(("http://", "https://")):
+                continue
+            snippet_node = box.select_one(".result__snippet")
+            results.append({
+                "url": href,
+                "title": re.sub(r"\s+", " ", a.get_text(" ", strip=True)),
+                "snippet": re.sub(r"\s+", " ", snippet_node.get_text(" ", strip=True)) if snippet_node else "",
+            })
+            if len(results) >= FREE_MAX_SEARCH_RESULTS:
+                break
+        return results
+    except Exception:
+        return []
+
+
+def _freeqa_is_government(url):
+    host = _qa_host(url)
+    return bool(
+        host.endswith(".gov.ae") or host == "gov.ae" or
+        host.endswith(".gov") or host.endswith(".gov.uk") or
+        host in {"u.ae", "dld.gov.ae", "rta.ae", "dm.gov.ae", "visitdubai.com"}
+    )
+
+
+def _freeqa_entity_match_score(entity, title, snippet, url):
+    if not entity:
+        return 0.0
+    e = set(_freeqa_content_tokens(entity))
+    if not e:
+        return 0.0
+    hay = set(_freeqa_content_tokens(f"{title} {snippet} {_qa_host(url).replace('.', ' ')}"))
+    return len(e & hay) / max(len(e), 1)
+
+
+def _freeqa_official_candidate(result_item, entity=""):
+    url = result_item.get("url", "")
+    if not url or _qa_blocked_source(url):
+        return False, "none", 0.0
+    host = _qa_host(url)
+    text = f"{result_item.get('title','')} {result_item.get('snippet','')}".lower()
+    if any(h in text for h in _FREEQA_NONOFFICIAL_HINTS):
+        return False, "none", 0.0
+    if _freeqa_is_government(url):
+        return True, "government", 1.0
+
+    em = _freeqa_entity_match_score(entity, result_item.get("title", ""), result_item.get("snippet", ""), url)
+    title_low = result_item.get("title", "").lower()
+    # Strong first-party clues: exact entity in result title/host or explicit "official" wording.
+    official_word = "official" in title_low or "official" in result_item.get("snippet", "").lower()
+    host_tokens = set(_freeqa_content_tokens(host.replace(".", " ").replace("-", " ")))
+    entity_tokens = set(_freeqa_content_tokens(entity))
+    host_overlap = len(host_tokens & entity_tokens) / max(len(entity_tokens), 1) if entity_tokens else 0.0
+    if em >= 0.75 and (official_word or host_overlap >= 0.40):
+        return True, "official_organisation", max(em, host_overlap)
+    if em >= 0.90 and host_overlap >= 0.25:
+        return True, "official_project", max(em, host_overlap)
+    return False, "none", em
+
+
+@lru_cache(maxsize=256)
+def _freeqa_fetch_source(url):
+    try:
+        r = requests.get(
+            url,
+            headers={**UA_DESKTOP, "Accept-Language": "en-US,en;q=0.8"},
+            timeout=FREE_SOURCE_TIMEOUT,
+            allow_redirects=True,
+        )
+        ctype = (r.headers.get("content-type") or "").lower()
+        if r.status_code >= 400 or "html" not in ctype:
+            return {"ok": False, "url": r.url, "title": "", "text": ""}
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "noscript", "svg"]):
+            tag.decompose()
+        title = re.sub(r"\s+", " ", (soup.title.get_text(" ", strip=True) if soup.title else ""))
+        text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))[:120000]
+        return {"ok": True, "url": r.url, "title": title, "text": text}
+    except Exception:
+        return {"ok": False, "url": url, "title": "", "text": ""}
+
+
+def _freeqa_numbers(text):
+    nums = set()
+    low = (text or "").lower()
+    for n in re.findall(r"\b\d{1,5}(?:[.,]\d+)?\b", low):
+        try:
+            nums.add(float(n.replace(",", "")))
+        except Exception:
+            pass
+    for word, value in _FREEQA_NUMBER_WORDS.items():
+        if re.search(rf"\b{re.escape(word)}\b", low):
+            nums.add(float(value))
+    return nums
+
+
+def _freeqa_number_noun_pairs(text):
+    low = (text or "").lower()
+    pairs = []
+    num_pattern = r"(?:\d{1,4}|" + "|".join(_FREEQA_NUMBER_WORDS.keys()) + r")"
+    noun_pattern = r"(?:tower|towers|unit|units|floor|floors|building|buildings|bedroom|bedrooms|award|awards)"
+    for m in re.finditer(rf"\b({num_pattern})\s+({noun_pattern})\b", low):
+        raw = m.group(1)
+        n = _FREEQA_NUMBER_WORDS.get(raw)
+        if n is None:
+            try:
+                n = int(raw)
+            except Exception:
+                continue
+        noun = m.group(2).rstrip("s")
+        pairs.append((n, noun))
+    return pairs
+
+
+def _freeqa_similarity(a, b):
+    at = set(_freeqa_content_tokens(a))
+    bt = set(_freeqa_content_tokens(b))
+    if not at:
+        return 0.0
+    return len(at & bt) / len(at)
+
+
+def _freeqa_source_excerpt(source_text, entity, claim, max_chars=420):
+    low = source_text.lower()
+    needles = []
+    if entity:
+        needles.append(entity.lower())
+    claim_tokens = [t for t in _freeqa_content_tokens(claim) if len(t) >= 5]
+    needles.extend(claim_tokens[:4])
+    positions = [low.find(n) for n in needles if n and low.find(n) >= 0]
+    if not positions:
+        return ""
+    pos = min(positions)
+    start = max(0, pos - 120)
+    end = min(len(source_text), pos + max_chars)
+    return re.sub(r"\s+", " ", source_text[start:end]).strip()
+
+
+def _freeqa_verify_claim(claim, kind, target_topic=""):
+    entity = _freeqa_entity_phrase(claim)
+    query_terms = entity or " ".join(_freeqa_content_tokens(claim)[:8])
+    context = target_topic if target_topic and target_topic.lower() not in query_terms.lower() else ""
+    query = f'"{query_terms}" {context} official'.strip()
+    results = _freeqa_search(query)
+
+    # If the exact entity was probably mistyped, a less quoted fallback can surface the real official entity.
+    if not results and entity:
+        results = _freeqa_search(f"{entity} {context} official")
+
+    candidates = []
+    for item in results:
+        ok, source_type, confidence = _freeqa_official_candidate(item, entity=entity)
+        if ok:
+            candidates.append((confidence, source_type, item))
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    if not candidates:
+        return {
+            "status": REVIEW,
+            "result": f"Needs verification. No sufficiently reliable official source was discovered automatically for: ‘{claim}’.",
+            "action": "Verify this claim manually with an official or primary source before changing the article.",
+            "source": "",
+            "source_type": "none",
+            "evidence": "",
+        }
+
+    # Test up to three plausible official pages.
+    best_review = None
+    for _, source_type, item in candidates[:3]:
+        fetched = _freeqa_fetch_source(item["url"])
+        if not fetched["ok"]:
+            continue
+        source_text = fetched["text"]
+        source_url = fetched["url"]
+        source_title = fetched["title"] or item.get("title", "") or _qa_host(source_url)
+        entity_score = _freeqa_similarity(entity, f"{source_title} {source_text[:5000]}") if entity else 1.0
+        claim_score = _freeqa_similarity(claim, source_text)
+        claim_nums = _freeqa_numbers(claim)
+        source_nums = _freeqa_numbers(source_text)
+        pairs_claim = _freeqa_number_noun_pairs(claim)
+        pairs_source = _freeqa_number_noun_pairs(source_text)
+        excerpt = _freeqa_source_excerpt(source_text, entity, claim)
+
+        # Direct numeric contradiction: same factual noun, different official number, and the claimed pair is absent.
+        for claimed_n, noun in pairs_claim:
+            official_for_noun = {n for n, n_noun in pairs_source if n_noun == noun}
+            if official_for_noun and claimed_n not in official_for_noun and entity_score >= 0.55:
+                shown = ", ".join(str(int(x)) for x in sorted(official_for_noun)[:6])
+                return {
+                    "status": FAIL,
+                    "result": (
+                        f"Official-source contradiction. The article states ‘{claim}’, while the official page "
+                        f"uses {shown} for {noun}(s) in the matching entity context."
+                    ),
+                    "action": "Correct the article only after reviewing the cited official page and matching the exact entity/context.",
+                    "source": f"{source_title} | {source_url}",
+                    "source_type": source_type,
+                    "evidence": excerpt,
+                }
+
+        # Direct confirmation: source contains the entity, the important terms, and all specific numbers.
+        numbers_ok = not claim_nums or claim_nums.issubset(source_nums)
+        if entity_score >= 0.65 and claim_score >= 0.52 and numbers_ok:
+            return {
+                "status": PASS,
+                "result": f"No issue. The official source directly supports the article claim: ‘{claim}’.",
+                "action": "No action required.",
+                "source": f"{source_title} | {source_url}",
+                "source_type": source_type,
+                "evidence": excerpt,
+            }
+
+        review = {
+            "status": REVIEW,
+            "result": (
+                f"Needs verification. An official-looking source was found for {entity or 'this topic'}, "
+                "but the page text retrieved automatically does not confirm or directly contradict the full article claim."
+            ),
+            "action": "Review the cited official page manually before changing the article.",
+            "source": f"{source_title} | {source_url}",
+            "source_type": source_type,
+            "evidence": excerpt,
+        }
+        if best_review is None or claim_score > best_review[0]:
+            best_review = (claim_score, review)
+
+    if best_review:
+        return best_review[1]
+
+    return {
+        "status": REVIEW,
+        "result": f"Needs verification. Official search results were found, but the source pages could not be fetched reliably for: ‘{claim}’.",
+        "action": "Open an official source manually and verify the claim before changing the article.",
+        "source": "",
+        "source_type": "none",
+        "evidence": "",
+    }
+
+
+def _freeqa_local_findings(article_soup, body_text, target_topic=""):
+    """Free high-confidence editorial checks that do not need external evidence."""
+    rows = []
+    fields = _qa_editorial_fields(article_soup)
+    texts = [("Article text", body_text)]
+    texts += [("Image Alt Text", x) for x in fields.get("image_alts", [])]
+    texts += [("Image Caption", x) for x in fields.get("image_captions", [])]
+
+    seen = set()
+    for location, text in texts:
+        low = (text or "").lower()
+        local = []
+        if re.search(r"\bthat[’']?s a wrap\s+our\b", low):
+            local.append((
+                "Grammar & Wording",
+                "That’s a wrap our round-up → That’s a wrap on our round-up",
+                "Grammar error. Add ‘on’ after ‘wrap’.",
+                "Change it to: “That’s a wrap on our round-up”.",
+            ))
+        if re.search(r"\baverage\b[^.!?]{0,120}\bstarts? from\b", low):
+            m = re.search(r"[^.!?]{0,80}\baverage\b[^.!?]{0,120}\bstarts? from\b[^.!?]{0,80}", text, flags=re.I)
+            excerpt = re.sub(r"\s+", " ", m.group(0)).strip() if m else "average ... starts from"
+            local.append((
+                "Grammar & Wording",
+                excerpt,
+                "Incorrect data wording. An average does not ‘start from’ a value.",
+                "Use ‘The average … is X’ for an average, or ‘… starts from X’ only for a minimum/starting value.",
+            ))
+        if re.search(r"\bi\s+nto\b", text, flags=re.I):
+            local.append((
+                "Grammar & Wording",
+                "i nto → into",
+                "Typographical error. The word ‘into’ has been split incorrectly.",
+                "Replace ‘i nto’ with ‘into’.",
+            ))
+        # High-confidence singular Residence/Club/Tower + bare 'offer' construction.
+        m = re.search(r"\b([A-Z][A-Za-z0-9&'’.-]*(?:\s+[A-Z][A-Za-z0-9&'’.-]*){1,5}\s+(?:Residence|Club|Tower))\s+offer\b", text or "")
+        if m:
+            local.append((
+                "Grammar & Wording",
+                f"{m.group(1)} offer → {m.group(1)} offers",
+                "Subject-verb agreement error. The named entity is singular.",
+                f"Change ‘{m.group(1)} offer’ to ‘{m.group(1)} offers’.",
+            ))
+
+        for check, issue, result_text, action in local:
+            key = (check, issue)
+            if key in seen:
+                continue
+            seen.add(key)
+            row = {
+                "Check": issue,
+                "Status": FAIL,
+                "Result": result_text + (f" Location: {location}." if location != "Article text" else ""),
+                "Action Needed": action,
+                "Why": "High-confidence editorial rule based on the article itself; no external source is required.",
+                "Official Source": "Article itself",
+                "Finding Type": check,
+                "_internal_status": FAIL,
+                "_rule": dict(CONTENT_RULES).get("Official Source Verification", ""),
+                "_system_uses": "Free deterministic grammar/data wording checks",
+                "_evidence_finding": True,
+            }
+            rows.append(row)
+
+    # Search-intent mismatch for rental pages with investment FAQ/question wording.
+    topic_low = (target_topic or "").lower()
+    if any(k in topic_low for k in ["rent", "rental", "renting"]):
+        for item in heading_sections(article_soup):
+            h = (item.get("heading") or "").strip()
+            section = (item.get("section") or "").strip()
+            combined = f"{h} {section}".lower()
+            if "invest" in combined and any(q in combined for q in ["popular", "area", "where", "best"]):
+                issue = h or "Investment FAQ"
+                row = {
+                    "Check": issue,
+                    "Status": FAIL,
+                    "Result": "Search-intent mismatch. This investment-focused FAQ/section does not closely match the page’s rental intent.",
+                    "Action Needed": "Replace it with a rental-focused FAQ or section.",
+                    "Why": "The page topic is rental-focused while this section is primarily investment-focused.",
+                    "Official Source": "Article itself",
+                    "Finding Type": "Search Intent",
+                    "_internal_status": FAIL,
+                    "_rule": dict(CONTENT_RULES).get("Official Source Verification", ""),
+                    "_system_uses": "Article title/H1/topic and FAQ/heading text",
+                    "_evidence_finding": True,
+                }
+                rows.append(row)
+                break
+
+    return rows
+
+
 def official_source_content_checks(url, soup, body_text, focus_keyword="", secondary_keywords=None):
-    """Specific, source-backed Content findings. Never raises a fatal app error."""
-    key = configured_openai_api_key()
+    """Free source-backed Content findings. No API key and never a fatal app error."""
     rule = dict(CONTENT_RULES).get(
         "Official Source Verification",
         "Verify factual claims against official or primary sources."
     )
-
-    if not key:
-        row = result(
-            "Official Source Verification",
-            REVIEW,
-            "Official-source verification was not run because OPENAI_API_KEY is not configured. The rest of the audit completed normally.",
-            rule,
-            "Add OPENAI_API_KEY to Streamlit Cloud app secrets, then rerun the URL audit."
-        )
-        row["Official Source"] = ""
-        row["Finding Type"] = "Configuration"
-        row["_evidence_finding"] = True
-        return [row]
-
     try:
         article_soup = main_content_node(soup)
-        fields = _qa_editorial_fields(article_soup)
         title = title_text(soup)
         h1 = page_primary_h1(soup)
-        prompt = _qa_content_prompt(
-            url, title, h1, body_text, fields,
-            focus_keyword=focus_keyword,
-            secondary_keywords=secondary_keywords,
-        )
+        target_topic = focus_keyword or title or h1
+        rows = _freeqa_local_findings(article_soup, body_text, target_topic=target_topic)
 
-        payload = {
-            "model": OPENAI_MODEL,
-            "reasoning": {"effort": "medium"},
-            "tools": [{
-                "type": "web_search",
-                "filters": {"blocked_domains": AI_BLOCKED_SOURCE_DOMAINS},
-                "external_web_access": True,
-            }],
-            "tool_choice": "required",
-            "include": ["web_search_call.action.sources"],
-            "input": [
-                {"role": "system", "content": "Return precise evidence-based Content QA. Missing official evidence is REVIEW, never automatic FAIL."},
-                {"role": "user", "content": prompt},
-            ],
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "mybayut_content_qa",
-                    "strict": True,
-                    "schema": _qa_content_schema(),
-                }
-            },
-        }
-
-        response = requests.post(
-            OPENAI_RESPONSES_URL,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=AI_REQUEST_TIMEOUT,
-        )
-        if response.status_code >= 400:
-            raise RuntimeError(f"Official-source verification HTTP {response.status_code}")
-
-        response_payload = response.json()
-        output_text = _qa_response_output_text(response_payload)
-        if not output_text:
-            raise RuntimeError("Official-source verification returned no structured output")
-
-        parsed = json.loads(output_text)
-        web_urls = _qa_collect_http_urls(response_payload)
-        rows = []
-
-        for item in parsed.get("findings", [])[:20]:
-            status = item.get("status", REVIEW)
-            check = _qa_plain_text(item.get("check", "Factual Accuracy")) or "Factual Accuracy"
-            issue_name = _qa_plain_text(item.get("issue_name", "")) or check
-            result_text = _qa_plain_text(item.get("result", ""))
-            correction = _qa_plain_text(item.get("correction", ""))
-            excerpt = _qa_plain_text(item.get("article_excerpt", ""))
-            basis = _qa_plain_text(item.get("verification_basis", ""))
-            source_name = _qa_plain_text(item.get("source_name", ""))
-            source_type = _qa_plain_text(item.get("source_type", "none"))
-            source_url = _qa_reconcile_source(item.get("source_url", ""), web_urls)
-
-            article_only = check in {"Grammar & Wording", "Search Intent"}
-            if check in {"Image Alt Text", "Image Caption"} and basis == "article_text":
-                article_only = True
-
-            if not article_only:
-                if status == FAIL and basis != "official_source":
-                    status = REVIEW
-                    result_text = "Needs verification. No authoritative official evidence directly contradicting this claim was established, so it must not be labelled incorrect."
-                if status == PASS and basis != "official_source":
-                    status = REVIEW
-                    result_text = "Needs verification. No authoritative official evidence was established strongly enough to confirm this claim."
-                if basis == "official_source" and not source_url and status in {PASS, FAIL}:
-                    status = REVIEW
-                    result_text = "Needs verification. The claimed official source could not be matched to a web-search source actually consulted, so the claim cannot be marked confirmed or incorrect."
-                    source_name = ""
-                    source_type = "none"
-
-            official_source = ""
-            if source_url:
-                official_source = f"{source_name or _qa_host(source_url)} | {source_url}"
-
-            if correction:
-                action = correction
-            elif status == PASS:
-                action = "No action required."
-            elif status == REVIEW:
-                action = "Verify this claim with an authoritative official source before changing the article."
-            else:
-                action = "Correct the article to match the verified evidence."
-
-            if excerpt and excerpt.lower() not in result_text.lower():
-                result_text = f"{result_text} Article text: ‘{excerpt}’."
+        candidates = _freeqa_claim_candidates(article_soup, body_text, target_topic=target_topic)
+        for item in candidates:
+            claim = item["text"]
+            kind = item["kind"]
+            verification = _freeqa_verify_claim(claim, kind, target_topic=target_topic)
+            status = verification["status"]
+            source = verification.get("source", "")
+            evidence = verification.get("evidence", "")
+            issue_name = _freeqa_entity_phrase(claim) or claim[:90]
+            if kind in {"Image Alt Text", "Image Caption"}:
+                issue_name = f"{issue_name} {kind.lower()}"
 
             row = {
                 "Check": issue_name,
                 "Status": status,
-                "Result": result_text or issue_name,
-                "Action Needed": action,
+                "Result": verification["result"],
+                "Action Needed": verification["action"],
                 "Why": (
-                    f"Finding type: {check}. Verification basis: {basis or 'not stated'}. "
-                    + (f"Official source: {official_source}." if official_source else "No verified official source URL attached.")
+                    f"Finding type: {kind}. Free verifier searched public web results, excluded configured secondary-source domains, "
+                    "then fetched the selected official page directly and compared entity terms and factual numbers. "
+                    + (f"Source evidence: {evidence}" if evidence else "No conclusive source excerpt was retrieved.")
                 ),
-                "Official Source": official_source,
-                "Finding Type": check,
+                "Official Source": source,
+                "Finding Type": kind,
                 "_internal_status": status,
                 "_rule": rule,
-                "_system_uses": SYSTEM_USES.get("Official Source Verification", "Official source research"),
+                "_system_uses": SYSTEM_USES.get("Official Source Verification", "Free official source research"),
                 "_evidence_finding": True,
             }
             rows.append(row)
+
+        # If public search itself is unavailable/rate-limited, keep the system useful and transparent.
+        source_rows = [r for r in rows if r.get("Official Source") not in {"", "Article itself"}]
+        review_rows = [r for r in rows if r.get("Status") == REVIEW and r.get("Finding Type") in {"Factual Accuracy", "Image Alt Text", "Image Caption"}]
+        if candidates and not source_rows and review_rows:
+            note = {
+                "Check": "Free Official Source Search",
+                "Status": REVIEW,
+                "Result": "The free official-source search could not retrieve a conclusive official page for the sampled factual claims. This can happen when the public search service rate-limits automated requests.",
+                "Action Needed": "No paid API is required. Rerun later or manually verify only the REVIEW claims shown above.",
+                "Why": "The audit intentionally returns REVIEW rather than inventing a PASS or FAIL when free public search evidence is unavailable.",
+                "Official Source": "",
+                "Finding Type": "Official Source Verification",
+                "_internal_status": REVIEW,
+                "_rule": rule,
+                "_system_uses": SYSTEM_USES.get("Official Source Verification", "Free official source research"),
+                "_evidence_finding": True,
+            }
+            rows.append(note)
 
         if not rows:
             row = result(
                 "Official Source Verification",
                 PASS,
-                "No high-confidence source-backed factual, entity, grammar, image or search-intent findings were returned.",
+                "No high-confidence factual/entity/image or editorial issues were identified by the free verifier.",
                 rule,
             )
             row["Official Source"] = ""
@@ -6834,19 +7251,16 @@ def official_source_content_checks(url, soup, body_text, focus_keyword="", secon
             rows.append(row)
 
         return rows
-
     except Exception as exc:
-        # Do not leak response bodies, API keys or server internals to the user.
-        safe_error = type(exc).__name__
         row = result(
             "Official Source Verification",
             REVIEW,
-            f"Official-source verification could not complete ({safe_error}). Spam, SEO and deterministic Content checks still completed.",
+            f"Free official-source verification could not complete ({type(exc).__name__}). The rest of the audit completed normally.",
             rule,
-            "Check the Streamlit Cloud OPENAI_API_KEY secret and app logs, then rerun the audit."
+            "Rerun the audit. No API key is required."
         )
         row["Official Source"] = ""
-        row["Finding Type"] = "Configuration"
+        row["Finding Type"] = "Official Source Verification"
         row["_evidence_finding"] = True
         return [row]
 
@@ -7680,7 +8094,7 @@ if run:
         spam_rows = parallel_results["Spam"]
         content_rows = parallel_results["Content"]
 
-        audit_status.write("3 of 5  Running official-source Content verification")
+        audit_status.write("3 of 5  Running free official-source Content verification")
         evidence_content_rows = official_source_content_checks(
             desktop_r.url,
             soup_of(desktop_r.text),
@@ -7879,7 +8293,7 @@ if run:
                 Network heavy checks are parallelised and cached. Sitemap inspection has a strict time and file budget so it cannot hold the interface indefinitely.
 
                 Content QA uses an isolated editorial article body and excludes comments, related posts, popular widgets, sidebars, navigation and other page chrome before calculating content results.
-                Official-source Content verification uses web search only when OPENAI_API_KEY is configured. If the secret is missing or the API call fails, the app returns REVIEW for that verification layer instead of crashing.
+                Official-source Content verification is free and requires no API key. It uses public search result retrieval plus direct official-page fetching. If search is rate-limited or evidence is insufficient, the system returns REVIEW instead of guessing.
 
                 External links and linked image, stylesheet and JavaScript resources are now requested directly instead of receiving PASS from discovery alone.
                 """
