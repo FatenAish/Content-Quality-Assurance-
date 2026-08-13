@@ -42,8 +42,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.34 CONTENT TABLE + CATEGORY SUMMARY"
-ENGINE_BUILD = "2026.08.13.5"
+APP_VERSION = "V18.35 CONTENT ISSUE ROWS"
+ENGINE_BUILD = "2026.08.13.6"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -7372,95 +7372,181 @@ def _freeqa_local_findings(article_soup, body_text, target_topic=""):
     return rows
 
 
+def _summary_issue_row(check_name, items, no_issue_text, source_default="", why_text=""):
+    """Create one compact Content table row containing numbered issues in Result."""
+    if not items:
+        row = {
+            "Check": check_name,
+            "Status": PASS,
+            "Result": no_issue_text,
+            "Action Needed": "No action required.",
+            "Why": why_text,
+            "Official Source": source_default,
+            "Finding Type": check_name,
+            "_internal_status": PASS,
+            "_rule": dict(CONTENT_RULES).get("Official Source Verification", ""),
+            "_system_uses": SYSTEM_USES.get("Official Source Verification", "Content issue aggregation"),
+            "_evidence_finding": True,
+        }
+        return row
+
+    result_lines = []
+    action_lines = []
+    source_lines = []
+    seen_sources = set()
+    for number, item in enumerate(items, start=1):
+        title = re.sub(r"\s+", " ", str(item.get("Check", "Issue") or "Issue")).strip()
+        detail = re.sub(r"\s+", " ", str(item.get("Result", "") or "")).strip()
+        action = re.sub(r"\s+", " ", str(item.get("Action Needed", "") or "")).strip()
+        source = re.sub(r"\s+", " ", str(item.get("Official Source", "") or "")).strip()
+
+        result_lines.append(f"{number}. {title}: {detail}")
+        if action:
+            action_lines.append(f"{number}. {action}")
+        if source and source not in seen_sources:
+            seen_sources.add(source)
+            source_lines.append(f"{number}. {source}")
+
+    return {
+        "Check": check_name,
+        "Status": FAIL,
+        "Result": "\n".join(result_lines),
+        "Action Needed": "\n".join(action_lines) if action_lines else "Review and correct the listed issues.",
+        "Why": why_text,
+        "Official Source": "\n".join(source_lines) if source_lines else source_default,
+        "Finding Type": check_name,
+        "_internal_status": FAIL,
+        "_rule": dict(CONTENT_RULES).get("Official Source Verification", ""),
+        "_system_uses": SYSTEM_USES.get("Official Source Verification", "Content issue aggregation"),
+        "_evidence_finding": True,
+    }
+
+
 def official_source_content_checks(url, soup, body_text, focus_keyword="", secondary_keywords=None):
-    """Free source-backed Content findings. No API key and never a fatal app error."""
-    rule = dict(CONTENT_RULES).get(
-        "Official Source Verification",
-        "Verify factual claims against official or primary sources."
-    )
+    """
+    Return only compact issue-summary rows for the Content table.
+
+    Important factual rule:
+    - A factual claim is listed under Facts Issues ONLY when an official/primary
+      source was actually fetched and the verifier found a direct contradiction.
+    - Unverified claims are NOT shown as REVIEW and are NOT treated as errors.
+    - Confirmed-correct facts are not listed as mistakes.
+    """
     try:
         article_soup = main_content_node(soup)
         title = title_text(soup)
         h1 = page_primary_h1(soup)
         target_topic = focus_keyword or title or h1
-        rows = _freeqa_local_findings(article_soup, body_text, target_topic=target_topic)
-        rows.extend(_freeqa_alt_entity_findings(article_soup, target_topic=target_topic))
 
+        local_rows = _freeqa_local_findings(article_soup, body_text, target_topic=target_topic)
+        alt_rows = _freeqa_alt_entity_findings(article_soup, target_topic=target_topic)
+
+        grammar_items = [
+            r for r in local_rows
+            if r.get("Finding Type") == "Grammar & Wording" and r.get("Status") == FAIL
+        ]
+        intent_items = [
+            r for r in local_rows
+            if r.get("Finding Type") == "Search Intent" and r.get("Status") == FAIL
+        ]
+        entity_items = [
+            r for r in alt_rows
+            if r.get("Finding Type") == "Entity Accuracy"
+            and r.get("Status") == FAIL
+            and r.get("Official Source")
+        ]
+
+        # Research factual candidates, but keep ONLY officially proven contradictions.
+        fact_items = []
         candidates = _freeqa_claim_candidates(article_soup, body_text, target_topic=target_topic)
         for item in candidates:
             claim = item["text"]
             kind = item["kind"]
             verification = _freeqa_verify_claim(claim, kind, target_topic=target_topic)
-            status = verification["status"]
-            source = verification.get("source", "")
-            evidence = verification.get("evidence", "")
-            issue_name = _freeqa_entity_phrase(claim) or claim[:90]
-            if kind in {"Image Alt Text", "Image Caption"}:
-                issue_name = f"{issue_name} {kind.lower()}"
 
-            row = {
-                "Check": issue_name,
-                "Status": status,
-                "Result": verification["result"],
-                "Action Needed": verification["action"],
-                "Why": (
-                    f"Finding type: {kind}. Free verifier searched public web results, excluded configured secondary-source domains, "
-                    "then fetched the selected official page directly and compared entity terms and factual numbers. "
-                    + (f"Source evidence: {evidence}" if evidence else "No conclusive source excerpt was retrieved.")
-                ),
+            if verification.get("status") != FAIL:
+                continue
+            source = re.sub(r"\s+", " ", str(verification.get("source", "") or "")).strip()
+            if not source:
+                # A fact is never called wrong without a cited official source.
+                continue
+
+            fact_items.append({
+                "Check": _freeqa_entity_phrase(claim) or claim[:90],
+                "Status": FAIL,
+                "Result": verification.get("result", "Official-source contradiction found."),
+                "Action Needed": verification.get("action", "Correct the factual statement using the cited official source."),
+                "Why": "A direct contradiction was found on an official or primary source.",
                 "Official Source": source,
-                "Finding Type": kind,
-                "_internal_status": status,
-                "_rule": rule,
-                "_system_uses": SYSTEM_USES.get("Official Source Verification", "Free official source research"),
-                "_evidence_finding": True,
-            }
-            rows.append(row)
+                "Finding Type": "Factual Accuracy",
+            })
 
-        # If public search itself is unavailable/rate-limited, keep the system useful and transparent.
-        source_rows = [r for r in rows if r.get("Official Source") not in {"", "Article itself"}]
-        review_rows = [r for r in rows if r.get("Status") == REVIEW and r.get("Finding Type") in {"Factual Accuracy", "Image Alt Text", "Image Caption"}]
-        if candidates and not source_rows and review_rows:
-            note = {
-                "Check": "Free Official Source Search",
-                "Status": REVIEW,
-                "Result": "The free official-source search could not retrieve a conclusive official page for the sampled factual claims. This can happen when the public search service rate-limits automated requests.",
-                "Action Needed": "No paid API is required. Rerun later or manually verify only the REVIEW claims shown above.",
-                "Why": "The audit intentionally returns REVIEW rather than inventing a PASS or FAIL when free public search evidence is unavailable.",
-                "Official Source": "",
-                "Finding Type": "Official Source Verification",
-                "_internal_status": REVIEW,
-                "_rule": rule,
-                "_system_uses": SYSTEM_USES.get("Official Source Verification", "Free official source research"),
-                "_evidence_finding": True,
-            }
-            rows.append(note)
-
-        if not rows:
-            row = result(
-                "Official Source Verification",
-                PASS,
-                "No high-confidence factual/entity/image or editorial issues were identified by the free verifier.",
-                rule,
-            )
-            row["Official Source"] = ""
-            row["Finding Type"] = "Official Source Verification"
-            row["_evidence_finding"] = True
-            rows.append(row)
-
+        rows = [
+            _summary_issue_row(
+                "Grammar Issues",
+                grammar_items,
+                "No high-confidence grammar or wording mistakes were found by the article-level checks.",
+                source_default="Article itself",
+                why_text="Lists only high-confidence grammar, typo and data-wording mistakes detected directly in the article, captions or ALT text.",
+            ),
+            _summary_issue_row(
+                "Facts Issues",
+                fact_items,
+                "No factual error was proven from an official source in this audit.",
+                source_default="",
+                why_text="Only factual statements directly contradicted by a fetched official or primary source are listed. Unverified claims are omitted rather than labelled incorrect.",
+            ),
+            _summary_issue_row(
+                "Entity / Image Issues",
+                entity_items,
+                "No officially confirmed entity-name mistake was found in image ALT text.",
+                source_default="",
+                why_text="Normal descriptive ALT text is not treated as a factual claim. This row lists only specific entity-name mismatches confirmed by an official source.",
+            ),
+            _summary_issue_row(
+                "Search Intent Issues",
+                intent_items,
+                "No clear search-intent mismatch was found by the focused article checks.",
+                source_default="Article itself",
+                why_text="Lists only clear sections or FAQs that conflict with the article's primary intent.",
+            ),
+        ]
         return rows
+
     except Exception as exc:
-        row = result(
-            "Official Source Verification",
-            REVIEW,
-            f"Free official-source verification could not complete ({type(exc).__name__}). The rest of the audit completed normally.",
-            rule,
-            "Rerun the audit. No API key is required."
-        )
-        row["Official Source"] = ""
-        row["Finding Type"] = "Official Source Verification"
-        row["_evidence_finding"] = True
-        return [row]
+        # Do not turn free-search/network failure into dozens of REVIEW claims.
+        # Grammar/search-intent checks are still useful even if official web research fails.
+        return [
+            _summary_issue_row(
+                "Grammar Issues",
+                [],
+                "Grammar summary could not be completed in this run.",
+                source_default="Article itself",
+                why_text=f"Content summary encountered {type(exc).__name__}; no factual claim was labelled wrong without official evidence.",
+            ),
+            _summary_issue_row(
+                "Facts Issues",
+                [],
+                "No factual error was proven from an official source in this audit.",
+                source_default="",
+                why_text="Search/network failure is not treated as evidence that a factual claim is wrong.",
+            ),
+            _summary_issue_row(
+                "Entity / Image Issues",
+                [],
+                "No officially confirmed entity-name mistake was produced in this run.",
+                source_default="",
+                why_text="ALT descriptions are not flagged merely because an official source could not be found.",
+            ),
+            _summary_issue_row(
+                "Search Intent Issues",
+                [],
+                "Search-intent summary could not be completed in this run.",
+                source_default="Article itself",
+                why_text="No speculative search-intent error was added.",
+            ),
+        ]
+
 
 def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=None):
     rows = []
@@ -8409,46 +8495,8 @@ if run:
                         return "color: #C53030; font-weight: 800;"
                     return ""
 
-                # Keep the original table for Spam, SEO AND Content.
-                # For Content, add a concise category summary above the unchanged table.
-                if tab_index == 2:
-                    content_issue_rows = [r for r in rows if r.get("Status") in {FAIL, REVIEW}]
-                    grouped = {category: [] for category in CONTENT_CATEGORY_ORDER}
-                    for row in content_issue_rows:
-                        grouped.setdefault(content_issue_category(row), []).append(row)
-
-                    st.markdown(
-                        "<div style='margin:2px 0 14px;'>"
-                        "<div style='font-size:18px;font-weight:800;color:#172026;'>Content Issues by Category</div>"
-                        "<div style='font-size:12px;color:#667085;margin-top:4px;'>"
-                        "Use this summary to see what needs checking. Full details remain in the table below."
-                        "</div></div>",
-                        unsafe_allow_html=True,
-                    )
-
-                    displayed_category = False
-                    for category in CONTENT_CATEGORY_ORDER:
-                        category_rows = grouped.get(category, [])
-                        if not category_rows:
-                            continue
-                        displayed_category = True
-                        st.markdown(f"#### {category}")
-                        for number, row in enumerate(category_rows, start=1):
-                            status = str(row.get("Status", ""))
-                            check = str(row.get("Check", "") or "Issue")
-                            result_text = re.sub(r"\s+", " ", str(row.get("Result", "") or "")).strip()
-                            if len(result_text) > 240:
-                                result_text = result_text[:237].rstrip() + "..."
-                            st.markdown(
-                                f"{number}. **{check}** — **{status}**  \n"
-                                f"   {result_text}"
-                            )
-
-                    if not displayed_category:
-                        st.success("No Content FAIL or REVIEW items were found.")
-
-                    st.markdown("### Full Content Results")
-
+                # Spam, SEO and Content all keep the same table-first layout.
+                # Content-specific issue categories are represented as rows inside this table.
                 public_rows = [
                     {
                         "Check": row["Check"],
