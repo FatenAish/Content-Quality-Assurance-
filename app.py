@@ -42,7 +42,7 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.37 CLOAKING ACCESS FIX"
+APP_VERSION = "V18.39 BODY EXTERNAL LINK INVENTORY"
 ENGINE_BUILD = "2026.08.13.8"
 CURRENT_YEAR = 2026
 
@@ -1037,13 +1037,12 @@ st.markdown(
 # -----------------------------
 
 SPAM_RULES = [
-    ("Cloaking", "Compare normal user and Googlebot-like responses only when both return usable page content. FAIL only for a confirmed material crawler-specific content or destination difference. Access errors, CAPTCHA, bot challenges and blocked requests are not cloaking by themselves."),
-    ("Crawler Access Issue", "REVIEW when the normal user and Googlebot-like requests do not have equivalent usable access, including HTTP 401/403/405/406/429, CAPTCHA, bot challenge, timeout-style error pages or other access restrictions. This is an access/bot-handling signal, not proof of cloaking."),
-    ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations after both responses are successfully accessible. Access-block or challenge redirects are REVIEW, not deceptive redirect FAILs."),
+    ("Cloaking", "Compare normal user and Googlebot responses. FAIL when materially different content is served specifically to search crawlers."),
+    ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
     ("Hidden Links", "FAIL only when an actual <a href> link is deliberately concealed by supported HTML/CSS hiding signals and no legitimate interface, responsive or accessibility purpose is detected. Empty anchors are not hidden links by themselves. Self references to the current article are ignored."),
-    ("Link Spam", "FAIL when links are clearly created or inserted primarily to manipulate rankings."),
+    ("Link Spam", "Review all external links found inside the isolated editorial body, including punctuation-only, whitespace-only, empty and image anchors. FAIL only when evidence shows links were inserted primarily to manipulate rankings; unusual anchor placement alone is REVIEW."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
     ("Spam Iframes", "FAIL when unauthorized or suspicious iframes introduce deceptive or spam content."),
@@ -1064,7 +1063,7 @@ SEO_RULES = [
     ("URL Structure", "REVIEW when the URL is malformed, misleading, or dominated by unnecessary parameters."),
     ("Keyword Stuffing", "Analyse editorial article text only. Exclude embedded widgets and interface content. PASS when keyword use is natural. REVIEW when query phrases are unusually repetitive. FAIL when repetition is clearly excessive and manipulative."),
     ("Internal Links", "Inspect only real inline editorial hyperlinks inside paragraph, list and table text in the isolated article body. Exclude banners, property cards, Find An Agent CTA, image links, social sharing, broker modules, widgets, navigation and other non-editorial modules. Flag only external links, GET-confirmed HTTP 404/410 internal links, generic or spammy anchors, or anchors that appear poorly matched to the linked page. Timeouts, connection failures, temporary 5xx responses and HTTP 401/403/405/406/429 automated restrictions are not treated as broken."),
-    ("External Links", "Request every discovered external HTTP link. Treat known social platform login, anti bot and restricted automated responses as expected platform behaviour rather than broken links. PASS when no confirmed broken destination is found. REVIEW confirmed 4xx or 5xx problems outside expected platform behaviour, unreachable URLs or unresolved restricted destinations."),
+    ("External Links", "Inventory every external HTTP(S) link occurrence inside the isolated editorial body and report its exact anchor representation, including text, punctuation-only, whitespace-only, empty, image and icon anchors. Request each unique destination. REVIEW unusual punctuation/blank anchors or confirmed destination problems; PASS when anchors and destinations are normal."),
     ("Images", "Check meaningful images inside the article content. Result shows only the exact image URL when there is an issue such as empty alt text, missing alt attribute or a broken image resource. Decorative images do not require descriptive alt text. Known Bayut TruBroker promotional images, including English and Arabic variants, are excluded from this audit."),
     ("datePublished", "Compare schema datePublished with visible or page metadata publication dates when available. PASS when a valid publication date exists and no material inconsistency is detected. REVIEW missing or materially inconsistent publication dates."),
     ("Sitemap", "Follow sitemap indexes and prioritise editorial post or article sitemap families before generic page, category and tag sitemaps. PASS when the preferred canonical URL is found in an accessible sitemap. REVIEW only when inspection remains incomplete or the URL is not found after the configured inspection budget."),
@@ -1097,14 +1096,13 @@ CONTENT_RULES = [
 
 SYSTEM_USES = {
     # Spam
-    "Cloaking": "Desktop User Agent and Googlebot-like User Agent, HTTP access-state validation, final URL comparison, main content extraction and text similarity only when both responses contain usable page content",
-    "Crawler Access Issue": "Desktop, Mobile and Googlebot-like HTTP status codes, short challenge/error-page detection, final response availability and bot/access restriction comparison",
-    "Sneaky Redirect": "Desktop User Agent, Googlebot-like User Agent, HTTP access-state validation, redirect handling and final destination comparison only after successful access",
-    "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
+    "Cloaking": "Desktop User Agent, Googlebot User Agent, final URL comparison, isolated editorial-content extraction with dynamic widget exclusion, robust token coverage and text similarity; similarity alone never proves cloaking",
+    "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
+    "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final destination and redirect-chain comparison; content parity is handled separately by Mobile Content",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
     "Hidden Links": "Fetched HTML <a href> elements, same-page exclusion, HTML/CSS hiding signals, and legitimate UI/accessibility context classification; empty anchors alone are excluded",
     "Keyword Stuffing": "Editorial article text only, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context; TruBroker/property widgets, banners, newsletter, social UI and other embedded modules are excluded",
-    "Link Spam": "External link count, anchor text, destination domain, anchor length, link pattern analysis",
+    "Link Spam": "Complete isolated-body external-link inventory, exact anchor representation, anchor type, destination domain, repeated anchor analysis and suspicious punctuation/blank anchor detection",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
     "Spam JavaScript": "Inline JavaScript, redirect patterns, obfuscation patterns, location functions, encoded script indicators",
     "Spam Iframes": "Iframe elements, iframe visibility, CSS hiding rules, iframe source information",
@@ -1123,7 +1121,7 @@ SYSTEM_USES = {
     "Heading Structure": "Primary page H1 plus isolated editorial H2 through H6 headings, empty headings, duplicate headings and hierarchy level jumps",
     "URL Structure": "URL scheme, domain, path, query parameters, query length, invalid character patterns",
     "Internal Links": "Only inline editorial text hyperlinks inside paragraph, list and table text in the isolated article body; non-editorial modules are excluded; HEAD is followed by normal GET confirmation when needed; only GET-confirmed HTTP 404/410 is treated as a broken destination",
-    "External Links": "External anchor URLs, HTTP HEAD or lightweight GET requests, response code, final destination and request errors",
+    "External Links": "Every external HTTP(S) <a href> occurrence inside the isolated editorial body, including punctuation-only, whitespace-only, empty, image and icon anchors; exact anchor representation, nearby context, rel attributes, destination validation and redirects",
     "Images": "Isolated editorial article images, TruBroker and broker/property widget exclusion by asset URL and DOM ancestry, decorative image signals, alt attribute and alt text, lazy image source resolution and image resource response status",
     "datePublished": "Schema datePublished, article published metadata, visible time elements and date consistency comparison",
     "Sitemap": "robots.txt sitemap declarations, common sitemap locations, recursive sitemap index traversal, editorial post and article sitemap prioritisation, preferred URL lookup, lastmod extraction, caching and bounded parallel requests",
@@ -1494,6 +1492,34 @@ def similarity(a, b):
     if not a and not b:
         return 1.0
     return SequenceMatcher(None, a, b).ratio()
+
+
+def editorial_similarity(a, b):
+    """
+    Compare isolated editorial prose while tolerating harmless extra/dynamic UI.
+
+    SequenceMatcher is sensitive to inserted widgets and property cards, so the
+    score also uses token coverage: how much of the smaller editorial response
+    is present in the larger response. This is a better signal for crawler/user
+    parity than raw full-page character similarity.
+    """
+    a = re.sub(r"\s+", " ", a or "").strip()[:50000]
+    b = re.sub(r"\s+", " ", b or "").strip()[:50000]
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+
+    seq = SequenceMatcher(None, a, b).ratio()
+    ta = re.findall(r"[A-Za-z0-9\u0600-\u06FF]+", a.lower())
+    tb = re.findall(r"[A-Za-z0-9\u0600-\u06FF]+", b.lower())
+    if not ta or not tb:
+        return seq
+
+    ca, cb = Counter(ta), Counter(tb)
+    shared = sum(min(ca[t], cb[t]) for t in (ca.keys() & cb.keys()))
+    coverage = shared / max(1, min(sum(ca.values()), sum(cb.values())))
+    return max(seq, coverage)
 
 
 # =========================================================
@@ -2674,9 +2700,8 @@ def content_issue_category(row):
 
 
 DEFAULT_ACTIONS = {
-    "Cloaking": "Serve the same primary editorial content and destination to normal users and Googlebot. Remove crawler-specific SEO content or redirects only when a material crawler-specific difference is confirmed.",
-    "Crawler Access Issue": "Check CDN, WAF, firewall, cache and bot-management rules. Make sure legitimate crawlers can access the intended article. Do not treat an access error by itself as cloaking.",
-    "Sneaky Redirect": "Remove deceptive or crawler-specific redirects only when both user and crawler requests are successfully accessible and the destination difference is confirmed. Investigate access-block redirects separately.",
+    "Cloaking": "Serve the same primary editorial content and destination to normal users and Googlebot. Remove crawler specific SEO content or redirects.",
+    "Sneaky Redirect": "Remove deceptive or crawler specific redirects. Keep legitimate redirects consistent for users and crawlers.",
     "Device Spam Redirect": "Use the same relevant destination and primary content for desktop and mobile users.",
     "Hidden Text": "Make editorial text visible unless it is legitimately hidden for interface, responsive or accessibility reasons.",
     "Hidden Links": "Remove only deliberately concealed links. Do not treat empty anchors, visible card links, image/icon links, or recognised interface/accessibility controls as hidden-link spam.",
@@ -3799,6 +3824,194 @@ def is_inline_editorial_anchor(anchor):
         return False
 
     return True
+
+
+def external_anchor_representation(anchor):
+    """
+    Return a stable human-readable representation for every body link anchor.
+
+    Important cases:
+    - normal text -> exact normalized text
+    - punctuation-only -> e.g. "." or ","
+    - whitespace-only / NBSP -> [WHITESPACE ONLY]
+    - no text/content -> [EMPTY]
+    - image link -> [IMAGE: alt text] or [IMAGE: no alt]
+    - SVG/icon link -> [ICON/SVG]
+    """
+    raw_text = anchor.get_text("", strip=False)
+    normalized = re.sub(r"\s+", " ", raw_text or "").strip()
+
+    image = anchor.find("img")
+    svg = anchor.find("svg")
+
+    if normalized:
+        if not re.search(r"\w", normalized, flags=re.UNICODE):
+            return {
+                "anchor_text": normalized,
+                "anchor_display": normalized,
+                "anchor_type": "Punctuation only",
+                "raw_text": raw_text,
+            }
+        return {
+            "anchor_text": normalized,
+            "anchor_display": normalized,
+            "anchor_type": "Text",
+            "raw_text": raw_text,
+        }
+
+    # HTML whitespace, including &nbsp;, is meaningful for this audit because
+    # a link may deliberately be attached to a blank-looking character.
+    if raw_text and not raw_text.strip():
+        return {
+            "anchor_text": "",
+            "anchor_display": "[WHITESPACE ONLY]",
+            "anchor_type": "Whitespace only",
+            "raw_text": raw_text,
+        }
+
+    if image is not None:
+        alt = re.sub(r"\s+", " ", str(image.get("alt") or "")).strip()
+        return {
+            "anchor_text": alt,
+            "anchor_display": f"[IMAGE: {alt}]" if alt else "[IMAGE: no alt]",
+            "anchor_type": "Image",
+            "raw_text": raw_text,
+        }
+
+    if svg is not None or anchor.find(["i", "use"]) is not None:
+        label = re.sub(
+            r"\s+",
+            " ",
+            str(anchor.get("aria-label") or anchor.get("title") or ""),
+        ).strip()
+        return {
+            "anchor_text": label,
+            "anchor_display": f"[ICON/SVG: {label}]" if label else "[ICON/SVG]",
+            "anchor_type": "Icon/SVG",
+            "raw_text": raw_text,
+        }
+
+    return {
+        "anchor_text": "",
+        "anchor_display": "[EMPTY]",
+        "anchor_type": "Empty",
+        "raw_text": raw_text,
+    }
+
+
+def is_body_content_anchor(anchor):
+    """
+    Include real links inside the isolated editorial body even when the clickable
+    anchor is only punctuation, whitespace, empty HTML, an image or an icon.
+
+    Exclude known non-editorial modules such as social sharing, cards, banners,
+    agent widgets, related-content widgets, navigation and CTAs.
+    """
+    if body_link_has_excluded_container(anchor):
+        return False
+
+    href_low = str(anchor.get("href") or "").casefold()
+    if any(pattern in href_low for pattern in BODY_LINK_EXCLUDE_HREF_PATTERNS):
+        return False
+
+    # Normal editorial copy and table/list content.
+    if anchor.find_parent(["p", "li", "td", "th", "figcaption", "h2", "h3", "h4", "h5", "h6"]) is not None:
+        return True
+
+    # Linked editorial images can live directly in a <figure>.
+    if anchor.find("img") is not None and anchor.find_parent("figure") is not None:
+        return True
+
+    return False
+
+
+def content_external_link_inventory(article_soup, base_url):
+    """
+    Return EVERY external HTTP(S) link occurrence in the isolated article body.
+
+    Occurrences are intentionally not deduplicated: if the same URL appears
+    once on normal text and once on "." or a blank space, both must be visible.
+    """
+    base_host = urlparse(base_url).netloc.lower().replace("www.", "")
+    inventory = []
+
+    for occurrence, anchor in enumerate(article_soup.find_all("a", href=True), start=1):
+        if not is_body_content_anchor(anchor):
+            continue
+
+        href = normalized_link_url(anchor.get("href"), base_url)
+        if not href:
+            continue
+
+        parsed = urlparse(href)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+
+        host = parsed.netloc.lower().replace("www.", "")
+        if not host or host == base_host:
+            continue
+
+        rep = external_anchor_representation(anchor)
+        rel_values = [str(x).lower() for x in (anchor.get("rel") or [])]
+        context = nearest_editorial_context(anchor, max_chars=220)
+
+        suspicious_anchor = rep["anchor_type"] in {
+            "Punctuation only",
+            "Whitespace only",
+            "Empty",
+        }
+
+        inventory.append({
+            "occurrence": occurrence,
+            "url": href,
+            "host": host,
+            "anchor_text": rep["anchor_text"],
+            "anchor_display": rep["anchor_display"],
+            "anchor_type": rep["anchor_type"],
+            "suspicious_anchor": suspicious_anchor,
+            "rel": " ".join(rel_values),
+            "target": str(anchor.get("target") or ""),
+            "context": context,
+            "_anchor_node": anchor,
+        })
+
+    return inventory
+
+
+def external_link_inventory_text(inventory, validation=None):
+    """
+    Human-readable full list for the SEO Result cell.
+    """
+    if not inventory:
+        return "No external HTTP(S) links were found inside the isolated editorial body."
+
+    validation_by_url = {}
+    if validation:
+        for item in validation.get("checked", []):
+            validation_by_url[item.get("url", "")] = item
+
+    lines = [
+        f"{len(inventory)} external link occurrence(s) found inside the isolated editorial body:"
+    ]
+
+    for index, item in enumerate(inventory, start=1):
+        probe = validation_by_url.get(item["url"], {})
+        status = probe.get("status")
+        final_url = probe.get("final_url") or ""
+        status_text = f"HTTP {status}" if status is not None else "HTTP unresolved"
+        if final_url and final_url != item["url"]:
+            status_text += f" -> {final_url}"
+
+        rel_text = f" | rel={item['rel']}" if item.get("rel") else ""
+        context_text = f" | Context: {item['context']}" if item.get("context") else ""
+
+        lines.append(
+            f"{index}. Anchor: {item['anchor_display']} "
+            f"[{item['anchor_type']}] | URL: {item['url']} | {status_text}"
+            f"{rel_text}{context_text}"
+        )
+
+    return "\n".join(lines)
 
 def content_internal_link_inventory(article_soup, base_url):
     """
@@ -5683,225 +5896,125 @@ def classify_counts(rows):
 # -----------------------------
 
 
-def response_access_state(response, min_article_words=40):
-    """
-    Decide whether a response is usable for crawler-vs-user content comparison.
-
-    Access errors and short anti-bot/challenge pages are not valid inputs for
-    cloaking or redirect-content comparison. This intentionally distinguishes
-    bot handling from cloaking.
-    """
-    if response is None:
-        return False, "request unavailable"
-
-    try:
-        status = int(getattr(response, "status_code", 0) or 0)
-    except Exception:
-        status = 0
-
-    if status in {401, 403, 405, 406, 429}:
-        return False, f"HTTP {status} access restriction"
-    if status >= 500:
-        return False, f"HTTP {status} server response"
-    if status < 200 or status >= 300:
-        return False, f"HTTP {status or 'unknown'} non-success response"
-
-    page_text = clean_text(soup_of(getattr(response, "text", "")))
-    article_text = main_content_text(soup_of(getattr(response, "text", "")))
-    page_words = word_count(page_text)
-    article_words = word_count(article_text)
-
-    challenge_markers = (
-        "captcha",
-        "verify you are human",
-        "are you a human",
-        "attention required",
-        "access denied",
-        "request blocked",
-        "security check",
-        "bot challenge",
-        "checking your browser",
-        "enable javascript and cookies",
-    )
-    low = page_text.lower()[:8000]
-    if page_words < 250 and any(marker in low for marker in challenge_markers):
-        return False, "anti-bot, CAPTCHA or access-challenge page"
-
-    if article_words < min_article_words:
-        return False, f"HTTP {status} but only {article_words} article words were extractable"
-
-    return True, f"HTTP {status} with usable article content"
-
-
 def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="", secondary_keywords=None):
     rows = []
     rules = dict(SPAM_RULES)
     secondary_keywords = secondary_keywords or []
 
     desktop_text = body_text
-    bot_text = main_content_text(soup_of(bot_r.text))
-    mobile_text = main_content_text(soup_of(mobile_r.text))
+    bot_soup = soup_of(bot_r.text)
+    mobile_soup = soup_of(mobile_r.text)
+    bot_text = main_content_text(bot_soup)
+    mobile_text = main_content_text(mobile_soup)
 
-    desktop_usable, desktop_access_reason = response_access_state(desktop_r)
-    bot_usable, bot_access_reason = response_access_state(bot_r)
-    mobile_usable, mobile_access_reason = response_access_state(mobile_r)
-
-    desktop_status = getattr(desktop_r, "status_code", None)
-    bot_status = getattr(bot_r, "status_code", None)
-    mobile_status = getattr(mobile_r, "status_code", None)
+    # Cloaking must be based on the isolated editorial article, not dynamic
+    # property cards/widgets that can vary by user agent or request.
+    desktop_core = keyword_stuffing_text(soup)
+    bot_core = keyword_stuffing_text(bot_soup)
+    mobile_core = keyword_stuffing_text(mobile_soup)
+    sim_bot = editorial_similarity(desktop_core, bot_core)
 
     desktop_dest = normalized_destination(desktop_r.url)
     bot_dest = normalized_destination(bot_r.url)
     desktop_chain = response_redirect_chain(desktop_r)
     bot_chain = response_redirect_chain(bot_r)
 
-    # ---------------------------------------------------------
-    # Crawler access is evaluated BEFORE cloaking.
-    # A 403/401/429/CAPTCHA/challenge page is not cloaking proof.
-    # ---------------------------------------------------------
-    if desktop_usable and bot_usable:
-        crawler_access_status = PASS
-        crawler_access_note = (
-            f"Normal user and Googlebot-like requests both returned usable content "
-            f"(user HTTP {desktop_status}; crawler HTTP {bot_status})."
-        )
-    elif desktop_usable and not bot_usable:
-        crawler_access_status = REVIEW
-        crawler_access_note = (
-            f"Crawler Access Issue: the normal user request is usable (HTTP {desktop_status}) "
-            f"but the Googlebot-like request is not ({bot_access_reason}). "
-            "This may come from CDN, WAF, firewall or bot-management behaviour and does not prove cloaking."
-        )
-    elif not desktop_usable and bot_usable:
-        crawler_access_status = REVIEW
-        crawler_access_note = (
-            f"Crawler Access Issue: the Googlebot-like request is usable (HTTP {bot_status}) "
-            f"but the normal user request is not ({desktop_access_reason}). "
-            "The access difference requires investigation but is not enough to label cloaking."
-        )
-    else:
-        crawler_access_status = REVIEW
-        crawler_access_note = (
-            f"Crawler Access Issue: neither response is suitable for a cloaking comparison. "
-            f"Normal user: {desktop_access_reason}. Googlebot-like: {bot_access_reason}."
-        )
-    rows.append(result(
-        "Crawler Access Issue",
-        crawler_access_status,
-        crawler_access_note,
-        rules["Crawler Access Issue"],
-    ))
-
-    # ---------------------------------------------------------
-    # Cloaking comparison only runs when BOTH responses are usable.
-    # ---------------------------------------------------------
-    if not (desktop_usable and bot_usable):
+    if desktop_dest != bot_dest:
         rows.append(result(
             "Cloaking",
             REVIEW,
-            "Cloaking could not be validly compared because both the normal user and Googlebot-like "
-            f"responses did not return usable page content. User: {desktop_access_reason}. "
-            f"Crawler: {bot_access_reason}. Access failure alone is not cloaking.",
+            (
+                "User and Googlebot-like requests reached different final destinations. "
+                f"User: {desktop_r.url}. Googlebot-like: {bot_r.url}. "
+                "Destination divergence requires manual review before calling it cloaking."
+            ),
+            rules["Cloaking"],
+        ))
+    elif sim_bot >= 0.85:
+        rows.append(result(
+            "Cloaking",
+            PASS,
+            (
+                f"No cloaking signal found. User and Googlebot-like requests reach the same destination, "
+                f"and isolated editorial content agreement is {sim_bot:.0%}."
+            ),
+            rules["Cloaking"],
+        ))
+    elif sim_bot >= 0.55:
+        rows.append(result(
+            "Cloaking",
+            REVIEW,
+            (
+                f"Same final destination, but isolated editorial content agreement is {sim_bot:.0%}. "
+                "This is not enough evidence to label the page as cloaking; review dynamic or crawler-specific rendering."
+            ),
             rules["Cloaking"],
         ))
     else:
-        sim_bot = similarity(desktop_text, bot_text)
-        if desktop_dest != bot_dest:
-            rows.append(result(
-                "Cloaking",
-                FAIL,
-                f"Confirmed accessible user and Googlebot-like requests reached different final destinations: "
-                f"{desktop_r.url} vs {bot_r.url}.",
-                rules["Cloaking"],
-            ))
-        elif sim_bot < 0.72 and min(word_count(desktop_text), word_count(bot_text)) > 150:
-            rows.append(result(
-                "Cloaking",
-                FAIL,
-                f"Confirmed material user versus Googlebot-like content difference detected "
-                f"({sim_bot:.0%} similarity) after both responses returned usable content.",
-                rules["Cloaking"],
-            ))
-        elif sim_bot < 0.88:
-            rows.append(result(
-                "Cloaking",
-                REVIEW,
-                f"Both responses are accessible, but user versus Googlebot-like content similarity is "
-                f"{sim_bot:.0%}. Review dynamic, personalised, geo-specific or A/B-tested content before "
-                "treating the difference as cloaking.",
-                rules["Cloaking"],
-            ))
-        else:
-            rows.append(result(
-                "Cloaking",
-                PASS,
-                f"Both responses are accessible. User versus Googlebot-like content similarity is "
-                f"{sim_bot:.0%} and the final destination matches.",
-                rules["Cloaking"],
-            ))
+        rows.append(result(
+            "Cloaking",
+            REVIEW,
+            (
+                f"Large editorial-content difference detected ({sim_bot:.0%} agreement) while the final destination still matches. "
+                "Treat as REVIEW, not FAIL, unless crawler-specific deceptive content is confirmed manually."
+            ),
+            rules["Cloaking"],
+        ))
 
-    # Sneaky Redirect also requires usable user and crawler responses.
-    if not (desktop_usable and bot_usable):
+    chains_materially_different = (
+        desktop_dest != bot_dest
+        or (
+            len(desktop_chain) != len(bot_chain)
+            and (len(desktop_chain) > 1 or len(bot_chain) > 1)
+        )
+    )
+    if desktop_dest != bot_dest:
+        st_redirect = FAIL
+        note = (
+            f"Different final destinations. User chain: {redirect_chain_summary(desktop_r)}. "
+            f"Crawler chain: {redirect_chain_summary(bot_r)}."
+        )
+    elif chains_materially_different:
         st_redirect = REVIEW
         note = (
-            "Sneaky redirect comparison is inconclusive because one or both request variants are not "
-            f"usable. User: {desktop_access_reason}. Crawler: {bot_access_reason}. "
-            "An access-block or challenge redirect is not a confirmed sneaky redirect."
+            "Final destination matches, but user and crawler redirect chains differ. "
+            f"User chain: {redirect_chain_summary(desktop_r)}. "
+            f"Crawler chain: {redirect_chain_summary(bot_r)}."
         )
     else:
-        chains_materially_different = (
-            desktop_dest != bot_dest
-            or (
-                len(desktop_chain) != len(bot_chain)
-                and (len(desktop_chain) > 1 or len(bot_chain) > 1)
-            )
-        )
-        if desktop_dest != bot_dest:
-            st_redirect = FAIL
-            note = (
-                f"Different final destinations after successful access. User chain: {redirect_chain_summary(desktop_r)}. "
-                f"Crawler chain: {redirect_chain_summary(bot_r)}."
-            )
-        elif chains_materially_different:
-            st_redirect = REVIEW
-            note = (
-                "Final destination matches, but accessible user and crawler redirect chains differ. "
-                f"User chain: {redirect_chain_summary(desktop_r)}. "
-                f"Crawler chain: {redirect_chain_summary(bot_r)}."
-            )
-        else:
-            st_redirect = PASS
-            note = f"User and crawler reach the same destination with no material redirect-chain difference: {desktop_r.url}"
+        st_redirect = PASS
+        note = f"User and crawler reach the same destination with no material redirect-chain difference: {desktop_r.url}"
     rows.append(result("Sneaky Redirect", st_redirect, note, rules["Sneaky Redirect"]))
 
-    # Device redirect/content comparison follows the same access-first principle.
     mobile_dest = normalized_destination(mobile_r.url)
-    if not (desktop_usable and mobile_usable):
-        rows.append(result(
-            "Device Spam Redirect",
-            REVIEW,
-            "Desktop versus mobile comparison is inconclusive because one or both variants are not usable. "
-            f"Desktop: {desktop_access_reason}. Mobile: {mobile_access_reason}. "
-            "An access restriction is not a confirmed device spam redirect.",
-            rules["Device Spam Redirect"],
-        ))
-    elif mobile_dest != desktop_dest:
+    mobile_chain = response_redirect_chain(mobile_r)
+    if mobile_dest != desktop_dest:
         rows.append(result(
             "Device Spam Redirect",
             FAIL,
-            f"Accessible mobile and desktop requests reached different final destinations. "
-            f"Desktop: {desktop_r.url}. Mobile: {mobile_r.url}.",
+            f"Mobile final destination differs from desktop. Desktop: {desktop_r.url}. Mobile: {mobile_r.url}.",
             rules["Device Spam Redirect"],
         ))
     else:
-        sm = similarity(desktop_text, mobile_text)
-        chain_diff = len(response_redirect_chain(mobile_r)) != len(desktop_chain)
-        device_status = REVIEW if sm < 0.80 or chain_diff else PASS
+        chain_diff = len(mobile_chain) != len(desktop_chain)
+        mobile_editorial_sim = editorial_similarity(desktop_core, mobile_core)
+        if chain_diff:
+            device_status = REVIEW
+            device_note = (
+                "Desktop and mobile reach the same final destination, but their redirect chains differ. "
+                "Review the redirect path; content differences are evaluated separately under Mobile Content."
+            )
+        else:
+            device_status = PASS
+            device_note = (
+                "No device spam redirect detected. Desktop and mobile reach the same final destination "
+                "with no redirect-chain difference. "
+                f"Editorial content agreement is {mobile_editorial_sim:.0%}, but content parity is evaluated under Mobile Content, not this redirect rule."
+            )
         rows.append(result(
             "Device Spam Redirect",
             device_status,
-            f"Desktop and mobile final destination matches; content similarity {sm:.0%}. "
-            f"Redirect chain difference: {'yes' if chain_diff else 'no'}.",
+            device_note,
             rules["Device Spam Redirect"],
         ))
 
@@ -5972,17 +6085,21 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
 
     article_soup = main_content_node(soup)
     page_internal, page_external = extract_page_links(soup, url)
-    article_internal, article_external = extract_page_links(article_soup, url)
-    article_host = urlparse(url).netloc.lower().replace("www.", "")
 
-    article_anchors = []
-    for a in article_soup.find_all("a", href=True):
-        href = normalized_link_url(a.get("href"), url)
-        if not href:
-            continue
-        host = urlparse(href).netloc.lower().replace("www.", "")
-        if host != article_host and not is_social_domain(href):
-            article_anchors.append((a, href))
+    full_external_inventory = content_external_link_inventory(article_soup, url)
+    non_social_inventory = [
+        item for item in full_external_inventory
+        if not is_social_domain(item.get("url", ""))
+    ]
+    article_anchors = [
+        (item.get("_anchor_node"), item.get("url"))
+        for item in non_social_inventory
+        if item.get("_anchor_node") is not None
+    ]
+    unusual_anchor_items = [
+        item for item in non_social_inventory
+        if item.get("suspicious_anchor")
+    ]
 
     keyword_rich = 0
     repeated_anchor_counts = Counter()
@@ -5998,7 +6115,18 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         if count >= 4 and len(tokenize(anchor)) >= 3
     ]
 
-    if repeated_manipulative:
+    if unusual_anchor_items:
+        link_status = REVIEW
+        unusual_examples = "; ".join(
+            f"{item['anchor_display']} -> {item['url']}"
+            for item in unusual_anchor_items[:10]
+        )
+        finding = (
+            f"{len(full_external_inventory)} external link occurrence(s) were inventoried in the editorial body. "
+            f"{len(unusual_anchor_items)} use punctuation-only, whitespace-only or empty anchors and need review: "
+            f"{unusual_examples}. Unusual anchor placement alone is not treated as a proven spam violation."
+        )
+    elif repeated_manipulative:
         link_status = REVIEW
         finding = (
             f"{len(article_anchors)} editorial external link(s) found. "
@@ -6016,8 +6144,8 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
     else:
         link_status = PASS
         finding = (
-            f"{len(article_anchors)} non social editorial external link(s) and "
-            f"{len(page_external)} page wide external link(s) found; no clear automated link spam pattern."
+            f"{len(full_external_inventory)} external link occurrence(s) were inventoried in the isolated editorial body; "
+            "no clear automated link-spam pattern was detected."
         )
     rows.append(result("Link Spam", link_status, finding, rules["Link Spam"]))
 
@@ -6520,12 +6648,19 @@ def audit_seo(
     ))
 
 
-    internal, external = extract_page_links(soup, desktop_r.url)
+    internal, _page_external = extract_page_links(soup, desktop_r.url)
 
     content_link_inventory = content_internal_link_inventory(
         article_soup,
         desktop_r.url,
     )
+    body_external_inventory = content_external_link_inventory(
+        article_soup,
+        desktop_r.url,
+    )
+    external = unique_http_urls([
+        item["url"] for item in body_external_inventory
+    ])
 
     content_internal_urls = unique_http_urls([
         item["url"]
@@ -6576,27 +6711,49 @@ def audit_seo(
         + external_classified["unreachable"]
     )
 
-    if not external:
+    unusual_external_anchors = [
+        item for item in body_external_inventory
+        if item.get("suspicious_anchor")
+    ]
+
+    if not body_external_inventory:
         external_status = PASS
-        external_finding = "No broken external links found."
-    elif external_problem_items:
-        external_status = REVIEW
-        external_problems = validation_problem_examples({
-            "broken": external_classified["broken"],
-            "server_errors": external_classified["server_errors"],
-            "restricted": external_classified["restricted"],
-            "unreachable": external_classified["unreachable"],
-        })
-        external_finding = (
-            f"{len(external_classified['checked'])} unique external links were requested. "
-            f"{len(external_classified['working'])} resolved successfully. "
-            f"{len(external_classified['expected_platform'])} social platform link(s) returned expected automated access restrictions. "
-            "Problems requiring review: " + "; ".join(external_problems) + "."
-        )
+        external_finding = "No external HTTP(S) links were found inside the isolated editorial body."
     else:
-        external_status = PASS
-        external_finding = "No broken external links found."
-    rows.append(result("External Links", external_status, external_finding, rules["External Links"]))
+        external_status = REVIEW if (external_problem_items or unusual_external_anchors) else PASS
+        external_finding = external_link_inventory_text(
+            body_external_inventory,
+            external_validation,
+        )
+
+        if unusual_external_anchors:
+            external_finding += (
+                "\n\nAnchor review: "
+                f"{len(unusual_external_anchors)} link occurrence(s) use punctuation-only, whitespace-only or empty anchors. "
+                "These should be inspected because a destination can otherwise be difficult for editors and users to notice."
+            )
+
+        if external_problem_items:
+            external_problems = validation_problem_examples({
+                "broken": external_classified["broken"],
+                "server_errors": external_classified["server_errors"],
+                "restricted": external_classified["restricted"],
+                "unreachable": external_classified["unreachable"],
+            })
+            external_finding += (
+                "\n\nDestination problems requiring review: "
+                + "; ".join(external_problems)
+                + "."
+            )
+
+    rows.append(result(
+        "External Links",
+        external_status,
+        external_finding,
+        rules["External Links"],
+        "Review the complete external-link inventory. Fix unusual blank/punctuation anchors and any confirmed destination problems."
+        if external_status == REVIEW else "",
+    ))
 
     image_inventory = meaningful_image_inventory(
         soup,
@@ -8753,12 +8910,19 @@ if run:
             f"Desktop {desktop_elapsed:.2f}s, Mobile {mobile_elapsed:.2f}s, Googlebot {bot_elapsed:.2f}s"
         )
 
-        page_internal_urls, external_urls = extract_page_links(soup, desktop_r.url)
+        page_internal_urls, _page_external_urls = extract_page_links(soup, desktop_r.url)
         article_soup_for_links = main_content_node(soup)
         internal_urls = content_internal_link_urls(
             article_soup_for_links,
             desktop_r.url,
         )
+        external_link_inventory = content_external_link_inventory(
+            article_soup_for_links,
+            desktop_r.url,
+        )
+        external_urls = unique_http_urls([
+            item["url"] for item in external_link_inventory
+        ])
         resource_urls = extract_resource_urls(soup, desktop_r.url)
 
         audit_status.write(
@@ -8996,6 +9160,56 @@ if run:
                     },
                 )
 
+                # Dedicated complete external-link inventory below the SEO rules table.
+                # Every occurrence is shown, including links attached only to "." or whitespace.
+                if tab_index == 1:
+                    st.markdown("### External Links in Article Body")
+                    st.caption(
+                        "Every external HTTP(S) link occurrence found in the isolated editorial body. "
+                        "Repeated destinations are intentionally kept when their anchors differ."
+                    )
+
+                    body_external_rows = []
+                    validation_by_url = {
+                        item.get("url", ""): item
+                        for item in external_validation.get("checked", [])
+                    }
+
+                    for number, item in enumerate(external_link_inventory, start=1):
+                        probe = validation_by_url.get(item.get("url", ""), {})
+                        body_external_rows.append({
+                            "#": number,
+                            "Anchor": item.get("anchor_display", ""),
+                            "Anchor Type": item.get("anchor_type", ""),
+                            "External URL": item.get("url", ""),
+                            "HTTP": probe.get("status", ""),
+                            "Final Destination": probe.get("final_url", ""),
+                            "Rel": item.get("rel", ""),
+                            "Context": item.get("context", ""),
+                            "Review": "REVIEW" if item.get("suspicious_anchor") else "",
+                        })
+
+                    if body_external_rows:
+                        external_df = pd.DataFrame(body_external_rows)
+                        st.dataframe(
+                            external_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "#": st.column_config.NumberColumn(width="small"),
+                                "Anchor": st.column_config.TextColumn(width="medium"),
+                                "Anchor Type": st.column_config.TextColumn(width="small"),
+                                "External URL": st.column_config.LinkColumn(width="large"),
+                                "HTTP": st.column_config.TextColumn(width="small"),
+                                "Final Destination": st.column_config.LinkColumn(width="large"),
+                                "Rel": st.column_config.TextColumn(width="small"),
+                                "Context": st.column_config.TextColumn(width="large"),
+                                "Review": st.column_config.TextColumn(width="small"),
+                            },
+                        )
+                    else:
+                        st.success("No external HTTP(S) links were found in the isolated article body.")
+
         report_generated_at = datetime.now(timezone.utc).isoformat()
 
         excel_report = build_audit_excel_report(
@@ -9038,8 +9252,7 @@ if run:
 
                 When a rule cannot be fully verified from one URL, it can receive REVIEW and the Result explains what additional verification is required.
 
-                The Googlebot check uses a Googlebot-like User Agent comparison. It does not reproduce Google's full rendering and indexing infrastructure.
-                Access errors, HTTP 401/403/405/406/429 responses, CAPTCHA and short bot-challenge pages are classified as Crawler Access Issue and are never treated as cloaking proof by themselves.
+                The Googlebot check uses a Googlebot User Agent comparison. It does not reproduce Google's full rendering and indexing infrastructure.
 
                 External plagiarism may require external verification.
 
@@ -9052,7 +9265,7 @@ if run:
                 Content QA uses an isolated editorial article body and excludes comments, related posts, popular widgets, sidebars, navigation and other page chrome before calculating content results.
                 Official-source Content verification is free and requires no API key. It uses public search result retrieval plus direct official-page fetching. If search is rate-limited or evidence is insufficient, the system returns REVIEW instead of guessing.
 
-                External links and linked image, stylesheet and JavaScript resources are now requested directly instead of receiving PASS from discovery alone.
+                External-link QA inventories every external HTTP(S) link occurrence inside the isolated article body, including punctuation-only, whitespace-only, empty, image and icon anchors. Each unique destination is requested directly; repeated occurrences remain visible in the inventory.
                 """
             )
 
