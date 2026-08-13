@@ -42,8 +42,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.35 CONTENT ISSUE ROWS"
-ENGINE_BUILD = "2026.08.13.6"
+APP_VERSION = "V18.36 EXPANDED CONTENT QA"
+ENGINE_BUILD = "2026.08.13.7"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -3902,6 +3902,102 @@ def content_internal_link_urls(article_soup, base_url):
         if item.get("is_internal")
     ])
 
+
+@lru_cache(maxsize=512)
+def _internal_target_identity_cached(url, bucket):
+    """Fetch destination title/H1 for internal-link destination relevance checks."""
+    try:
+        r = requests.get(
+            url,
+            headers={**UA_DESKTOP, "Accept-Language": "en-US,en;q=0.8"},
+            timeout=max(INTERNAL_LINK_CHECK_TIMEOUT, 5),
+            allow_redirects=True,
+        )
+        ctype = (r.headers.get("content-type") or "").lower()
+        if r.status_code >= 400 or "html" not in ctype:
+            return {"ok": False, "url": r.url, "status": r.status_code, "title": "", "h1": ""}
+        soup = BeautifulSoup(r.text, "html.parser")
+        title = re.sub(r"\s+", " ", soup.title.get_text(" ", strip=True) if soup.title else "").strip()
+        h1_node = soup.find("h1")
+        h1 = re.sub(r"\s+", " ", h1_node.get_text(" ", strip=True) if h1_node else "").strip()
+        return {"ok": True, "url": r.url, "status": r.status_code, "title": title, "h1": h1}
+    except Exception:
+        return {"ok": False, "url": url, "status": None, "title": "", "h1": ""}
+
+
+def internal_target_identity(url):
+    return _internal_target_identity_cached(url, cache_bucket(900))
+
+
+def internal_link_title_mismatches(inventory, max_workers=8):
+    """
+    Detect entity-like internal anchors whose destination title tag is unrelated.
+
+    This catches cases such as anchor 'Royal Residence' pointing to a page whose
+    title tag says 'Executive Towers Business Bay Guide'.
+    """
+    candidates = []
+    seen_urls = set()
+    for item in inventory:
+        if not item.get("is_internal"):
+            continue
+        anchor = re.sub(r"\s+", " ", item.get("anchor_text", "") or "").strip()
+        if not anchor or item.get("generic_anchor") or len(tokenize(anchor)) < 2:
+            continue
+        # Restrict destination-title comparison to named entities/places/projects to
+        # avoid false positives for broad editorial anchors.
+        if not looks_like_entity_phrase(anchor):
+            continue
+        if item["url"] in seen_urls:
+            continue
+        seen_urls.add(item["url"])
+        candidates.append((item["url"], anchor))
+
+    if not candidates:
+        return []
+
+    identities = {}
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(candidates))) as executor:
+        futures = {
+            executor.submit(internal_target_identity, url): (url, anchor)
+            for url, anchor in candidates
+        }
+        for future in as_completed(futures):
+            url, anchor = futures[future]
+            try:
+                identities[url] = future.result()
+            except Exception:
+                identities[url] = {"ok": False, "url": url, "status": None, "title": "", "h1": ""}
+
+    issues = []
+    for url, anchor in candidates:
+        identity = identities.get(url, {})
+        if not identity.get("ok"):
+            continue
+        target_title = identity.get("title", "")
+        if not target_title:
+            continue
+
+        title_score = max(
+            keyword_overlap(anchor, target_title),
+            semantic_overlap(anchor, target_title),
+        )
+        if title_score >= 0.20:
+            continue
+
+        # Strong mismatch: named anchor has essentially no relationship with the
+        # destination title tag. Report the exact destination title for editorial QA.
+        issues.append({
+            "url": url,
+            "final_url": identity.get("url", url),
+            "anchor_text": anchor,
+            "target_title": target_title,
+            "target_h1": identity.get("h1", ""),
+            "title_score": title_score,
+        })
+
+    return issues
+
 def internal_link_issues(inventory, validation):
     """
     Return only actionable issues for inline editorial body links.
@@ -3916,6 +4012,10 @@ def internal_link_issues(inventory, validation):
     }
 
     issues = []
+    title_mismatches = {
+        (x.get("url"), x.get("anchor_text", "").casefold()): x
+        for x in internal_link_title_mismatches(inventory)
+    }
 
     for item in inventory:
         reasons = []
@@ -3949,11 +4049,18 @@ def internal_link_issues(inventory, validation):
         ):
             reasons.append("Anchor text may not match the linked page")
 
+        title_issue = title_mismatches.get((item["url"], item["anchor_text"].casefold()))
+        if title_issue:
+            reasons.append(
+                f'Destination title tag does not match the linked entity: "{title_issue.get("target_title", "")}"'
+            )
+
         if reasons:
             issues.append({
                 "url": item["url"],
                 "anchor_text": item["anchor_text"],
                 "reasons": reasons,
+                "target_title": title_issue.get("target_title", "") if title_issue else "",
             })
 
     return issues
@@ -6904,7 +7011,30 @@ def _freeqa_ddg_url(href):
 
 @lru_cache(maxsize=256)
 def _freeqa_search(query):
-    """No-key public HTML search. Returns [] on rate limits/network blocks."""
+    """
+    No-key public web search with conservative fallbacks.
+
+    This remains free: no search API key is required. Search engines can rate-limit
+    automated requests, so failure returns [] and never becomes evidence by itself.
+    """
+    results = []
+    seen = set()
+
+    def add(url, title="", snippet=""):
+        url = _freeqa_ddg_url(url)
+        if not url.startswith(("http://", "https://")):
+            return
+        key = normalized_destination(url)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        results.append({
+            "url": url,
+            "title": re.sub(r"\s+", " ", title or "").strip(),
+            "snippet": re.sub(r"\s+", " ", snippet or "").strip(),
+        })
+
+    # 1. DuckDuckGo HTML.
     try:
         r = requests.post(
             FREE_SEARCH_URL,
@@ -6912,28 +7042,78 @@ def _freeqa_search(query):
             headers={**UA_DESKTOP, "Accept-Language": "en-US,en;q=0.8"},
             timeout=FREE_SEARCH_TIMEOUT,
         )
-        if r.status_code != 200 or not r.text:
-            return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        results = []
-        for box in soup.select(".result, .web-result"):
-            a = box.select_one("a.result__a") or box.find("a", href=True)
-            if not a:
-                continue
-            href = _freeqa_ddg_url(a.get("href", ""))
-            if not href.startswith(("http://", "https://")):
-                continue
-            snippet_node = box.select_one(".result__snippet")
-            results.append({
-                "url": href,
-                "title": re.sub(r"\s+", " ", a.get_text(" ", strip=True)),
-                "snippet": re.sub(r"\s+", " ", snippet_node.get_text(" ", strip=True)) if snippet_node else "",
-            })
-            if len(results) >= FREE_MAX_SEARCH_RESULTS:
-                break
-        return results
+        if r.status_code == 200 and r.text:
+            soup = BeautifulSoup(r.text, "html.parser")
+            for box in soup.select(".result, .web-result"):
+                a = box.select_one("a.result__a") or box.find("a", href=True)
+                if not a:
+                    continue
+                snippet_node = box.select_one(".result__snippet")
+                add(
+                    a.get("href", ""),
+                    a.get_text(" ", strip=True),
+                    snippet_node.get_text(" ", strip=True) if snippet_node else "",
+                )
+                if len(results) >= FREE_MAX_SEARCH_RESULTS:
+                    return results
     except Exception:
-        return []
+        pass
+
+    # 2. Bing public HTML fallback.
+    if len(results) < FREE_MAX_SEARCH_RESULTS:
+        try:
+            r = requests.get(
+                "https://www.bing.com/search",
+                params={"q": query, "count": FREE_MAX_SEARCH_RESULTS},
+                headers={**UA_DESKTOP, "Accept-Language": "en-US,en;q=0.8"},
+                timeout=FREE_SEARCH_TIMEOUT,
+            )
+            if r.status_code == 200 and r.text:
+                soup = BeautifulSoup(r.text, "html.parser")
+                for box in soup.select("li.b_algo"):
+                    a = box.select_one("h2 a[href]")
+                    if not a:
+                        continue
+                    snippet_node = box.select_one(".b_caption p") or box.find("p")
+                    add(
+                        a.get("href", ""),
+                        a.get_text(" ", strip=True),
+                        snippet_node.get_text(" ", strip=True) if snippet_node else "",
+                    )
+                    if len(results) >= FREE_MAX_SEARCH_RESULTS:
+                        return results
+        except Exception:
+            pass
+
+    # 3. Google HTML fallback. Only used when the first two engines are inconclusive.
+    if len(results) < FREE_MAX_SEARCH_RESULTS:
+        try:
+            r = requests.get(
+                "https://www.google.com/search",
+                params={"q": query, "num": FREE_MAX_SEARCH_RESULTS},
+                headers={**UA_DESKTOP, "Accept-Language": "en-US,en;q=0.8"},
+                timeout=FREE_SEARCH_TIMEOUT,
+            )
+            if r.status_code == 200 and r.text:
+                soup = BeautifulSoup(r.text, "html.parser")
+                for a in soup.select("div.yuRUbf > a[href], a[href]"):
+                    h3 = a.find("h3")
+                    if not h3:
+                        continue
+                    href = a.get("href", "")
+                    if href.startswith("/url?"):
+                        try:
+                            qs = parse_qs(urlparse(href).query)
+                            href = qs.get("q", [""])[0]
+                        except Exception:
+                            pass
+                    add(href, h3.get_text(" ", strip=True), "")
+                    if len(results) >= FREE_MAX_SEARCH_RESULTS:
+                        return results
+        except Exception:
+            pass
+
+    return results
 
 
 def _freeqa_is_government(url):
@@ -6955,10 +7135,11 @@ def _freeqa_entity_match_score(entity, title, snippet, url):
     return len(e & hay) / max(len(e), 1)
 
 
-def _freeqa_official_candidate(result_item, entity=""):
+def _freeqa_official_candidate(result_item, entity="", context=""):
     url = result_item.get("url", "")
     if not url or _qa_blocked_source(url):
         return False, "none", 0.0
+
     host = _qa_host(url)
     text = f"{result_item.get('title','')} {result_item.get('snippet','')}".lower()
     if any(h in text for h in _FREEQA_NONOFFICIAL_HINTS):
@@ -6966,18 +7147,42 @@ def _freeqa_official_candidate(result_item, entity=""):
     if _freeqa_is_government(url):
         return True, "government", 1.0
 
-    em = _freeqa_entity_match_score(entity, result_item.get("title", ""), result_item.get("snippet", ""), url)
+    em = _freeqa_entity_match_score(
+        entity,
+        result_item.get("title", ""),
+        result_item.get("snippet", ""),
+        url,
+    )
     title_low = result_item.get("title", "").lower()
-    # Strong first-party clues: exact entity in result title/host or explicit "official" wording.
-    official_word = "official" in title_low or "official" in result_item.get("snippet", "").lower()
+    snippet_low = result_item.get("snippet", "").lower()
+    official_word = "official" in title_low or "official" in snippet_low
+
     host_tokens = set(_freeqa_content_tokens(host.replace(".", " ").replace("-", " ")))
     entity_tokens = set(_freeqa_content_tokens(entity))
-    host_overlap = len(host_tokens & entity_tokens) / max(len(entity_tokens), 1) if entity_tokens else 0.0
+    context_tokens = set(_freeqa_content_tokens(context))
+
+    host_overlap = (
+        len(host_tokens & entity_tokens) / max(len(entity_tokens), 1)
+        if entity_tokens else 0.0
+    )
+    context_host_overlap = (
+        len(host_tokens & context_tokens) / max(min(len(context_tokens), 4), 1)
+        if context_tokens else 0.0
+    )
+
+    # Direct first-party domain match (e.g. elsclubdubai.com for The Els Club).
     if em >= 0.75 and (official_word or host_overlap >= 0.40):
         return True, "official_organisation", max(em, host_overlap)
+
+    # Community/project official site can be branded by the parent entity rather than
+    # the exact sub-project. Example: Victory Heights on DubaiSportsCity.ae.
+    if em >= 0.75 and context_host_overlap >= 0.35:
+        return True, "official_project", max(em, context_host_overlap)
+
     if em >= 0.90 and host_overlap >= 0.25:
         return True, "official_project", max(em, host_overlap)
-    return False, "none", em
+
+    return False, "none", max(em, host_overlap, context_host_overlap)
 
 
 @lru_cache(maxsize=256)
@@ -7071,7 +7276,7 @@ def _freeqa_verify_claim(claim, kind, target_topic=""):
 
     candidates = []
     for item in results:
-        ok, source_type, confidence = _freeqa_official_candidate(item, entity=entity)
+        ok, source_type, confidence = _freeqa_official_candidate(item, entity=entity, context=target_topic)
         if ok:
             candidates.append((confidence, source_type, item))
     candidates.sort(key=lambda x: x[0], reverse=True)
@@ -7241,7 +7446,7 @@ def _freeqa_alt_entity_findings(article_soup, target_topic=""):
 
             # Conservative candidate rule: a close spelling variant, or the only named
             # entity in the article using that distinctive project suffix.
-            if best_ratio < 0.72 and len(same_suffix) != 1:
+            if best_ratio < 0.68 and len(same_suffix) != 1:
                 continue
 
             pair_key = (alt_key, entity_similarity_key(expected_entity))
@@ -7279,6 +7484,55 @@ def _freeqa_alt_entity_findings(article_soup, target_topic=""):
 
     return rows
 
+def _qa_title_case_heading(value):
+    """Bayut-style English Title Case while keeping short connector words lowercase."""
+    text = re.sub(r"\s+", " ", value or "").strip()
+    if not text:
+        return text
+
+    terminal = ""
+    if text[-1:] in "?!:":
+        terminal = text[-1]
+        text = text[:-1].rstrip()
+
+    small = {"a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "nor", "of", "on", "or", "per", "the", "to", "via", "vs", "with"}
+    acronyms = {"UAE", "AED", "ROI", "FAQ", "FAQs", "JVC", "JLT", "JBR", "DIFC", "RTA", "DLD", "MBR"}
+    parts = text.split()
+    fixed = []
+
+    for i, token in enumerate(parts):
+        raw = token
+        prefix = ""
+        suffix = ""
+        while raw and not raw[0].isalnum():
+            prefix += raw[0]
+            raw = raw[1:]
+        while raw and not raw[-1].isalnum():
+            suffix = raw[-1] + suffix
+            raw = raw[:-1]
+
+        if not raw:
+            fixed.append(token)
+            continue
+        if raw.upper() in acronyms:
+            core = raw.upper()
+        elif i not in {0, len(parts) - 1} and raw.casefold() in small:
+            core = raw.casefold()
+        elif raw[:1].isdigit():
+            # Keep 1-bedroom / 3BR style tokens stable.
+            core = raw
+        else:
+            # Title-case hyphenated words without damaging apostrophes/numbers.
+            core = "-".join(x[:1].upper() + x[1:].lower() if x else x for x in raw.split("-"))
+        fixed.append(prefix + core + suffix)
+
+    corrected = " ".join(fixed)
+    first = parts[0].casefold() if parts else ""
+    if not terminal and first in {"where", "what", "why", "which", "who", "when"}:
+        terminal = "?"
+    return corrected + terminal
+
+
 def _freeqa_local_findings(article_soup, body_text, target_topic=""):
     """Free high-confidence editorial checks that do not need external evidence."""
     rows = []
@@ -7288,61 +7542,151 @@ def _freeqa_local_findings(article_soup, body_text, target_topic=""):
     texts += [("Image Caption", x) for x in fields.get("image_captions", [])]
 
     seen = set()
+
+    def add_local(finding_type, issue, result_text, action, location="Article text", source="Article itself"):
+        key = (finding_type, re.sub(r"\s+", " ", issue).casefold())
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append({
+            "Check": issue,
+            "Status": FAIL,
+            "Result": result_text + (f" Location: {location}." if location != "Article text" else ""),
+            "Action Needed": action,
+            "Why": "High-confidence editorial rule based on the article itself; no external source is required.",
+            "Official Source": source,
+            "Finding Type": finding_type,
+            "_internal_status": FAIL,
+            "_rule": dict(CONTENT_RULES).get("Official Source Verification", ""),
+            "_system_uses": "Free deterministic editorial QA checks",
+            "_evidence_finding": True,
+        })
+
     for location, text in texts:
         low = (text or "").lower()
-        local = []
+
         if re.search(r"\bthat[’']?s a wrap\s+our\b", low):
-            local.append((
+            add_local(
                 "Grammar & Wording",
                 "That’s a wrap our round-up → That’s a wrap on our round-up",
-                "Grammar error. Add ‘on’ after ‘wrap’.",
+                "Grammar error. The preposition ‘on’ is missing.",
                 "Change it to: “That’s a wrap on our round-up”.",
-            ))
+                location,
+            )
+
         if re.search(r"\baverage\b[^.!?]{0,120}\bstarts? from\b", low):
             m = re.search(r"[^.!?]{0,80}\baverage\b[^.!?]{0,120}\bstarts? from\b[^.!?]{0,80}", text, flags=re.I)
             excerpt = re.sub(r"\s+", " ", m.group(0)).strip() if m else "average ... starts from"
-            local.append((
+            add_local(
                 "Grammar & Wording",
                 excerpt,
                 "Incorrect data wording. An average does not ‘start from’ a value.",
                 "Use ‘The average … is X’ for an average, or ‘… starts from X’ only for a minimum/starting value.",
-            ))
+                location,
+            )
+
         if re.search(r"\bi\s+nto\b", text, flags=re.I):
-            local.append((
+            add_local(
                 "Grammar & Wording",
                 "i nto → into",
                 "Typographical error. The word ‘into’ has been split incorrectly.",
                 "Replace ‘i nto’ with ‘into’.",
-            ))
-        # High-confidence singular Residence/Club/Tower + bare 'offer' construction.
+                location,
+            )
+
+        # Subject-verb agreement for a singular named Residence/Club/Tower.
         m = re.search(r"\b([A-Z][A-Za-z0-9&'’.-]*(?:\s+[A-Z][A-Za-z0-9&'’.-]*){1,5}\s+(?:Residence|Club|Tower))\s+offer\b", text or "")
         if m:
-            local.append((
+            add_local(
                 "Grammar & Wording",
                 f"{m.group(1)} offer → {m.group(1)} offers",
                 "Subject-verb agreement error. The named entity is singular.",
                 f"Change ‘{m.group(1)} offer’ to ‘{m.group(1)} offers’.",
-            ))
+                location,
+            )
 
-        for check, issue, result_text, action in local:
-            key = (check, issue)
-            if key in seen:
-                continue
-            seen.add(key)
-            row = {
-                "Check": issue,
-                "Status": FAIL,
-                "Result": result_text + (f" Location: {location}." if location != "Article text" else ""),
-                "Action Needed": action,
-                "Why": "High-confidence editorial rule based on the article itself; no external source is required.",
-                "Official Source": "Article itself",
-                "Finding Type": check,
-                "_internal_status": FAIL,
-                "_rule": dict(CONTENT_RULES).get("Official Source Verification", ""),
-                "_system_uses": "Free deterministic grammar/data wording checks",
-                "_evidence_finding": True,
-            }
-            rows.append(row)
+        # Awkward duplicate determiner: 'the spectacular The Els Club'.
+        m = re.search(
+            r"\bthe\s+(?:spectacular|stunning|beautiful|iconic|impressive|famous)\s+(The\s+[A-Z][A-Za-z0-9&'’.-]*(?:\s+[A-Z][A-Za-z0-9&'’.-]*){1,5})",
+            text or "",
+            flags=re.I,
+        )
+        if m:
+            entity = re.sub(r"\s+", " ", m.group(1)).strip()
+            add_local(
+                "Grammar & Wording",
+                f"the spectacular {entity} → {entity}",
+                "Awkward grammatical construction caused by a duplicated determiner and promotional adjective.",
+                f"Use ‘{entity}’ without ‘the spectacular’.",
+                location,
+            )
+
+        # Coordinated plural bedrooms/units incorrectly paired with singular rent/unit/is.
+        m = re.search(
+            r"\bthe\s+average\s+annual\s+rent\s+for\s+(?:a\s+)?(\d+)\s+and\s+(\d+)\s*[- ]\s*bed(?:room)?\s+unit\s+is\b",
+            text or "",
+            flags=re.I,
+        )
+        if m:
+            a, b = m.group(1), m.group(2)
+            add_local(
+                "Grammar & Wording",
+                f"The average annual rent for a {a} and {b}-bed unit is…",
+                "Singular/plural agreement error. Two unit types are being discussed, so the noun and verb should be plural.",
+                f"Use ‘The average annual rents for {a} and {b}-bedroom units are…’.",
+                location,
+            )
+
+        # Space before punctuation, e.g. 'Dubai , Dubai Sports City'.
+        m = re.search(r"\b([A-Za-z][A-Za-z'’.-]*)\s+([,;:.!?])", text or "")
+        if m:
+            bad = f"{m.group(1)} {m.group(2)}"
+            good = f"{m.group(1)}{m.group(2)}"
+            add_local(
+                "Grammar & Wording",
+                f"{bad} → {good}",
+                "Incorrect spacing before punctuation.",
+                f"Remove the space before ‘{m.group(2)}’.",
+                location,
+            )
+
+    # English editorial heading case. Only flag headings with 4+ words to avoid
+    # over-policing short proper names/project headings.
+    for item in heading_sections(article_soup):
+        heading = re.sub(r"\s+", " ", (item.get("heading") or "")).strip()
+        if not heading or len(heading.split()) < 4 or re.search(r"[\u0600-\u06FF]", heading):
+            continue
+        corrected = _qa_title_case_heading(heading)
+        if corrected != heading:
+            # Ignore changes that only affect a terminal colon on non-question headings.
+            add_local(
+                "Heading / SEO",
+                f"{heading} → {corrected}",
+                "Editorial heading is not in the required English Title Case/question format.",
+                f"Change the heading to ‘{corrected}’.",
+                "Heading",
+            )
+
+    # Promotional/fluffy wording. Report a single editorial-style issue with all matches.
+    promo_patterns = [
+        (r"\bgreat option\b", "great option"),
+        (r"\bperfect(?: choice| option)?\b", "perfect"),
+        (r"\bspectacular\b", "spectacular"),
+        (r"\bhighly sought[- ]after\b", "highly sought-after"),
+    ]
+    promo_hits = []
+    low_body = (body_text or "").lower()
+    for pattern, label in promo_patterns:
+        if re.search(pattern, low_body, flags=re.I):
+            promo_hits.append(label)
+    if promo_hits:
+        listed = ", ".join(f"‘{x}’" for x in promo_hits)
+        add_local(
+            "Editorial Style",
+            "Promotional/fluffy wording",
+            f"Promotional or subjective wording detected: {listed}. These phrases add little verifiable information.",
+            "Reduce or replace these phrases with specific, factual descriptions where possible.",
+        )
 
     # Search-intent mismatch for rental pages with investment FAQ/question wording.
     topic_low = (target_topic or "").lower()
@@ -7353,20 +7697,12 @@ def _freeqa_local_findings(article_soup, body_text, target_topic=""):
             combined = f"{h} {section}".lower()
             if "invest" in combined and any(q in combined for q in ["popular", "area", "where", "best"]):
                 issue = h or "Investment FAQ"
-                row = {
-                    "Check": issue,
-                    "Status": FAIL,
-                    "Result": "Search-intent mismatch. This investment-focused FAQ/section does not closely match the page’s rental intent.",
-                    "Action Needed": "Replace it with a rental-focused FAQ or section.",
-                    "Why": "The page topic is rental-focused while this section is primarily investment-focused.",
-                    "Official Source": "Article itself",
-                    "Finding Type": "Search Intent",
-                    "_internal_status": FAIL,
-                    "_rule": dict(CONTENT_RULES).get("Official Source Verification", ""),
-                    "_system_uses": "Article title/H1/topic and FAQ/heading text",
-                    "_evidence_finding": True,
-                }
-                rows.append(row)
+                add_local(
+                    "Search Intent",
+                    issue,
+                    "Search-intent mismatch. This investment-focused FAQ/section does not closely match the page’s rental intent.",
+                    "Replace it with a rental-focused FAQ or section.",
+                )
                 break
 
     return rows
@@ -7424,13 +7760,11 @@ def _summary_issue_row(check_name, items, no_issue_text, source_default="", why_
 
 def official_source_content_checks(url, soup, body_text, focus_keyword="", secondary_keywords=None):
     """
-    Return only compact issue-summary rows for the Content table.
+    Compact issue-summary rows for the Content table.
 
-    Important factual rule:
-    - A factual claim is listed under Facts Issues ONLY when an official/primary
-      source was actually fetched and the verifier found a direct contradiction.
-    - Unverified claims are NOT shown as REVIEW and are NOT treated as errors.
-    - Confirmed-correct facts are not listed as mistakes.
+    Factual rule:
+    - Facts Issues contains ONLY claims directly contradicted by a fetched official/primary source.
+    - Unverified claims are omitted instead of being labelled incorrect.
     """
     try:
         article_soup = main_content_node(soup)
@@ -7441,20 +7775,33 @@ def official_source_content_checks(url, soup, body_text, focus_keyword="", secon
         local_rows = _freeqa_local_findings(article_soup, body_text, target_topic=target_topic)
         alt_rows = _freeqa_alt_entity_findings(article_soup, target_topic=target_topic)
 
-        grammar_items = [
-            r for r in local_rows
-            if r.get("Finding Type") == "Grammar & Wording" and r.get("Status") == FAIL
-        ]
-        intent_items = [
-            r for r in local_rows
-            if r.get("Finding Type") == "Search Intent" and r.get("Status") == FAIL
-        ]
+        grammar_items = [r for r in local_rows if r.get("Finding Type") == "Grammar & Wording" and r.get("Status") == FAIL]
+        heading_items = [r for r in local_rows if r.get("Finding Type") == "Heading / SEO" and r.get("Status") == FAIL]
+        style_items = [r for r in local_rows if r.get("Finding Type") == "Editorial Style" and r.get("Status") == FAIL]
+        intent_items = [r for r in local_rows if r.get("Finding Type") == "Search Intent" and r.get("Status") == FAIL]
         entity_items = [
             r for r in alt_rows
             if r.get("Finding Type") == "Entity Accuracy"
             and r.get("Status") == FAIL
             and r.get("Official Source")
         ]
+
+        # Internal-link destination title-tag mismatches.
+        link_items = []
+        inventory = content_internal_link_inventory(article_soup, url)
+        for issue in internal_link_title_mismatches(inventory):
+            link_items.append({
+                "Check": f"{issue.get('anchor_text', 'Internal link')} internal link",
+                "Status": FAIL,
+                "Result": (
+                    f"Destination page has an unrelated title tag: ‘{issue.get('target_title', '')}’. "
+                    f"The linked anchor is ‘{issue.get('anchor_text', '')}’."
+                ),
+                "Action Needed": "Correct the destination page title tag or update the link if it points to the wrong page.",
+                "Why": "The named internal-link anchor has essentially no semantic overlap with the destination title tag.",
+                "Official Source": issue.get("final_url") or issue.get("url", ""),
+                "Finding Type": "Internal Link",
+            })
 
         # Research factual candidates, but keep ONLY officially proven contradictions.
         fact_items = []
@@ -7463,14 +7810,11 @@ def official_source_content_checks(url, soup, body_text, focus_keyword="", secon
             claim = item["text"]
             kind = item["kind"]
             verification = _freeqa_verify_claim(claim, kind, target_topic=target_topic)
-
             if verification.get("status") != FAIL:
                 continue
             source = re.sub(r"\s+", " ", str(verification.get("source", "") or "")).strip()
             if not source:
-                # A fact is never called wrong without a cited official source.
                 continue
-
             fact_items.append({
                 "Check": _freeqa_entity_phrase(claim) or claim[:90],
                 "Status": FAIL,
@@ -7481,70 +7825,61 @@ def official_source_content_checks(url, soup, body_text, focus_keyword="", secon
                 "Finding Type": "Factual Accuracy",
             })
 
-        rows = [
-            _summary_issue_row(
-                "Grammar Issues",
-                grammar_items,
-                "No high-confidence grammar or wording mistakes were found by the article-level checks.",
-                source_default="Article itself",
-                why_text="Lists only high-confidence grammar, typo and data-wording mistakes detected directly in the article, captions or ALT text.",
-            ),
-            _summary_issue_row(
-                "Facts Issues",
-                fact_items,
-                "No factual error was proven from an official source in this audit.",
-                source_default="",
-                why_text="Only factual statements directly contradicted by a fetched official or primary source are listed. Unverified claims are omitted rather than labelled incorrect.",
-            ),
-            _summary_issue_row(
-                "Entity / Image Issues",
-                entity_items,
-                "No officially confirmed entity-name mistake was found in image ALT text.",
-                source_default="",
-                why_text="Normal descriptive ALT text is not treated as a factual claim. This row lists only specific entity-name mismatches confirmed by an official source.",
-            ),
-            _summary_issue_row(
-                "Search Intent Issues",
-                intent_items,
-                "No clear search-intent mismatch was found by the focused article checks.",
-                source_default="Article itself",
-                why_text="Lists only clear sections or FAQs that conflict with the article's primary intent.",
-            ),
-        ]
-        return rows
-
-    except Exception as exc:
-        # Do not turn free-search/network failure into dozens of REVIEW claims.
-        # Grammar/search-intent checks are still useful even if official web research fails.
         return [
             _summary_issue_row(
-                "Grammar Issues",
-                [],
-                "Grammar summary could not be completed in this run.",
+                "Grammar Issues", grammar_items,
+                "No high-confidence grammar, typo, punctuation or data-wording mistakes were found.",
                 source_default="Article itself",
-                why_text=f"Content summary encountered {type(exc).__name__}; no factual claim was labelled wrong without official evidence.",
+                why_text="Lists high-confidence grammar, typo, punctuation and wording mistakes detected directly in article text, captions or ALT text.",
             ),
             _summary_issue_row(
-                "Facts Issues",
-                [],
+                "Facts Issues", fact_items,
                 "No factual error was proven from an official source in this audit.",
                 source_default="",
-                why_text="Search/network failure is not treated as evidence that a factual claim is wrong.",
+                why_text="Only factual statements directly contradicted by a fetched official or primary source are listed. Unverified claims are omitted.",
             ),
             _summary_issue_row(
-                "Entity / Image Issues",
-                [],
-                "No officially confirmed entity-name mistake was produced in this run.",
+                "Entity / Image Issues", entity_items,
+                "No officially confirmed entity-name mistake was found in image ALT text.",
                 source_default="",
-                why_text="ALT descriptions are not flagged merely because an official source could not be found.",
+                why_text="Normal descriptive ALT text is not treated as a factual claim. Only specific entity-name mismatches confirmed by an official source are listed.",
             ),
             _summary_issue_row(
-                "Search Intent Issues",
-                [],
-                "Search-intent summary could not be completed in this run.",
+                "Heading / SEO Issues", heading_items,
+                "No clear heading-case or heading-format issue was found.",
                 source_default="Article itself",
-                why_text="No speculative search-intent error was added.",
+                why_text="Checks English editorial headings for the required Title Case/question format.",
             ),
+            _summary_issue_row(
+                "Internal Link Issues", link_items,
+                "No named internal link was found pointing to a page with an unrelated title tag.",
+                source_default="",
+                why_text="Fetches destination title tags for named internal editorial links and flags strong entity/title mismatches.",
+            ),
+            _summary_issue_row(
+                "Search Intent Issues", intent_items,
+                "No clear search-intent mismatch was found by the focused article checks.",
+                source_default="Article itself",
+                why_text="Lists clear sections or FAQs that conflict with the article's primary intent.",
+            ),
+            _summary_issue_row(
+                "Editorial Style Issues", style_items,
+                "No configured promotional/fluffy wording was found.",
+                source_default="Article itself",
+                why_text="Flags subjective promotional wording that should be replaced with specific factual language where possible.",
+            ),
+        ]
+
+    except Exception as exc:
+        # Never fabricate an issue because a free network/search check failed.
+        return [
+            _summary_issue_row("Grammar Issues", [], "Grammar summary could not be completed in this run.", source_default="Article itself", why_text=f"Content summary encountered {type(exc).__name__}."),
+            _summary_issue_row("Facts Issues", [], "No factual error was proven from an official source in this audit.", why_text="Search/network failure is not evidence that a fact is wrong."),
+            _summary_issue_row("Entity / Image Issues", [], "No officially confirmed entity-name mistake was produced in this run.", why_text="ALT descriptions are not flagged just because a source could not be found."),
+            _summary_issue_row("Heading / SEO Issues", [], "No confirmed heading-format issue was produced in this run.", source_default="Article itself", why_text="No speculative issue was added."),
+            _summary_issue_row("Internal Link Issues", [], "No confirmed destination-title mismatch was produced in this run.", why_text="Network failure is not treated as a link-title mismatch."),
+            _summary_issue_row("Search Intent Issues", [], "No confirmed search-intent issue was produced in this run.", source_default="Article itself", why_text="No speculative issue was added."),
+            _summary_issue_row("Editorial Style Issues", [], "No configured promotional/fluffy wording was produced in this run.", source_default="Article itself", why_text="No speculative issue was added."),
         ]
 
 
