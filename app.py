@@ -42,8 +42,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.39 BODY EXTERNAL LINK INVENTORY"
-ENGINE_BUILD = "2026.08.13.8"
+APP_VERSION = "V18.40 EXTERNAL LINKS FIXED"
+ENGINE_BUILD = "2026.08.13.9"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -5909,9 +5909,9 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
 
     # Cloaking must be based on the isolated editorial article, not dynamic
     # property cards/widgets that can vary by user agent or request.
-    desktop_core = keyword_stuffing_text(soup)
-    bot_core = keyword_stuffing_text(bot_soup)
-    mobile_core = keyword_stuffing_text(mobile_soup)
+    desktop_core = keyword_stuffing_editorial_text(soup)
+    bot_core = keyword_stuffing_editorial_text(bot_soup)
+    mobile_core = keyword_stuffing_editorial_text(mobile_soup)
     sim_bot = editorial_similarity(desktop_core, bot_core)
 
     desktop_dest = normalized_destination(desktop_r.url)
