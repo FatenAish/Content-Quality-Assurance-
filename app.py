@@ -42,8 +42,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.40 EXTERNAL LINKS FIXED"
-ENGINE_BUILD = "2026.08.13.9"
+APP_VERSION = "V18.41 HIDDEN LINKS BODY INVENTORY"
+ENGINE_BUILD = "2026.08.13.10"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -1041,7 +1041,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "FAIL only when an actual <a href> link is deliberately concealed by supported HTML/CSS hiding signals and no legitimate interface, responsive or accessibility purpose is detected. Empty anchors are not hidden links by themselves. Self references to the current article are ignored."),
+    ("Hidden Links", "Inspect every external <a href> occurrence inside the isolated editorial article body. FAIL when an external link uses an empty, whitespace-only or punctuation-only anchor, or when the anchor/ancestor is concealed by supported HTML/CSS signals such as display:none, visibility:hidden, opacity:0, font-size:0, zero dimensions, off-screen positioning or clipping. Menus, sidebars, comments, social buttons, newsletters, cards and other UI modules are excluded."),
     ("Link Spam", "Review all external links found inside the isolated editorial body, including punctuation-only, whitespace-only, empty and image anchors. FAIL only when evidence shows links were inserted primarily to manipulate rankings; unusual anchor placement alone is REVIEW."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
@@ -1100,7 +1100,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final destination and redirect-chain comparison; content parity is handled separately by Mobile Content",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Fetched HTML <a href> elements, same-page exclusion, HTML/CSS hiding signals, and legitimate UI/accessibility context classification; empty anchors alone are excluded",
+    "Hidden Links": "Complete external-link inventory from the isolated editorial body, exact anchor representation, empty/whitespace/punctuation anchor detection, supported source-level HTML/CSS hiding signals on anchors and ancestors, and UI/module exclusions",
     "Keyword Stuffing": "Editorial article text only, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context; TruBroker/property widgets, banners, newsletter, social UI and other embedded modules are excluded",
     "Link Spam": "Complete isolated-body external-link inventory, exact anchor representation, anchor type, destination domain, repeated anchor analysis and suspicious punctuation/blank anchor detection",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
@@ -2704,7 +2704,7 @@ DEFAULT_ACTIONS = {
     "Sneaky Redirect": "Remove deceptive or crawler specific redirects. Keep legitimate redirects consistent for users and crawlers.",
     "Device Spam Redirect": "Use the same relevant destination and primary content for desktop and mobile users.",
     "Hidden Text": "Make editorial text visible unless it is legitimately hidden for interface, responsive or accessibility reasons.",
-    "Hidden Links": "Remove only deliberately concealed links. Do not treat empty anchors, visible card links, image/icon links, or recognised interface/accessibility controls as hidden-link spam.",
+    "Hidden Links": "Remove or rewrite external links attached to empty, whitespace-only or punctuation-only anchors, and remove links concealed with supported hiding techniques. Keep legitimate visible editorial links. Menus, sidebars, comments, social controls, newsletters, cards and other UI modules are excluded.",
     "Keyword Stuffing": "Reduce repeated query phrases that read unnaturally. Keep necessary location and entity names when editorially justified.",
     "Link Spam": "Remove or rewrite manipulative keyword rich links and repeated commercial anchor patterns. Keep editorial links relevant and natural.",
     "Hacked Content": "Remove injected spam content, secure the CMS and plugins, rotate credentials and verify the clean page after remediation.",
@@ -3238,120 +3238,114 @@ def is_same_page_link(url, base_url):
     except Exception:
         return False
 
-def static_hidden_link_details(soup, base_url):
+def static_hidden_link_details(article_soup, base_url):
     """
-    Detect deliberately concealed links directly from fetched HTML.
+    Detect suspicious/hidden EXTERNAL links inside the isolated editorial body.
 
-    IMPORTANT:
-    - An empty <a href> is NOT a hidden link by itself.
-    - Visible property/listing cards, image links, icon links and CTA wrappers are
-      not hidden-link spam merely because the anchor has no text.
-    - A link is reported only when the anchor or an ancestor has a supported
-      source-level hiding signal and there is no recognised legitimate UI,
-      responsive or accessibility reason for that hiding.
-    - Each genuinely concealed <a href> occurrence is counted separately.
+    A body external <a href> is flagged when ANY of the following applies:
+    - anchor is completely empty
+    - anchor contains only whitespace / NBSP
+    - anchor contains only punctuation, e.g. ".", "," or "-"
+    - anchor or an ancestor uses a supported source-level hiding signal:
+      hidden/inert attribute, display:none, visibility:hidden/collapse,
+      opacity:0, font-size:0, zero width/height, off-screen positioning,
+      clipping, content-visibility:hidden or scale(0)
+
+    Menus, sidebars, comments, social sharing, newsletters, banners, property
+    cards, agent widgets, CTAs and other non-editorial UI modules are excluded
+    by content_external_link_inventory() / is_body_content_anchor().
+
+    Every occurrence is preserved. The same URL linked normally and again on
+    "." or a blank space produces separate inventory records.
     """
     details = []
 
-    for occurrence_index, anchor in enumerate(
-        soup.find_all("a", href=True),
-        start=1,
-    ):
-        href = normalized_link_url(
-            anchor.get("href"),
-            base_url,
-        )
+    external_inventory = content_external_link_inventory(article_soup, base_url)
 
-        if not href:
+    for item in external_inventory:
+        anchor = item.get("_anchor_node")
+        if anchor is None:
             continue
 
-        # Ignore links back to the current article, including fragments.
-        if is_same_page_link(href, base_url):
-            continue
+        reasons = []
+        anchor_type = item.get("anchor_type") or ""
+        anchor_display = item.get("anchor_display") or "[EMPTY]"
 
-        # Empty anchors are not hidden links. Hidden Links requires an actual
-        # concealment signal on the anchor or one of its ancestors.
+        if anchor_type == "Empty":
+            reasons.append("empty anchor")
+        elif anchor_type == "Whitespace only":
+            reasons.append("whitespace-only anchor")
+        elif anchor_type == "Punctuation only":
+            reasons.append("punctuation-only anchor")
+
         hidden_element, hidden_reasons = hidden_ancestor_info(anchor)
-        if hidden_element is None:
+        if hidden_element is not None:
+            # The body inventory has already removed known UI modules, but keep
+            # this defensive context check to avoid responsive/accessibility UI
+            # false positives if a site-specific wrapper slips through.
+            context = nearest_editorial_context(anchor, max_chars=220)
+            ui_context = _token_string(
+                element_label(anchor),
+                element_label(hidden_element),
+                item.get("anchor_text"),
+                anchor.get("aria-label"),
+                anchor.get("title"),
+                anchor.get("role"),
+                item.get("url"),
+                context,
+            )
+            legitimate_reason = known_ui_reason_from_text(ui_context)
+
+            if not legitimate_reason:
+                reasons.extend(hidden_reasons)
+        else:
+            context = nearest_editorial_context(anchor, max_chars=220)
+
+        # No suspicious anchor and no supported concealment signal.
+        if not reasons:
             continue
 
-        anchor_text = re.sub(
-            r"\s+",
-            " ",
-            anchor.get_text(" ", strip=True),
-        ).strip()
+        # Stable de-duplicated reason order.
+        reasons = list(dict.fromkeys(reason for reason in reasons if reason))
 
-        anchor_html = re.sub(
-            r"\s+",
-            " ",
-            str(anchor),
-        ).strip()
-
-        # Determine whether the hiding is a recognised interface/accessibility
-        # behaviour rather than an SEO concealment pattern.
-        context = nearest_editorial_context(anchor)
-        ui_context = _token_string(
-            element_label(anchor),
-            element_label(hidden_element),
-            anchor_text,
-            anchor.get("aria-label"),
-            anchor.get("title"),
-            anchor.get("role"),
-            href,
-            context,
-        )
-        legitimate_reason = known_ui_reason_from_text(ui_context)
-
-        # Property/listing modules can contain hidden inactive carousel cards or
-        # clickable wrappers. Treat those as legitimate UI, not hidden-link spam.
-        widget_context = ui_context.casefold()
-        property_widget_patterns = (
-            "property-card", "property_card", "listing-card", "listing_card",
-            "property-listing", "property_listing", "listing-widget",
-            "listing_widget", "trubroker", "featured-property",
-            "featured_property", "property/details-",
-        )
-        if not legitimate_reason and any(p in widget_context for p in property_widget_patterns):
-            legitimate_reason = "Property/listing widget"
-
-        if legitimate_reason:
-            continue
+        anchor_html = re.sub(r"\s+", " ", str(anchor)).strip()
 
         details.append({
-            "occurrence": occurrence_index,
-            "url": href,
-            "anchor_text": anchor_text or "(empty)",
-            "hidden_element": element_label(hidden_element),
-            "hidden_because": ", ".join(hidden_reasons),
+            "occurrence": item.get("occurrence"),
+            "url": item.get("url"),
+            "anchor_text": item.get("anchor_text") or "",
+            "anchor_display": anchor_display,
+            "anchor_type": anchor_type,
+            "hidden_element": element_label(hidden_element) if hidden_element is not None else "",
+            "hidden_because": ", ".join(reasons),
             "status": FAIL,
-            "source": "Fetched HTML source",
+            "source": "Isolated editorial HTML body",
             "anchor_html": anchor_html[:500],
             "context": context,
-            "issue_type": "Hidden HTML link",
+            "issue_type": "Hidden/suspicious external link",
         })
 
     return details
 
-def hidden_link_details(soup, base_url):
+def hidden_link_details(article_soup, base_url):
     """
-    Hidden Links uses fetched HTML source only.
+    Hidden Links uses the isolated editorial article body as its scope.
 
-    A link is reported only when an actual <a href> exists in the fetched
-    HTML and that anchor or one of its HTML ancestors contains a supported
-    source-level hiding signal.
-
-    Rendered browser state is intentionally NOT used for this rule.
+    It shares the same external-link inventory used by the SEO External Links
+    report, so a link attached to ".", whitespace or an empty anchor cannot be
+    lost merely because it has no normal anchor text.
     """
     details = static_hidden_link_details(
-        soup,
+        article_soup,
         base_url,
     )
 
     return details, {
         "available": True,
-        "source": "Fetched HTML source only",
+        "source": "Isolated editorial HTML body + complete external-link inventory",
         "error": "",
     }
+
 
 def classify_hidden_text_static(node):
     reasons = hidden_reasons(node)
@@ -6047,8 +6041,10 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
             rules["Hidden Text"],
         ))
 
+    article_soup = main_content_node(soup)
+
     hidden_links, hidden_inventory = hidden_link_details(
-        soup,
+        article_soup,
         desktop_r.url,
     )
 
@@ -6063,12 +6059,21 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
             link_url = item.get("url") or "(URL unavailable)"
             issue_type = item.get("issue_type") or "Hidden link"
 
-            issue_lines.append(
-                f"{index}. {link_url} | {issue_type}"
+            anchor_display = item.get("anchor_display") or item.get("anchor_text") or "[EMPTY]"
+            anchor_type = item.get("anchor_type") or "Unknown"
+            hidden_because = item.get("hidden_because") or "suspicious anchor/concealment"
+            context = item.get("context") or ""
+
+            line = (
+                f"{index}. Anchor: {anchor_display} [{anchor_type}] | "
+                f"URL: {link_url} | Reason: {hidden_because}"
             )
+            if context:
+                line += f" | Context: {context}"
+            issue_lines.append(line)
 
         hidden_result = "\n".join(issue_lines)
-        hidden_action = "Remove or fix the hidden link instances listed in Result."
+        hidden_action = "Remove or rewrite each flagged external link. Use a meaningful visible anchor, or remove the link if it should not be present."
 
     else:
         hidden_status = PASS
@@ -6083,7 +6088,6 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         hidden_action,
     ))
 
-    article_soup = main_content_node(soup)
     page_internal, page_external = extract_page_links(soup, url)
 
     full_external_inventory = content_external_link_inventory(article_soup, url)
