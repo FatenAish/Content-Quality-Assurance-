@@ -42,8 +42,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.41 HIDDEN LINKS BODY INVENTORY"
-ENGINE_BUILD = "2026.08.13.10"
+APP_VERSION = "V18.42 HIDDEN LINKS ALL BODY LINKS"
+ENGINE_BUILD = "2026.08.13.11"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -1041,7 +1041,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "Inspect every external <a href> occurrence inside the isolated editorial article body. FAIL when an external link uses an empty, whitespace-only or punctuation-only anchor, or when the anchor/ancestor is concealed by supported HTML/CSS signals such as display:none, visibility:hidden, opacity:0, font-size:0, zero dimensions, off-screen positioning or clipping. Menus, sidebars, comments, social buttons, newsletters, cards and other UI modules are excluded."),
+    ("Hidden Links", "Inspect every HTTP(S) <a href> occurrence, internal or external, inside the isolated editorial article body. FAIL when an external link uses an empty, whitespace-only or punctuation-only anchor, or when the anchor/ancestor is concealed by supported HTML/CSS signals such as display:none, visibility:hidden, opacity:0, font-size:0, zero dimensions, off-screen positioning or clipping. Menus, sidebars, comments, social buttons, newsletters, cards and other UI modules are excluded."),
     ("Link Spam", "Review all external links found inside the isolated editorial body, including punctuation-only, whitespace-only, empty and image anchors. FAIL only when evidence shows links were inserted primarily to manipulate rankings; unusual anchor placement alone is REVIEW."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
@@ -1100,7 +1100,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final destination and redirect-chain comparison; content parity is handled separately by Mobile Content",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Complete external-link inventory from the isolated editorial body, exact anchor representation, empty/whitespace/punctuation anchor detection, supported source-level HTML/CSS hiding signals on anchors and ancestors, and UI/module exclusions",
+    "Hidden Links": "Complete body-link inventory (internal + external), exact anchor representation, empty/whitespace/punctuation anchor detection, source-level hiding signals, rendered Chromium computed styles when available, and UI/module exclusions",
     "Keyword Stuffing": "Editorial article text only, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context; TruBroker/property widgets, banners, newsletter, social UI and other embedded modules are excluded",
     "Link Spam": "Complete isolated-body external-link inventory, exact anchor representation, anchor type, destination domain, repeated anchor analysis and suspicious punctuation/blank anchor detection",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
@@ -3260,9 +3260,9 @@ def static_hidden_link_details(article_soup, base_url):
     """
     details = []
 
-    external_inventory = content_external_link_inventory(article_soup, base_url)
+    body_inventory = content_body_link_inventory(article_soup, base_url)
 
-    for item in external_inventory:
+    for item in body_inventory:
         anchor = item.get("_anchor_node")
         if anchor is None:
             continue
@@ -3319,33 +3319,332 @@ def static_hidden_link_details(article_soup, base_url):
             "hidden_element": element_label(hidden_element) if hidden_element is not None else "",
             "hidden_because": ", ".join(reasons),
             "status": FAIL,
-            "source": "Isolated editorial HTML body",
+            "source": "Isolated editorial HTML body (all HTTP(S) links)",
             "anchor_html": anchor_html[:500],
             "context": context,
-            "issue_type": "Hidden/suspicious external link",
+            "issue_type": f"Hidden/suspicious {str(item.get('link_scope', 'body')).lower()} link",
         })
 
     return details
 
+
+@lru_cache(maxsize=64)
+def _rendered_hidden_links_cached(page_url, _bucket):
+    """
+    Inspect computed browser styles for links inside the live editorial body.
+
+    This complements source-level inspection and catches hiding applied through
+    CSS classes / stylesheets, e.g. `.secret-link { display:none }`.
+    """
+    result = {
+        "available": False,
+        "items": [],
+        "error": "",
+    }
+
+    if not PLAYWRIGHT_AVAILABLE:
+        result["error"] = "Playwright is not available."
+        return result
+
+    article_selectors = [
+        "[itemprop='articleBody']",
+        ".entry-content",
+        ".post-content",
+        ".article-content",
+        ".post-body",
+        ".article-body",
+        ".single-post-content",
+        ".td-post-content",
+        "article",
+        "main",
+        "[role='main']",
+    ]
+
+    exclude_patterns = BODY_LINK_EXCLUDE_PATTERNS
+    exclude_href_patterns = BODY_LINK_EXCLUDE_HREF_PATTERNS
+
+    js = r"""
+    ({articleSelectors, excludePatterns, excludeHrefPatterns}) => {
+      function norm(s) {
+        return (s || "").replace(/\s+/g, " ").trim();
+      }
+
+      function attrsText(el) {
+        if (!el) return "";
+        return [
+          el.tagName || "",
+          el.id || "",
+          typeof el.className === "string" ? el.className : "",
+          el.getAttribute && (el.getAttribute("role") || ""),
+          el.getAttribute && (el.getAttribute("aria-label") || "")
+        ].join(" ").toLowerCase();
+      }
+
+      function excludedByUI(a, root) {
+        let n = a;
+        while (n && n !== root.parentElement) {
+          const tag = (n.tagName || "").toLowerCase();
+          if (["nav","aside","footer","form","button"].includes(tag)) return true;
+          const sig = attrsText(n);
+          if (excludePatterns.some(p => sig.includes(p))) return true;
+          if (n === root) break;
+          n = n.parentElement;
+        }
+        const href = (a.getAttribute("href") || "").toLowerCase();
+        if (excludeHrefPatterns.some(p => href.includes(p))) return true;
+        return false;
+      }
+
+      function bestRoot() {
+        let best = null;
+        let bestScore = -1;
+        for (let i = 0; i < articleSelectors.length; i++) {
+          for (const el of document.querySelectorAll(articleSelectors[i])) {
+            const textLen = norm(el.innerText || el.textContent || "").length;
+            const links = el.querySelectorAll("a[href]").length;
+            const score = textLen - Math.max(0, links - 10) * 2 + (articleSelectors.length - i) * 5000;
+            if (score > bestScore && textLen >= 150) {
+              best = el;
+              bestScore = score;
+            }
+          }
+        }
+        return best || document.body;
+      }
+
+      function classifyAnchor(a) {
+        const raw = a.textContent || "";
+        const normalized = norm(raw);
+        if (normalized) {
+          if (!/[\p{L}\p{N}_]/u.test(normalized)) {
+            return {type:"Punctuation only", display:normalized};
+          }
+          return {type:"Text", display:normalized};
+        }
+
+        if (raw && raw.trim() === "") {
+          return {type:"Whitespace only", display:"[WHITESPACE ONLY]"};
+        }
+
+        const img = a.querySelector("img");
+        if (img) {
+          const alt = norm(img.getAttribute("alt") || "");
+          return {type:"Image", display:alt ? `[IMAGE: ${alt}]` : "[IMAGE: no alt]"};
+        }
+
+        const icon = a.querySelector("svg,i,use");
+        if (icon) {
+          const label = norm(a.getAttribute("aria-label") || a.getAttribute("title") || "");
+          return {type:"Icon/SVG", display:label ? `[ICON/SVG: ${label}]` : "[ICON/SVG]"};
+        }
+
+        return {type:"Empty", display:"[EMPTY]"};
+      }
+
+      function computedReasons(a, root) {
+        const reasons = [];
+        let n = a;
+        while (n && n !== root.parentElement) {
+          const cs = getComputedStyle(n);
+          const rect = n.getBoundingClientRect();
+
+          if (n.hidden) reasons.push("hidden attribute");
+          if (n.hasAttribute && n.hasAttribute("inert")) reasons.push("inert attribute");
+          if (cs.display === "none") reasons.push("display:none (computed)");
+          if (cs.visibility === "hidden" || cs.visibility === "collapse") reasons.push(`visibility:${cs.visibility} (computed)`);
+
+          const opacity = parseFloat(cs.opacity || "1");
+          if (!Number.isNaN(opacity) && opacity <= 0.001) reasons.push("opacity:0 (computed)");
+
+          const fs = parseFloat(cs.fontSize || "16");
+          if (!Number.isNaN(fs) && fs <= 0.1) reasons.push("font-size:0 (computed)");
+
+          if ((rect.width <= 0.1 || rect.height <= 0.1) && n === a) {
+            reasons.push("zero-size anchor (rendered)");
+          }
+
+          if (
+            rect.right < -500 ||
+            rect.bottom < -500 ||
+            rect.left > window.innerWidth + 5000 ||
+            rect.top > window.innerHeight + 10000
+          ) {
+            reasons.push("off-screen positioning (rendered)");
+          }
+
+          const clip = (cs.clip || "").replace(/\s+/g,"").toLowerCase();
+          const clipPath = (cs.clipPath || "").replace(/\s+/g,"").toLowerCase();
+          if (clip === "rect(0px,0px,0px,0px)" || clip === "rect(0,0,0,0)" || clipPath === "inset(50%)") {
+            reasons.push("clipped (computed)");
+          }
+
+          if ((cs.contentVisibility || "").toLowerCase() === "hidden") {
+            reasons.push("content-visibility:hidden (computed)");
+          }
+
+          const transform = (cs.transform || "").toLowerCase();
+          if (transform === "matrix(0, 0, 0, 0, 0, 0)" || transform === "matrix(0,0,0,0,0,0)") {
+            reasons.push("scale(0) / zero transform (computed)");
+          }
+
+          if (n === root) break;
+          n = n.parentElement;
+        }
+        return [...new Set(reasons)];
+      }
+
+      const root = bestRoot();
+      const baseHost = location.hostname.replace(/^www\./, "").toLowerCase();
+      const rows = [];
+      let occurrence = 0;
+
+      for (const a of root.querySelectorAll("a[href]")) {
+        occurrence += 1;
+        if (excludedByUI(a, root)) continue;
+
+        let absolute = "";
+        try {
+          absolute = new URL(a.getAttribute("href"), location.href).href;
+        } catch (e) {
+          continue;
+        }
+
+        if (!/^https?:/i.test(absolute)) continue;
+
+        const rep = classifyAnchor(a);
+        const reasons = [];
+
+        if (rep.type === "Empty") reasons.push("empty anchor");
+        else if (rep.type === "Whitespace only") reasons.push("whitespace-only anchor");
+        else if (rep.type === "Punctuation only") reasons.push("punctuation-only anchor");
+
+        reasons.push(...computedReasons(a, root));
+
+        if (!reasons.length) continue;
+
+        let host = "";
+        try { host = new URL(absolute).hostname.replace(/^www\./, "").toLowerCase(); } catch (e) {}
+
+        const parentText = norm(
+          (a.closest("p,li,td,th,figcaption,h2,h3,h4,h5,h6,div,section") || a.parentElement || a).innerText || ""
+        ).slice(0, 220);
+
+        rows.push({
+          occurrence,
+          url: absolute.split("#")[0],
+          link_scope: host === baseHost ? "Internal" : "External",
+          anchor_display: rep.display,
+          anchor_type: rep.type,
+          hidden_because: [...new Set(reasons)].join(", "),
+          context: parentText,
+          source: "Rendered Chromium computed styles"
+        });
+      }
+
+      return rows;
+    }
+    """
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(
+                user_agent=UA_DESKTOP.get("User-Agent", ""),
+                viewport={"width": 1440, "height": 1200},
+            )
+            page.goto(
+                page_url,
+                wait_until="domcontentloaded",
+                timeout=PLAYWRIGHT_NAV_TIMEOUT,
+            )
+            page.wait_for_timeout(PLAYWRIGHT_SETTLE_MS)
+
+            items = page.evaluate(
+                js,
+                {
+                    "articleSelectors": ARTICLE_BODY_SELECTORS,
+                    "excludePatterns": exclude_patterns,
+                    "excludeHrefPatterns": exclude_href_patterns,
+                },
+            )
+            browser.close()
+
+        result["available"] = True
+        result["items"] = items or []
+        return result
+    except Exception as exc:
+        result["error"] = str(exc)
+        return result
+
+
+def rendered_hidden_link_details(page_url):
+    return _rendered_hidden_links_cached(
+        page_url,
+        cache_bucket(600),
+    )
+
+
+def _merge_hidden_link_details(static_items, rendered_items):
+    """
+    Merge static and rendered detections while retaining distinct occurrences.
+    """
+    merged = []
+    seen = set()
+
+    for item in list(static_items or []) + list(rendered_items or []):
+        key = (
+            item.get("url") or "",
+            item.get("anchor_display") or item.get("anchor_text") or "",
+            item.get("anchor_type") or "",
+            item.get("context") or "",
+            item.get("hidden_because") or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+
+        normalized = dict(item)
+        normalized.setdefault("status", FAIL)
+        normalized.setdefault("issue_type", f"Hidden/suspicious {str(item.get('link_scope', 'body')).lower()} link")
+        merged.append(normalized)
+
+    return merged
+
+
 def hidden_link_details(article_soup, base_url):
     """
-    Hidden Links uses the isolated editorial article body as its scope.
+    Hidden Links scans ALL HTTP(S) links in the isolated editorial body.
 
-    It shares the same external-link inventory used by the SEO External Links
-    report, so a link attached to ".", whitespace or an empty anchor cannot be
-    lost merely because it has no normal anchor text.
+    Source-level detection catches:
+      empty / whitespace / punctuation anchors and inline HTML/CSS hiding.
+
+    Rendered Chromium detection catches:
+      stylesheet/class-based display:none, visibility:hidden, opacity:0,
+      font-size:0, zero-size, off-screen, clipped and scale/content-visibility
+      hiding when Playwright/Chromium is available.
     """
-    details = static_hidden_link_details(
+    static_items = static_hidden_link_details(
         article_soup,
         base_url,
     )
 
-    return details, {
-        "available": True,
-        "source": "Isolated editorial HTML body + complete external-link inventory",
-        "error": "",
-    }
+    rendered = rendered_hidden_link_details(base_url)
+    rendered_items = rendered.get("items", []) if rendered.get("available") else []
 
+    details = _merge_hidden_link_details(
+        static_items,
+        rendered_items,
+    )
+
+    return details, {
+        "available": bool(rendered.get("available")),
+        "source": (
+            "Isolated editorial HTML body + rendered Chromium computed styles"
+            if rendered.get("available")
+            else "Isolated editorial HTML body only"
+        ),
+        "error": rendered.get("error", ""),
+    }
 
 def classify_hidden_text_static(node):
     reasons = hidden_reasons(node)
@@ -3895,11 +4194,17 @@ def external_anchor_representation(anchor):
 
 def is_body_content_anchor(anchor):
     """
-    Include real links inside the isolated editorial body even when the clickable
-    anchor is only punctuation, whitespace, empty HTML, an image or an icon.
+    Include every real <a href> occurrence anywhere inside the already-isolated
+    editorial article body, even when the link is:
+    - directly inside a generic div/span wrapper
+    - empty
+    - whitespace-only
+    - punctuation-only
+    - an image/icon link
 
-    Exclude known non-editorial modules such as social sharing, cards, banners,
-    agent widgets, related-content widgets, navigation and CTAs.
+    The only exclusions are known non-editorial UI/module contexts and known
+    utility href patterns. This prevents hidden links from escaping detection
+    merely because they are not inside a <p>, <li>, table cell or heading.
     """
     if body_link_has_excluded_container(anchor):
         return False
@@ -3908,23 +4213,16 @@ def is_body_content_anchor(anchor):
     if any(pattern in href_low for pattern in BODY_LINK_EXCLUDE_HREF_PATTERNS):
         return False
 
-    # Normal editorial copy and table/list content.
-    if anchor.find_parent(["p", "li", "td", "th", "figcaption", "h2", "h3", "h4", "h5", "h6"]) is not None:
-        return True
-
-    # Linked editorial images can live directly in a <figure>.
-    if anchor.find("img") is not None and anchor.find_parent("figure") is not None:
-        return True
-
-    return False
+    return True
 
 
-def content_external_link_inventory(article_soup, base_url):
+def content_body_link_inventory(article_soup, base_url):
     """
-    Return EVERY external HTTP(S) link occurrence in the isolated article body.
+    Return EVERY HTTP(S) <a href> occurrence in the isolated article body.
 
-    Occurrences are intentionally not deduplicated: if the same URL appears
-    once on normal text and once on "." or a blank space, both must be visible.
+    Internal and external links are both retained. Occurrences are never
+    deduplicated because a normal visible link and a second hidden "." link to
+    the same destination must appear as two separate records.
     """
     base_host = urlparse(base_url).netloc.lower().replace("www.", "")
     inventory = []
@@ -3942,7 +4240,7 @@ def content_external_link_inventory(article_soup, base_url):
             continue
 
         host = parsed.netloc.lower().replace("www.", "")
-        if not host or host == base_host:
+        if not host:
             continue
 
         rep = external_anchor_representation(anchor)
@@ -3959,6 +4257,7 @@ def content_external_link_inventory(article_soup, base_url):
             "occurrence": occurrence,
             "url": href,
             "host": host,
+            "link_scope": "Internal" if host == base_host else "External",
             "anchor_text": rep["anchor_text"],
             "anchor_display": rep["anchor_display"],
             "anchor_type": rep["anchor_type"],
@@ -3972,6 +4271,19 @@ def content_external_link_inventory(article_soup, base_url):
     return inventory
 
 
+def content_external_link_inventory(article_soup, base_url):
+    """
+    Return EVERY external HTTP(S) link occurrence in the isolated article body.
+
+    This is a filtered view of the complete body-link inventory. It is used for
+    the editor-facing External Links list. Hidden Links itself scans the full
+    internal + external body-link inventory.
+    """
+    return [
+        item
+        for item in content_body_link_inventory(article_soup, base_url)
+        if item.get("link_scope") == "External"
+    ]
 def external_link_inventory_text(inventory, validation=None):
     """
     Human-readable full list for the SEO Result cell.
@@ -6076,9 +6388,21 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         hidden_action = "Remove or rewrite each flagged external link. Use a meaningful visible anchor, or remove the link if it should not be present."
 
     else:
-        hidden_status = PASS
-        hidden_result = "No hidden links found."
-        hidden_action = ""
+        if hidden_inventory.get("available"):
+            hidden_status = PASS
+            hidden_result = (
+                "No hidden links found after scanning all HTTP(S) links in the isolated editorial body "
+                "and checking rendered Chromium computed styles."
+            )
+            hidden_action = ""
+        else:
+            hidden_status = REVIEW
+            hidden_result = (
+                "No source-level hidden links were found, but rendered computed-style verification was unavailable. "
+                "CSS-class or stylesheet-based hiding cannot be ruled out. "
+                f"Renderer detail: {hidden_inventory.get('error') or 'Chromium/Playwright unavailable.'}"
+            )
+            hidden_action = "Rerun where Playwright/Chromium is available before treating Hidden Links as clear."
 
     rows.append(result(
         "Hidden Links",
@@ -8781,7 +9105,7 @@ with st.sidebar:
             _robots_sitemaps_cached,
             _fetch_sitemap_document_cached,
             _find_url_in_sitemaps_cached,
-            _rendered_hidden_inventory_cached,
+            _rendered_hidden_links_cached,
             _probe_http_url_cached,
             _robots_access_cached,
         ]:
