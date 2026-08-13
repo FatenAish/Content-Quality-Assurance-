@@ -42,8 +42,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.36 EXPANDED CONTENT QA"
-ENGINE_BUILD = "2026.08.13.7"
+APP_VERSION = "V18.37 CLOAKING ACCESS FIX"
+ENGINE_BUILD = "2026.08.13.8"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -1037,8 +1037,9 @@ st.markdown(
 # -----------------------------
 
 SPAM_RULES = [
-    ("Cloaking", "Compare normal user and Googlebot responses. FAIL when materially different content is served specifically to search crawlers."),
-    ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
+    ("Cloaking", "Compare normal user and Googlebot-like responses only when both return usable page content. FAIL only for a confirmed material crawler-specific content or destination difference. Access errors, CAPTCHA, bot challenges and blocked requests are not cloaking by themselves."),
+    ("Crawler Access Issue", "REVIEW when the normal user and Googlebot-like requests do not have equivalent usable access, including HTTP 401/403/405/406/429, CAPTCHA, bot challenge, timeout-style error pages or other access restrictions. This is an access/bot-handling signal, not proof of cloaking."),
+    ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations after both responses are successfully accessible. Access-block or challenge redirects are REVIEW, not deceptive redirect FAILs."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
     ("Hidden Links", "FAIL only when an actual <a href> link is deliberately concealed by supported HTML/CSS hiding signals and no legitimate interface, responsive or accessibility purpose is detected. Empty anchors are not hidden links by themselves. Self references to the current article are ignored."),
@@ -1096,8 +1097,9 @@ CONTENT_RULES = [
 
 SYSTEM_USES = {
     # Spam
-    "Cloaking": "Desktop User Agent, Googlebot User Agent, final URL comparison, main content extraction, text similarity",
-    "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
+    "Cloaking": "Desktop User Agent and Googlebot-like User Agent, HTTP access-state validation, final URL comparison, main content extraction and text similarity only when both responses contain usable page content",
+    "Crawler Access Issue": "Desktop, Mobile and Googlebot-like HTTP status codes, short challenge/error-page detection, final response availability and bot/access restriction comparison",
+    "Sneaky Redirect": "Desktop User Agent, Googlebot-like User Agent, HTTP access-state validation, redirect handling and final destination comparison only after successful access",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final URL comparison, main content similarity",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
     "Hidden Links": "Fetched HTML <a href> elements, same-page exclusion, HTML/CSS hiding signals, and legitimate UI/accessibility context classification; empty anchors alone are excluded",
@@ -2672,8 +2674,9 @@ def content_issue_category(row):
 
 
 DEFAULT_ACTIONS = {
-    "Cloaking": "Serve the same primary editorial content and destination to normal users and Googlebot. Remove crawler specific SEO content or redirects.",
-    "Sneaky Redirect": "Remove deceptive or crawler specific redirects. Keep legitimate redirects consistent for users and crawlers.",
+    "Cloaking": "Serve the same primary editorial content and destination to normal users and Googlebot. Remove crawler-specific SEO content or redirects only when a material crawler-specific difference is confirmed.",
+    "Crawler Access Issue": "Check CDN, WAF, firewall, cache and bot-management rules. Make sure legitimate crawlers can access the intended article. Do not treat an access error by itself as cloaking.",
+    "Sneaky Redirect": "Remove deceptive or crawler-specific redirects only when both user and crawler requests are successfully accessible and the destination difference is confirmed. Investigate access-block redirects separately.",
     "Device Spam Redirect": "Use the same relevant destination and primary content for desktop and mobile users.",
     "Hidden Text": "Make editorial text visible unless it is legitimately hidden for interface, responsive or accessibility reasons.",
     "Hidden Links": "Remove only deliberately concealed links. Do not treat empty anchors, visible card links, image/icon links, or recognised interface/accessibility controls as hidden-link spam.",
@@ -5680,6 +5683,56 @@ def classify_counts(rows):
 # -----------------------------
 
 
+def response_access_state(response, min_article_words=40):
+    """
+    Decide whether a response is usable for crawler-vs-user content comparison.
+
+    Access errors and short anti-bot/challenge pages are not valid inputs for
+    cloaking or redirect-content comparison. This intentionally distinguishes
+    bot handling from cloaking.
+    """
+    if response is None:
+        return False, "request unavailable"
+
+    try:
+        status = int(getattr(response, "status_code", 0) or 0)
+    except Exception:
+        status = 0
+
+    if status in {401, 403, 405, 406, 429}:
+        return False, f"HTTP {status} access restriction"
+    if status >= 500:
+        return False, f"HTTP {status} server response"
+    if status < 200 or status >= 300:
+        return False, f"HTTP {status or 'unknown'} non-success response"
+
+    page_text = clean_text(soup_of(getattr(response, "text", "")))
+    article_text = main_content_text(soup_of(getattr(response, "text", "")))
+    page_words = word_count(page_text)
+    article_words = word_count(article_text)
+
+    challenge_markers = (
+        "captcha",
+        "verify you are human",
+        "are you a human",
+        "attention required",
+        "access denied",
+        "request blocked",
+        "security check",
+        "bot challenge",
+        "checking your browser",
+        "enable javascript and cookies",
+    )
+    low = page_text.lower()[:8000]
+    if page_words < 250 and any(marker in low for marker in challenge_markers):
+        return False, "anti-bot, CAPTCHA or access-challenge page"
+
+    if article_words < min_article_words:
+        return False, f"HTTP {status} but only {article_words} article words were extractable"
+
+    return True, f"HTTP {status} with usable article content"
+
+
 def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="", secondary_keywords=None):
     rows = []
     rules = dict(SPAM_RULES)
@@ -5689,72 +5742,155 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
     bot_text = main_content_text(soup_of(bot_r.text))
     mobile_text = main_content_text(soup_of(mobile_r.text))
 
-    sim_bot = similarity(desktop_text, bot_text)
+    desktop_usable, desktop_access_reason = response_access_state(desktop_r)
+    bot_usable, bot_access_reason = response_access_state(bot_r)
+    mobile_usable, mobile_access_reason = response_access_state(mobile_r)
+
+    desktop_status = getattr(desktop_r, "status_code", None)
+    bot_status = getattr(bot_r, "status_code", None)
+    mobile_status = getattr(mobile_r, "status_code", None)
+
     desktop_dest = normalized_destination(desktop_r.url)
     bot_dest = normalized_destination(bot_r.url)
     desktop_chain = response_redirect_chain(desktop_r)
     bot_chain = response_redirect_chain(bot_r)
 
-    if desktop_dest != bot_dest:
-        rows.append(result(
-            "Cloaking",
-            FAIL,
-            f"User and Googlebot like requests reached different final destinations: {desktop_r.url} vs {bot_r.url}.",
-            rules["Cloaking"],
-        ))
-    elif sim_bot < 0.72 and min(word_count(desktop_text), word_count(bot_text)) > 150:
-        rows.append(result(
-            "Cloaking",
-            FAIL,
-            f"Material user versus Googlebot like content difference detected ({sim_bot:.0%} similarity).",
-            rules["Cloaking"],
-        ))
-    elif sim_bot < 0.88:
+    # ---------------------------------------------------------
+    # Crawler access is evaluated BEFORE cloaking.
+    # A 403/401/429/CAPTCHA/challenge page is not cloaking proof.
+    # ---------------------------------------------------------
+    if desktop_usable and bot_usable:
+        crawler_access_status = PASS
+        crawler_access_note = (
+            f"Normal user and Googlebot-like requests both returned usable content "
+            f"(user HTTP {desktop_status}; crawler HTTP {bot_status})."
+        )
+    elif desktop_usable and not bot_usable:
+        crawler_access_status = REVIEW
+        crawler_access_note = (
+            f"Crawler Access Issue: the normal user request is usable (HTTP {desktop_status}) "
+            f"but the Googlebot-like request is not ({bot_access_reason}). "
+            "This may come from CDN, WAF, firewall or bot-management behaviour and does not prove cloaking."
+        )
+    elif not desktop_usable and bot_usable:
+        crawler_access_status = REVIEW
+        crawler_access_note = (
+            f"Crawler Access Issue: the Googlebot-like request is usable (HTTP {bot_status}) "
+            f"but the normal user request is not ({desktop_access_reason}). "
+            "The access difference requires investigation but is not enough to label cloaking."
+        )
+    else:
+        crawler_access_status = REVIEW
+        crawler_access_note = (
+            f"Crawler Access Issue: neither response is suitable for a cloaking comparison. "
+            f"Normal user: {desktop_access_reason}. Googlebot-like: {bot_access_reason}."
+        )
+    rows.append(result(
+        "Crawler Access Issue",
+        crawler_access_status,
+        crawler_access_note,
+        rules["Crawler Access Issue"],
+    ))
+
+    # ---------------------------------------------------------
+    # Cloaking comparison only runs when BOTH responses are usable.
+    # ---------------------------------------------------------
+    if not (desktop_usable and bot_usable):
         rows.append(result(
             "Cloaking",
             REVIEW,
-            f"User versus Googlebot like content similarity is {sim_bot:.0%}. Review dynamic or personalised content.",
+            "Cloaking could not be validly compared because both the normal user and Googlebot-like "
+            f"responses did not return usable page content. User: {desktop_access_reason}. "
+            f"Crawler: {bot_access_reason}. Access failure alone is not cloaking.",
             rules["Cloaking"],
         ))
     else:
-        rows.append(result(
-            "Cloaking",
-            PASS,
-            f"User versus Googlebot like content similarity is {sim_bot:.0%}. Final destination matches.",
-            rules["Cloaking"],
-        ))
+        sim_bot = similarity(desktop_text, bot_text)
+        if desktop_dest != bot_dest:
+            rows.append(result(
+                "Cloaking",
+                FAIL,
+                f"Confirmed accessible user and Googlebot-like requests reached different final destinations: "
+                f"{desktop_r.url} vs {bot_r.url}.",
+                rules["Cloaking"],
+            ))
+        elif sim_bot < 0.72 and min(word_count(desktop_text), word_count(bot_text)) > 150:
+            rows.append(result(
+                "Cloaking",
+                FAIL,
+                f"Confirmed material user versus Googlebot-like content difference detected "
+                f"({sim_bot:.0%} similarity) after both responses returned usable content.",
+                rules["Cloaking"],
+            ))
+        elif sim_bot < 0.88:
+            rows.append(result(
+                "Cloaking",
+                REVIEW,
+                f"Both responses are accessible, but user versus Googlebot-like content similarity is "
+                f"{sim_bot:.0%}. Review dynamic, personalised, geo-specific or A/B-tested content before "
+                "treating the difference as cloaking.",
+                rules["Cloaking"],
+            ))
+        else:
+            rows.append(result(
+                "Cloaking",
+                PASS,
+                f"Both responses are accessible. User versus Googlebot-like content similarity is "
+                f"{sim_bot:.0%} and the final destination matches.",
+                rules["Cloaking"],
+            ))
 
-    chains_materially_different = (
-        desktop_dest != bot_dest
-        or (
-            len(desktop_chain) != len(bot_chain)
-            and (len(desktop_chain) > 1 or len(bot_chain) > 1)
-        )
-    )
-    if desktop_dest != bot_dest:
-        st_redirect = FAIL
-        note = (
-            f"Different final destinations. User chain: {redirect_chain_summary(desktop_r)}. "
-            f"Crawler chain: {redirect_chain_summary(bot_r)}."
-        )
-    elif chains_materially_different:
+    # Sneaky Redirect also requires usable user and crawler responses.
+    if not (desktop_usable and bot_usable):
         st_redirect = REVIEW
         note = (
-            "Final destination matches, but user and crawler redirect chains differ. "
-            f"User chain: {redirect_chain_summary(desktop_r)}. "
-            f"Crawler chain: {redirect_chain_summary(bot_r)}."
+            "Sneaky redirect comparison is inconclusive because one or both request variants are not "
+            f"usable. User: {desktop_access_reason}. Crawler: {bot_access_reason}. "
+            "An access-block or challenge redirect is not a confirmed sneaky redirect."
         )
     else:
-        st_redirect = PASS
-        note = f"User and crawler reach the same destination with no material redirect-chain difference: {desktop_r.url}"
+        chains_materially_different = (
+            desktop_dest != bot_dest
+            or (
+                len(desktop_chain) != len(bot_chain)
+                and (len(desktop_chain) > 1 or len(bot_chain) > 1)
+            )
+        )
+        if desktop_dest != bot_dest:
+            st_redirect = FAIL
+            note = (
+                f"Different final destinations after successful access. User chain: {redirect_chain_summary(desktop_r)}. "
+                f"Crawler chain: {redirect_chain_summary(bot_r)}."
+            )
+        elif chains_materially_different:
+            st_redirect = REVIEW
+            note = (
+                "Final destination matches, but accessible user and crawler redirect chains differ. "
+                f"User chain: {redirect_chain_summary(desktop_r)}. "
+                f"Crawler chain: {redirect_chain_summary(bot_r)}."
+            )
+        else:
+            st_redirect = PASS
+            note = f"User and crawler reach the same destination with no material redirect-chain difference: {desktop_r.url}"
     rows.append(result("Sneaky Redirect", st_redirect, note, rules["Sneaky Redirect"]))
 
+    # Device redirect/content comparison follows the same access-first principle.
     mobile_dest = normalized_destination(mobile_r.url)
-    if mobile_dest != desktop_dest:
+    if not (desktop_usable and mobile_usable):
+        rows.append(result(
+            "Device Spam Redirect",
+            REVIEW,
+            "Desktop versus mobile comparison is inconclusive because one or both variants are not usable. "
+            f"Desktop: {desktop_access_reason}. Mobile: {mobile_access_reason}. "
+            "An access restriction is not a confirmed device spam redirect.",
+            rules["Device Spam Redirect"],
+        ))
+    elif mobile_dest != desktop_dest:
         rows.append(result(
             "Device Spam Redirect",
             FAIL,
-            f"Mobile final destination differs from desktop. Desktop: {desktop_r.url}. Mobile: {mobile_r.url}.",
+            f"Accessible mobile and desktop requests reached different final destinations. "
+            f"Desktop: {desktop_r.url}. Mobile: {mobile_r.url}.",
             rules["Device Spam Redirect"],
         ))
     else:
@@ -8902,7 +9038,8 @@ if run:
 
                 When a rule cannot be fully verified from one URL, it can receive REVIEW and the Result explains what additional verification is required.
 
-                The Googlebot check uses a Googlebot User Agent comparison. It does not reproduce Google's full rendering and indexing infrastructure.
+                The Googlebot check uses a Googlebot-like User Agent comparison. It does not reproduce Google's full rendering and indexing infrastructure.
+                Access errors, HTTP 401/403/405/406/429 responses, CAPTCHA and short bot-challenge pages are classified as Crawler Access Issue and are never treated as cloaking proof by themselves.
 
                 External plagiarism may require external verification.
 
