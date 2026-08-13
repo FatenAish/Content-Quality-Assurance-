@@ -42,8 +42,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.29 FREE OFFICIAL SOURCE CONTENT QA"
-ENGINE_BUILD = "2026.08.13.2"
+APP_VERSION = "V18.32 GROUPED CONTENT CARDS"
+ENGINE_BUILD = "2026.08.13.3"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -2605,6 +2605,70 @@ def keyword_summary(body_text, focus_keyword, secondary_keywords):
 
 def status_class(s):
     return {"PASS":"status-pass","REVIEW":"status-review","FAIL":"status-fail"}.get(s, "")
+
+
+CONTENT_CATEGORY_ORDER = [
+    "Grammar & Wording",
+    "Entity & Image Accuracy",
+    "Factual Accuracy & Official Verification",
+    "Search Intent & Relevance",
+    "Data & Freshness",
+    "Keyword & Repetition",
+    "Structure & Content Quality",
+    "Other Content Issues",
+]
+
+
+def content_issue_category(row):
+    """Map a Content QA row to one editor-friendly issue category."""
+    finding_type = str(row.get("Finding Type", "") or "").strip().lower()
+    check = str(row.get("Check", "") or "").strip().lower()
+    result_text = str(row.get("Result", "") or "").strip().lower()
+    combined = f"{finding_type} {check} {result_text}"
+
+    if any(x in combined for x in [
+        "grammar", "wording", "misspelling", "spelling", "readability",
+        "subject-verb", "typographical", "typo", "punctuation",
+    ]):
+        return "Grammar & Wording"
+
+    if any(x in combined for x in [
+        "image alt", "image caption", "entity accuracy", "entity name",
+        "incorrect entity", "building name", "project name", "community name",
+    ]):
+        return "Entity & Image Accuracy"
+
+    if any(x in combined for x in [
+        "factual accuracy", "official source", "source verification",
+        "source quality", "needs verification", "official-source",
+        "official verification",
+    ]):
+        return "Factual Accuracy & Official Verification"
+
+    if any(x in combined for x in [
+        "search intent", "content relevance", "heading relevance",
+        "title vs content", "h1 vs content", "intent mismatch",
+    ]):
+        return "Search Intent & Relevance"
+
+    if any(x in combined for x in [
+        "outdated", "freshness", "data accuracy", "stale", "old year",
+    ]):
+        return "Data & Freshness"
+
+    if any(x in combined for x in [
+        "keyword use", "keyword stuffing", "repetition", "duplicate sentence",
+        "duplicate paragraph",
+    ]):
+        return "Keyword & Repetition"
+
+    if any(x in combined for x in [
+        "thin content", "original value", "broken content", "content quality",
+        "placeholder", "empty heading",
+    ]):
+        return "Structure & Content Quality"
+
+    return "Other Content Issues"
 
 
 DEFAULT_ACTIONS = {
@@ -8200,21 +8264,8 @@ if run:
             f"Content Check ({len(content_rows)})",
         ])
 
-        for tab, rows in zip(tabs, [spam_rows, seo_rows, content_rows]):
+        for tab_index, (tab, rows) in enumerate(zip(tabs, [spam_rows, seo_rows, content_rows])):
             with tab:
-                public_rows = [
-                    {
-                        "Check": row["Check"],
-                        "Status": row["Status"],
-                        "Result": row["Result"],
-                        "Action Needed": row["Action Needed"],
-                        "Official Source": row.get("Official Source", ""),
-                        "Why": row["Why"],
-                    }
-                    for row in rows
-                ]
-                df = pd.DataFrame(public_rows)
-
                 def status_style(value):
                     if value == "PASS":
                         return "color: #28B16D; font-weight: 800;"
@@ -8224,21 +8275,145 @@ if run:
                         return "color: #C53030; font-weight: 800;"
                     return ""
 
-                styled_df = df.style.map(status_style, subset=["Status"])
+                # Spam and SEO keep the normal rule table. Content is intentionally
+                # grouped into editor-friendly categories with numbered mistakes.
+                if tab_index < 2:
+                    public_rows = [
+                        {
+                            "Check": row["Check"],
+                            "Status": row["Status"],
+                            "Result": row["Result"],
+                            "Action Needed": row["Action Needed"],
+                            "Official Source": row.get("Official Source", ""),
+                            "Why": row["Why"],
+                        }
+                        for row in rows
+                    ]
+                    df = pd.DataFrame(public_rows)
+                    styled_df = df.style.map(status_style, subset=["Status"])
 
-                st.dataframe(
-                    styled_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Check": st.column_config.TextColumn(width="medium"),
-                        "Status": st.column_config.TextColumn(width="small"),
-                        "Result": st.column_config.TextColumn(width="large"),
-                        "Action Needed": st.column_config.TextColumn(width="large"),
-                        "Official Source": st.column_config.TextColumn(width="large"),
-                        "Why": st.column_config.TextColumn(width="large"),
-                    },
+                    st.dataframe(
+                        styled_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Check": st.column_config.TextColumn(width="medium"),
+                            "Status": st.column_config.TextColumn(width="small"),
+                            "Result": st.column_config.TextColumn(width="large"),
+                            "Action Needed": st.column_config.TextColumn(width="large"),
+                            "Official Source": st.column_config.TextColumn(width="large"),
+                            "Why": st.column_config.TextColumn(width="large"),
+                        },
+                    )
+                    continue
+
+                content_issue_rows = [r for r in rows if r.get("Status") in {FAIL, REVIEW}]
+                content_pass_rows = [r for r in rows if r.get("Status") == PASS]
+
+                st.markdown(
+                    "<div style='display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 0 4px;'>"
+                    "<div style='font-size:18px;font-weight:800;'>Content Issues</div>"
+                    "<div style='font-size:10px;font-weight:800;color:#087A52;background:#E9F8F1;border:1px solid #CDEEE0;padding:4px 8px;border-radius:999px;'>V18.32 GROUPED</div>"
+                    "</div>"
+                    "<div style='font-size:12px;color:#667085;margin-bottom:16px;'>"
+                    "Only FAIL and REVIEW findings are shown below. Issues are grouped by category and numbered 1, 2, 3 inside each category."
+                    "</div>",
+                    unsafe_allow_html=True,
                 )
+
+                grouped = {category: [] for category in CONTENT_CATEGORY_ORDER}
+                for row in content_issue_rows:
+                    grouped.setdefault(content_issue_category(row), []).append(row)
+
+                displayed_any = False
+                for category in CONTENT_CATEGORY_ORDER:
+                    category_rows = grouped.get(category, [])
+                    if not category_rows:
+                        continue
+
+                    displayed_any = True
+                    fail_count = sum(1 for r in category_rows if r.get("Status") == FAIL)
+                    review_count = sum(1 for r in category_rows if r.get("Status") == REVIEW)
+                    count_bits = []
+                    if fail_count:
+                        count_bits.append(f"{fail_count} FAIL")
+                    if review_count:
+                        count_bits.append(f"{review_count} REVIEW")
+                    count_label = " · ".join(count_bits)
+
+                    st.markdown(
+                        f"<div style='margin:22px 0 10px;padding:11px 14px;border-left:4px solid #00A66A;"
+                        f"background:#F7FCF9;border-radius:8px;'>"
+                        f"<div style='font-size:15px;font-weight:800;color:#172026;'>{html_lib.escape(category)}</div>"
+                        f"<div style='font-size:11px;color:#667085;margin-top:3px;'>{html_lib.escape(count_label)}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    for number, row in enumerate(category_rows, start=1):
+                        status = str(row.get("Status", ""))
+                        check = str(row.get("Check", "") or "Issue")
+                        finding = str(row.get("Result", "") or "")
+                        action = str(row.get("Action Needed", "") or "")
+                        source = str(row.get("Official Source", "") or "")
+                        why = str(row.get("Why", "") or "")
+
+                        status_color = "#C53030" if status == FAIL else "#B7791F"
+                        status_bg = "#FDECEC" if status == FAIL else "#FFF6D8"
+
+                        source_html = ""
+                        if source:
+                            safe_source = html_lib.escape(source, quote=True)
+                            if re.match(r"^https?://", source, re.I):
+                                source_html = (
+                                    f"<div style='margin-top:9px;font-size:11px;color:#667085;'>"
+                                    f"<strong>Official source:</strong> "
+                                    f"<a href='{safe_source}' target='_blank' style='color:#087A52;text-decoration:none;'>{safe_source}</a>"
+                                    f"</div>"
+                                )
+                            else:
+                                source_html = (
+                                    f"<div style='margin-top:9px;font-size:11px;color:#667085;'>"
+                                    f"<strong>Official source:</strong> {safe_source}</div>"
+                                )
+
+                        st.markdown(
+                            f"<div style='margin:0 0 12px;padding:14px 16px;border:1px solid #E4E9E7;"
+                            f"border-radius:10px;background:#FFFFFF;box-shadow:0 2px 7px rgba(16,24,40,.025);'>"
+                            f"<div style='display:flex;align-items:flex-start;gap:10px;'>"
+                            f"<div style='font-size:15px;font-weight:800;color:#172026;min-width:24px;'>{number}.</div>"
+                            f"<div style='flex:1;'>"
+                            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>"
+                            f"<span style='font-size:14px;font-weight:800;color:#172026;'>{html_lib.escape(check)}</span>"
+                            f"<span style='font-size:10px;font-weight:800;color:{status_color};background:{status_bg};"
+                            f"padding:3px 7px;border-radius:999px;'>{html_lib.escape(status)}</span>"
+                            f"</div>"
+                            f"<div style='margin-top:7px;font-size:12.5px;line-height:1.55;color:#344054;'>{html_lib.escape(finding)}</div>"
+                            f"<div style='margin-top:8px;font-size:12px;line-height:1.5;color:#475467;'>"
+                            f"<strong>Action:</strong> {html_lib.escape(action)}</div>"
+                            f"{source_html}"
+                            f"</div></div></div>",
+                            unsafe_allow_html=True,
+                        )
+
+                        if why:
+                            with st.expander(f"Why #{number} was flagged", expanded=False):
+                                st.write(why)
+
+                if not displayed_any:
+                    st.success("No Content mistakes or verification items were found.")
+
+                with st.expander(f"Verified / No Issue ({len(content_pass_rows)})", expanded=False):
+                    if content_pass_rows:
+                        for number, row in enumerate(content_pass_rows, start=1):
+                            source = str(row.get("Official Source", "") or "")
+                            source_line = f"  \nOfficial source: {source}" if source else ""
+                            st.markdown(
+                                f"**{number}. {row.get('Check', '')}** — PASS  \n"
+                                f"{row.get('Result', '')}{source_line}"
+                            )
+                    else:
+                        st.caption("No PASS items were returned.")
 
         report_generated_at = datetime.now(timezone.utc).isoformat()
 
