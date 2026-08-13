@@ -42,8 +42,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.32 GROUPED CONTENT CARDS"
-ENGINE_BUILD = "2026.08.13.3"
+APP_VERSION = "V18.34 CONTENT TABLE + CATEGORY SUMMARY"
+ENGINE_BUILD = "2026.08.13.5"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -2610,7 +2610,7 @@ def status_class(s):
 CONTENT_CATEGORY_ORDER = [
     "Grammar & Wording",
     "Entity & Image Accuracy",
-    "Factual Accuracy & Official Verification",
+    "Facts Verification",
     "Search Intent & Relevance",
     "Data & Freshness",
     "Keyword & Repetition",
@@ -2643,7 +2643,7 @@ def content_issue_category(row):
         "source quality", "needs verification", "official-source",
         "official verification",
     ]):
-        return "Factual Accuracy & Official Verification"
+        return "Facts Verification"
 
     if any(x in combined for x in [
         "search intent", "content relevance", "heading relevance",
@@ -6829,14 +6829,27 @@ def _freeqa_claim_candidates(article_soup, body_text, target_topic=""):
     fields = _qa_editorial_fields(article_soup)
     items = []
 
-    # Image ALT and captions are high-value because entity mistakes often live there.
-    for alt in fields.get("image_alts", [])[:80]:
-        alt = re.sub(r"\s+", " ", alt).strip()
-        if len(alt) >= 5:
-            items.append({"text": alt, "kind": "Image Alt Text", "priority": 7})
+    # IMPORTANT: ordinary ALT text is descriptive metadata, not automatically a factual
+    # claim. Do not send every ALT through official-source verification. That created
+    # false REVIEW rows for perfectly normal descriptions such as "Exterior view of ...".
+    # ALT entity mismatches are handled separately by _freeqa_alt_entity_findings().
+
+    # Captions can contain real factual claims, but only research them when they contain
+    # a concrete factual signal. Purely descriptive captions are left alone.
     for cap in fields.get("image_captions", [])[:80]:
         cap = re.sub(r"\s+", " ", cap).strip()
-        if len(cap) >= 5:
+        if len(cap) < 5:
+            continue
+        low = cap.lower()
+        has_fact_signal = bool(
+            re.search(r"\b\d+(?:[.,]\d+)?\b", cap)
+            or any(x in low for x in [
+                "consists of", "comprises", "developed by", "located in",
+                "won", "award", "certified", "built to", "completed in",
+                "contains", "features", "opened in", "handover"
+            ])
+        )
+        if has_fact_signal:
             items.append({"text": cap, "kind": "Image Caption", "priority": 7})
 
     for sentence in _freeqa_split_sentences(body_text):
@@ -7146,6 +7159,126 @@ def _freeqa_verify_claim(claim, kind, target_topic=""):
     }
 
 
+
+_FREEQA_ALT_ENTITY_SUFFIXES = {
+    "residence", "residences", "tower", "towers", "heights", "club", "city",
+    "community", "village", "gardens", "estate", "estates", "park", "school",
+    "academy", "hospital", "clinic", "mall", "hotel", "stadium", "centre", "center",
+}
+
+
+def _freeqa_alt_entity_phrases(alt_text):
+    """Extract likely named entities from ALT text without treating the whole ALT as a claim."""
+    text = re.sub(r"\s+", " ", alt_text or "").strip()
+    if not text:
+        return []
+    suffix_pattern = "|".join(sorted(_FREEQA_ALT_ENTITY_SUFFIXES, key=len, reverse=True))
+    pattern = re.compile(
+        rf"\b((?:[A-Z][A-Za-z0-9&'’.-]*\s+){{0,5}}(?:{suffix_pattern}))\b",
+        flags=re.I,
+    )
+    out = []
+    seen = set()
+    for match in pattern.finditer(text):
+        value = clean_entity_candidate(match.group(1))
+        key = entity_similarity_key(value)
+        if not key or key in seen or not looks_like_entity_phrase(value):
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+def _freeqa_entity_suffix_key(value):
+    tokens = entity_similarity_key(value).split()
+    if not tokens:
+        return ""
+    last = tokens[-1]
+    return {
+        "residences": "residence",
+        "towers": "tower",
+        "estates": "estate",
+    }.get(last, last)
+
+
+def _freeqa_alt_entity_findings(article_soup, target_topic=""):
+    """
+    Flag ALT entity names only when there is a specific mismatch AND an official source
+    confirms the competing article entity name. Normal descriptive ALTs are not findings.
+    """
+    fields = _qa_editorial_fields(article_soup)
+    known_entities = entity_candidates(article_soup, limit=80)
+    if not known_entities:
+        return []
+
+    known_by_key = {entity_similarity_key(x): x for x in known_entities}
+    rows = []
+    seen = set()
+
+    for alt in fields.get("image_alts", [])[:120]:
+        for alt_entity in _freeqa_alt_entity_phrases(alt):
+            alt_key = entity_similarity_key(alt_entity)
+            if not alt_key or alt_key in known_by_key:
+                # Exact entity spelling already exists in the article: no issue.
+                continue
+
+            alt_suffix = _freeqa_entity_suffix_key(alt_entity)
+            same_suffix = [
+                entity for entity in known_entities
+                if _freeqa_entity_suffix_key(entity) == alt_suffix
+            ]
+            if not same_suffix:
+                continue
+
+            scored = []
+            for entity in same_suffix:
+                ratio = SequenceMatcher(
+                    None, entity_similarity_key(alt_entity), entity_similarity_key(entity)
+                ).ratio()
+                scored.append((ratio, entity))
+            scored.sort(reverse=True)
+            best_ratio, expected_entity = scored[0]
+
+            # Conservative candidate rule: a close spelling variant, or the only named
+            # entity in the article using that distinctive project suffix.
+            if best_ratio < 0.72 and len(same_suffix) != 1:
+                continue
+
+            pair_key = (alt_key, entity_similarity_key(expected_entity))
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+
+            verification = _freeqa_verify_claim(
+                expected_entity, "Entity Accuracy", target_topic=target_topic
+            )
+            if verification.get("status") != PASS or not verification.get("source"):
+                # Do not create another noisy REVIEW just because free search could not
+                # prove the entity name. Precision is more useful than volume here.
+                continue
+
+            rows.append({
+                "Check": f"{expected_entity} image alt text",
+                "Status": FAIL,
+                "Result": (
+                    f"Incorrect entity name in image ALT text. The ALT says ‘{alt_entity}’, "
+                    f"while the official source confirms ‘{expected_entity}’."
+                ),
+                "Action Needed": f"Replace ‘{alt_entity}’ with ‘{expected_entity}’ in the image ALT text.",
+                "Why": (
+                    "The system first found a specific entity-name mismatch between the ALT text and "
+                    "the article, then required an official-source confirmation before flagging it."
+                ),
+                "Official Source": verification.get("source", ""),
+                "Finding Type": "Entity Accuracy",
+                "_internal_status": FAIL,
+                "_rule": dict(CONTENT_RULES).get("Official Source Verification", ""),
+                "_system_uses": "ALT entity extraction + article entity consistency + official source confirmation",
+                "_evidence_finding": True,
+            })
+
+    return rows
+
 def _freeqa_local_findings(article_soup, body_text, target_topic=""):
     """Free high-confidence editorial checks that do not need external evidence."""
     rows = []
@@ -7251,6 +7384,7 @@ def official_source_content_checks(url, soup, body_text, focus_keyword="", secon
         h1 = page_primary_h1(soup)
         target_topic = focus_keyword or title or h1
         rows = _freeqa_local_findings(article_soup, body_text, target_topic=target_topic)
+        rows.extend(_freeqa_alt_entity_findings(article_soup, target_topic=target_topic))
 
         candidates = _freeqa_claim_candidates(article_soup, body_text, target_topic=target_topic)
         for item in candidates:
@@ -8275,145 +8409,73 @@ if run:
                         return "color: #C53030; font-weight: 800;"
                     return ""
 
-                # Spam and SEO keep the normal rule table. Content is intentionally
-                # grouped into editor-friendly categories with numbered mistakes.
-                if tab_index < 2:
-                    public_rows = [
-                        {
-                            "Check": row["Check"],
-                            "Status": row["Status"],
-                            "Result": row["Result"],
-                            "Action Needed": row["Action Needed"],
-                            "Official Source": row.get("Official Source", ""),
-                            "Why": row["Why"],
-                        }
-                        for row in rows
-                    ]
-                    df = pd.DataFrame(public_rows)
-                    styled_df = df.style.map(status_style, subset=["Status"])
-
-                    st.dataframe(
-                        styled_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Check": st.column_config.TextColumn(width="medium"),
-                            "Status": st.column_config.TextColumn(width="small"),
-                            "Result": st.column_config.TextColumn(width="large"),
-                            "Action Needed": st.column_config.TextColumn(width="large"),
-                            "Official Source": st.column_config.TextColumn(width="large"),
-                            "Why": st.column_config.TextColumn(width="large"),
-                        },
-                    )
-                    continue
-
-                content_issue_rows = [r for r in rows if r.get("Status") in {FAIL, REVIEW}]
-                content_pass_rows = [r for r in rows if r.get("Status") == PASS]
-
-                st.markdown(
-                    "<div style='display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 0 4px;'>"
-                    "<div style='font-size:18px;font-weight:800;'>Content Issues</div>"
-                    "<div style='font-size:10px;font-weight:800;color:#087A52;background:#E9F8F1;border:1px solid #CDEEE0;padding:4px 8px;border-radius:999px;'>V18.32 GROUPED</div>"
-                    "</div>"
-                    "<div style='font-size:12px;color:#667085;margin-bottom:16px;'>"
-                    "Only FAIL and REVIEW findings are shown below. Issues are grouped by category and numbered 1, 2, 3 inside each category."
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-
-                grouped = {category: [] for category in CONTENT_CATEGORY_ORDER}
-                for row in content_issue_rows:
-                    grouped.setdefault(content_issue_category(row), []).append(row)
-
-                displayed_any = False
-                for category in CONTENT_CATEGORY_ORDER:
-                    category_rows = grouped.get(category, [])
-                    if not category_rows:
-                        continue
-
-                    displayed_any = True
-                    fail_count = sum(1 for r in category_rows if r.get("Status") == FAIL)
-                    review_count = sum(1 for r in category_rows if r.get("Status") == REVIEW)
-                    count_bits = []
-                    if fail_count:
-                        count_bits.append(f"{fail_count} FAIL")
-                    if review_count:
-                        count_bits.append(f"{review_count} REVIEW")
-                    count_label = " · ".join(count_bits)
+                # Keep the original table for Spam, SEO AND Content.
+                # For Content, add a concise category summary above the unchanged table.
+                if tab_index == 2:
+                    content_issue_rows = [r for r in rows if r.get("Status") in {FAIL, REVIEW}]
+                    grouped = {category: [] for category in CONTENT_CATEGORY_ORDER}
+                    for row in content_issue_rows:
+                        grouped.setdefault(content_issue_category(row), []).append(row)
 
                     st.markdown(
-                        f"<div style='margin:22px 0 10px;padding:11px 14px;border-left:4px solid #00A66A;"
-                        f"background:#F7FCF9;border-radius:8px;'>"
-                        f"<div style='font-size:15px;font-weight:800;color:#172026;'>{html_lib.escape(category)}</div>"
-                        f"<div style='font-size:11px;color:#667085;margin-top:3px;'>{html_lib.escape(count_label)}</div>"
-                        f"</div>",
+                        "<div style='margin:2px 0 14px;'>"
+                        "<div style='font-size:18px;font-weight:800;color:#172026;'>Content Issues by Category</div>"
+                        "<div style='font-size:12px;color:#667085;margin-top:4px;'>"
+                        "Use this summary to see what needs checking. Full details remain in the table below."
+                        "</div></div>",
                         unsafe_allow_html=True,
                     )
 
-                    for number, row in enumerate(category_rows, start=1):
-                        status = str(row.get("Status", ""))
-                        check = str(row.get("Check", "") or "Issue")
-                        finding = str(row.get("Result", "") or "")
-                        action = str(row.get("Action Needed", "") or "")
-                        source = str(row.get("Official Source", "") or "")
-                        why = str(row.get("Why", "") or "")
-
-                        status_color = "#C53030" if status == FAIL else "#B7791F"
-                        status_bg = "#FDECEC" if status == FAIL else "#FFF6D8"
-
-                        source_html = ""
-                        if source:
-                            safe_source = html_lib.escape(source, quote=True)
-                            if re.match(r"^https?://", source, re.I):
-                                source_html = (
-                                    f"<div style='margin-top:9px;font-size:11px;color:#667085;'>"
-                                    f"<strong>Official source:</strong> "
-                                    f"<a href='{safe_source}' target='_blank' style='color:#087A52;text-decoration:none;'>{safe_source}</a>"
-                                    f"</div>"
-                                )
-                            else:
-                                source_html = (
-                                    f"<div style='margin-top:9px;font-size:11px;color:#667085;'>"
-                                    f"<strong>Official source:</strong> {safe_source}</div>"
-                                )
-
-                        st.markdown(
-                            f"<div style='margin:0 0 12px;padding:14px 16px;border:1px solid #E4E9E7;"
-                            f"border-radius:10px;background:#FFFFFF;box-shadow:0 2px 7px rgba(16,24,40,.025);'>"
-                            f"<div style='display:flex;align-items:flex-start;gap:10px;'>"
-                            f"<div style='font-size:15px;font-weight:800;color:#172026;min-width:24px;'>{number}.</div>"
-                            f"<div style='flex:1;'>"
-                            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>"
-                            f"<span style='font-size:14px;font-weight:800;color:#172026;'>{html_lib.escape(check)}</span>"
-                            f"<span style='font-size:10px;font-weight:800;color:{status_color};background:{status_bg};"
-                            f"padding:3px 7px;border-radius:999px;'>{html_lib.escape(status)}</span>"
-                            f"</div>"
-                            f"<div style='margin-top:7px;font-size:12.5px;line-height:1.55;color:#344054;'>{html_lib.escape(finding)}</div>"
-                            f"<div style='margin-top:8px;font-size:12px;line-height:1.5;color:#475467;'>"
-                            f"<strong>Action:</strong> {html_lib.escape(action)}</div>"
-                            f"{source_html}"
-                            f"</div></div></div>",
-                            unsafe_allow_html=True,
-                        )
-
-                        if why:
-                            with st.expander(f"Why #{number} was flagged", expanded=False):
-                                st.write(why)
-
-                if not displayed_any:
-                    st.success("No Content mistakes or verification items were found.")
-
-                with st.expander(f"Verified / No Issue ({len(content_pass_rows)})", expanded=False):
-                    if content_pass_rows:
-                        for number, row in enumerate(content_pass_rows, start=1):
-                            source = str(row.get("Official Source", "") or "")
-                            source_line = f"  \nOfficial source: {source}" if source else ""
+                    displayed_category = False
+                    for category in CONTENT_CATEGORY_ORDER:
+                        category_rows = grouped.get(category, [])
+                        if not category_rows:
+                            continue
+                        displayed_category = True
+                        st.markdown(f"#### {category}")
+                        for number, row in enumerate(category_rows, start=1):
+                            status = str(row.get("Status", ""))
+                            check = str(row.get("Check", "") or "Issue")
+                            result_text = re.sub(r"\s+", " ", str(row.get("Result", "") or "")).strip()
+                            if len(result_text) > 240:
+                                result_text = result_text[:237].rstrip() + "..."
                             st.markdown(
-                                f"**{number}. {row.get('Check', '')}** — PASS  \n"
-                                f"{row.get('Result', '')}{source_line}"
+                                f"{number}. **{check}** — **{status}**  \n"
+                                f"   {result_text}"
                             )
-                    else:
-                        st.caption("No PASS items were returned.")
+
+                    if not displayed_category:
+                        st.success("No Content FAIL or REVIEW items were found.")
+
+                    st.markdown("### Full Content Results")
+
+                public_rows = [
+                    {
+                        "Check": row["Check"],
+                        "Status": row["Status"],
+                        "Result": row["Result"],
+                        "Action Needed": row["Action Needed"],
+                        "Official Source": row.get("Official Source", ""),
+                        "Why": row["Why"],
+                    }
+                    for row in rows
+                ]
+                df = pd.DataFrame(public_rows)
+                styled_df = df.style.map(status_style, subset=["Status"])
+
+                st.dataframe(
+                    styled_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Check": st.column_config.TextColumn(width="medium"),
+                        "Status": st.column_config.TextColumn(width="small"),
+                        "Result": st.column_config.TextColumn(width="large"),
+                        "Action Needed": st.column_config.TextColumn(width="large"),
+                        "Official Source": st.column_config.TextColumn(width="large"),
+                        "Why": st.column_config.TextColumn(width="large"),
+                    },
+                )
 
         report_generated_at = datetime.now(timezone.utc).isoformat()
 
