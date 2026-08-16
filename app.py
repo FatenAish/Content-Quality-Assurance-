@@ -43,8 +43,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.55 PRECISION QA FIX"
-ENGINE_BUILD = "2026.08.16.55"
+APP_VERSION = "V18.56 CLEAR ISSUE SUMMARY"
+ENGINE_BUILD = "2026.08.16.56"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -8431,12 +8431,12 @@ def _summary_issue_row(check_name, items, no_issue_text, source_default="", why_
         action = re.sub(r"\s+", " ", str(item.get("Action Needed", "") or "")).strip()
         source = re.sub(r"\s+", " ", str(item.get("Official Source", "") or "")).strip()
 
-        result_lines.append(f"{number}. {title}: {detail}")
+        result_lines.append(f"{number}: {title}: {detail}")
         if action:
-            action_lines.append(f"{number}. {action}")
+            action_lines.append(f"{number}: {action}")
         if source and source not in seen_sources:
             seen_sources.add(source)
-            source_lines.append(f"{number}. {source}")
+            source_lines.append(f"{number}: {source}")
 
     return {
         "Check": check_name,
@@ -8775,56 +8775,55 @@ def deterministic_data_quality_issues(article_soup, limit=16):
 
 
 def deterministic_editorial_quality_issues(article_soup, limit=30):
-    """Specific grammar, punctuation and CMS-formatting issues with conservative false-positive controls."""
-    issues = []
+    """Return short grouped editorial issues instead of repeating full sentences."""
     if article_soup is None:
-        return issues
+        return []
 
+    issues = []
     blocks = []
     for node in article_soup.find_all(["p", "li"]):
         value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
         if value:
             blocks.append((node, value))
 
+    space_before_punct = 0
+    duplicate_punct = 0
+    trailing_anchor_labels = []
+    missing_bullet_punct = 0
+
     for node, value in blocks:
         low = value.casefold()
-        incomplete = False
 
         if "based on market analysis" in low and re.search(r"\bfor\s+the\s+abu\s+dhabi\s+sales\s*[.]?$", low):
-            issues.append(f'Incomplete/unfinished sentence: "{value}"')
-            incomplete = True
+            issues.append("Incomplete sentence — An unfinished sentence was detected in the market-analysis text.")
 
         if re.search(r"%\s*,\s*[.!?]", value) or re.search(r"[,;:]\s*[.!?]", value):
-            issues.append(f'Duplicate or conflicting punctuation: "{value}"')
+            duplicate_punct += 1
 
         if "among the two" in low:
-            issues.append(f'Use "of the two" or "between the two" instead of "among the two": "{value}"')
-
+            issues.append('Grammar — Use "of the two" instead of "among the two".')
         if len(re.findall(r"\bsteady\b", low)) >= 2:
-            issues.append(f'Repeated wording in the same sentence ("steady"): "{value}"')
-
+            issues.append('Repeated wording — "steady" is repeated in the same sentence.')
         if re.search(r"\bnotable\b[^.!?]{0,45}\bnoted\b|\bnoted\b[^.!?]{0,45}\bnotable\b", low):
-            issues.append(f'Repetitive wording ("notable" / "noted"): "{value}"')
-
+            issues.append('Repeated wording — "notable" and "noted" are used too close together.')
         if re.search(r"\bfamily\s+friendly\b", low):
-            issues.append(f'Compound modifier needs hyphenation ("family-friendly"): "{value}"')
-
+            issues.append('Hyphenation — "family friendly" should be "family-friendly".')
         if re.search(r"\bhigh\s+net-worth\b", low):
-            issues.append(f'Compound modifier should be "high-net-worth": "{value}"')
-
+            issues.append('Hyphenation — "high net-worth" should be "high-net-worth".')
         if re.search(r"\b\d+\s+and\s+\d+-bedroom\b", low):
-            issues.append(f'Parallel bedroom-range style should use a suspended hyphen (for example, "1- and 2-bedroom"): "{value}"')
-
+            issues.append('Parallel wording — Use the "1- and 2-bedroom" form.')
         if node.name == "p" and low in {"ultra-luxury.", "ultra luxury."}:
-            issues.append(f'Very short standalone paragraph may be a fragment or misplaced heading: "{value}"')
+            issues.append('Standalone fragment — "Ultra-luxury." should be removed or turned into a proper heading.')
+        if re.search(r"\b[A-Za-z][A-Za-z’'\-]*\s+[.,;:!?]", value):
+            space_before_punct += 1
 
-        if not incomplete:
-            m = re.search(r"\b([A-Za-z][A-Za-z’'\-]*)\s+([.,;:!?])", value)
-            if m:
-                issues.append(f'Space before punctuation / CMS spacing issue: "{value}"')
+    if duplicate_punct:
+        issues.insert(0, "Duplicate punctuation — Conflicting punctuation such as ',.' was detected.")
+    if space_before_punct == 1:
+        issues.insert(0, "Space before punctuation — One sentence contains an unnecessary space before punctuation.")
+    elif space_before_punct > 1:
+        issues.insert(0, "Space before punctuation — Multiple sentences contain unnecessary spaces before full stops or commas.")
 
-    # Bullet punctuation: only flag an unpunctuated item when neighbouring bullets in
-    # the same list normally end with punctuation.
     for listing in article_soup.find_all(["ul", "ol"]):
         items = listing.find_all("li", recursive=False)
         if len(items) < 2:
@@ -8833,32 +8832,42 @@ def deterministic_editorial_quality_issues(article_soup, limit=30):
         ended = [bool(re.search(r"[.!?]$", t)) for t in texts if t]
         if not ended or sum(ended) < max(2, len(ended) - 1):
             continue
-        for li, t in zip(items, texts):
+        for t in texts:
             if t and not re.search(r"[.!?]$", t):
-                issues.append(f'List punctuation is inconsistent with neighbouring bullets: "{t}"')
+                missing_bullet_punct += 1
 
-    # Raw anchor formatting: trailing whitespace is editorially meaningful; leading
-    # indentation/DOM whitespace is ignored to avoid the Al Raha Beach false positive.
+    if missing_bullet_punct == 1:
+        issues.append("Bullet punctuation — One bullet is missing ending punctuation.")
+    elif missing_bullet_punct > 1:
+        issues.append(f"Bullet punctuation — {missing_bullet_punct} bullets are missing ending punctuation.")
+
     for anchor in article_soup.find_all("a", href=True):
         raw = anchor.get_text("", strip=False)
         visible = re.sub(r"\s+", " ", raw or "").strip()
         if visible and raw and raw.rstrip() != raw:
-            issues.append(f'Trailing whitespace inside anchor text: "{visible}"')
+            trailing_anchor_labels.append(visible)
+
+    trailing_anchor_labels = list(dict.fromkeys(trailing_anchor_labels))
+    if len(trailing_anchor_labels) == 1:
+        issues.append(f'Trailing whitespace in anchor text — “{trailing_anchor_labels[0]}” contains extra trailing space.')
+    elif len(trailing_anchor_labels) > 1:
+        shown = '”, “'.join(trailing_anchor_labels[:3])
+        issues.append(f'Trailing whitespace in anchor text — “{shown}” contain extra trailing spaces.')
 
     raw_text = article_soup.get_text("", strip=False)
     nbsp_count = raw_text.count("\xa0")
     if nbsp_count >= 3:
-        issues.append(f'CMS formatting contains {nbsp_count} non-breaking space character(s); clean inconsistent/double spacing where present.')
+        issues.append(f"Excess non-breaking spaces — {nbsp_count} non-breaking spaces were detected, which may create inconsistent or double spacing.")
 
     body = re.sub(r"\s+", " ", article_soup.get_text(" ", strip=True)).strip()
     if re.search(r"\bAl Rabdan\b", body) and re.search(r"(?<!Al )\bRabdan\b", body):
-        issues.append('Possible naming inconsistency: both "Al Rabdan" and standalone "Rabdan" appear; standardise if they refer to the same place.')
+        issues.append('Naming inconsistency — Both "Rabdan" and "Al Rabdan" appear; standardise if they refer to the same place.')
     if "The Marina" in body and "the Marina" in body:
-        issues.append('Capitalisation variant detected: "The Marina" and "the Marina"; standardise the preferred proper-name styling.')
+        issues.append('Capitalisation inconsistency — Both "The Marina" and "the Marina" appear.')
 
     family_positions = [m.start() for m in re.finditer(r"family[- ]friendly", body, flags=re.I)]
     if len(family_positions) >= 2 and any((b - a) <= 2500 for a, b in zip(family_positions, family_positions[1:])):
-        issues.append('Repeated phrasing: "family-friendly" appears again within a short span; vary the wording where the meaning is already clear.')
+        issues.append('Repeated phrasing — "family-friendly" appears again within a short span.')
 
     return _v1855_unique(issues, limit=limit)
 
@@ -9377,10 +9386,15 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         if len(s.strip()) > 180 and not re.search(r"[.!?؟]$", s.strip())
     )
     gr = REVIEW if avg > 32 or malformed >= 4 else PASS
-    grammar_finding = (
-        f"Average sentence length: {avg:.1f} words; {malformed} unusually long or potentially malformed sentence fragment(s). "
-        "Specific grammar, punctuation and CMS-formatting findings are listed separately under Grammar Issues."
-    )
+    if editorial_quality_issues:
+        grammar_finding = "\n".join(
+            f"{index}: {item}"
+            for index, item in enumerate(editorial_quality_issues[:20], start=1)
+        )
+    elif avg > 32 or malformed >= 4:
+        grammar_finding = f"Readability issue — Average sentence length is {avg:.1f} words with {malformed} unusually long or potentially malformed fragment(s)."
+    else:
+        grammar_finding = "No high-confidence grammar or CMS-formatting issues found."
     rows.append(result(
         "Grammar / Readability",
         gr,
@@ -9967,7 +9981,7 @@ if run:
         st.download_button(
             "Download audit report Excel",
             data=excel_report,
-            file_name="url_audit_report_v18_55.xlsx",
+            file_name="url_audit_report_v18_56.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
