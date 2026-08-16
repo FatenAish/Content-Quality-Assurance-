@@ -1,0 +1,28 @@
+name: Run editorial QA patch v18.54
+
+on:
+  push:
+    paths:
+      - '.github/workflows/run-editorial-quality-v1854.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Patch app
+        run: python scripts/patch_editorial_quality_v1854.py
+      - name: Validate app
+        run: python -m py_compile app.py
+      - name: Commit app
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git commit -m "Expand editorial QA issue coverage"
+          git push origin main
