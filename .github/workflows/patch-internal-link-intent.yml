@@ -1,0 +1,186 @@
+name: One-time internal-link intent mismatch fix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-internal-link-intent.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch app.py
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('app.py')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old, new, label):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 match, found {count}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              'APP_VERSION = "V18.52 HOMEPAGE INTERNAL LINK FIX"\nENGINE_BUILD = "2026.08.16.52"',
+              'APP_VERSION = "V18.53 INTERNAL LINK INTENT FIX"\nENGINE_BUILD = "2026.08.16.53"',
+              'version',
+          )
+
+          helper = r'''
+PROPERTY_TYPE_TERMS = {
+    "villas": {"villa", "villas"},
+    "apartments": {"apartment", "apartments", "flat", "flats"},
+    "townhouses": {"townhouse", "townhouses"},
+    "penthouses": {"penthouse", "penthouses"},
+    "plots": {"plot", "plots"},
+    "offices": {"office", "offices"},
+    "shops": {"shop", "shops"},
+    "warehouses": {"warehouse", "warehouses"},
+}
+
+
+def detect_property_type(text):
+    """Return one unambiguous property type from visible text/path tokens."""
+    tokens = set(re.findall(r"[a-z]+", str(text or "").casefold()))
+    matches = [
+        canonical
+        for canonical, aliases in PROPERTY_TYPE_TERMS.items()
+        if tokens.intersection(aliases)
+    ]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def detect_anchor_transaction_intent(text):
+    """Detect only explicit buy/sale vs rent intent to avoid broad false positives."""
+    value = re.sub(r"\s+", " ", str(text or "").casefold()).strip()
+    sale = bool(re.search(r"\bfor sale\b|\bbuy\b|\bbuying\b", value))
+    rent = bool(re.search(r"\bfor rent\b|\bto rent\b|\brenting\b", value))
+    if sale == rent:
+        return ""
+    return "sale" if sale else "rent"
+
+
+def detect_url_transaction_intent(url):
+    path = urlparse(str(url or "")).path.casefold()
+    if "/for-sale/" in path:
+        return "sale"
+    if "/to-rent/" in path:
+        return "rent"
+    return ""
+
+'''
+
+          replace_once(
+              'def content_internal_link_inventory(article_soup, base_url):',
+              helper + 'def content_internal_link_inventory(article_soup, base_url):',
+              'property/transaction helpers',
+          )
+
+          replace_once(
+              '''        # Homepage URLs have no meaningful slug. Do not treat a valid brand/home
+        # link such as Bayut.com -> / as an anchor-to-slug mismatch. This also
+        # covers http/https and www/non-www variants of the same homepage.
+        is_homepage_destination = (parsed.path or "/") in {"", "/"}
+
+        inventory.append({''',
+              '''        # Homepage URLs have no meaningful slug. Do not treat a valid brand/home
+        # link such as Bayut.com -> / as an anchor-to-slug mismatch. This also
+        # covers http/https and www/non-www variants of the same homepage.
+        is_homepage_destination = (parsed.path or "/") in {"", "/"}
+
+        # Explicit intent checks catch high-value mismatches that simple word-overlap
+        # scoring misses, e.g. "Al Shamkha villas for sale" pointing to an
+        # /apartments/ URL. These checks are local and add no network delay.
+        anchor_property_type = detect_property_type(anchor_text)
+        url_property_type = detect_property_type(parsed.path)
+        anchor_transaction_intent = detect_anchor_transaction_intent(anchor_text)
+        url_transaction_intent = detect_url_transaction_intent(href)
+
+        inventory.append({''',
+              'intent extraction',
+          )
+
+          replace_once(
+              '''            "anchor_slug_overlap": anchor_slug_overlap,
+            "is_homepage_destination": is_homepage_destination,
+        })''',
+              '''            "anchor_slug_overlap": anchor_slug_overlap,
+            "is_homepage_destination": is_homepage_destination,
+            "anchor_property_type": anchor_property_type,
+            "url_property_type": url_property_type,
+            "anchor_transaction_intent": anchor_transaction_intent,
+            "url_transaction_intent": url_transaction_intent,
+        })''',
+              'inventory intent fields',
+          )
+
+          replace_once(
+              '''        if item["generic_anchor"]:
+            reasons.append("Generic anchor text")
+        elif item["suspicious_anchor"]:
+            reasons.append("Spammy or over optimised anchor text")
+
+        if (
+            item["anchor_text"]''',
+              '''        if item["generic_anchor"]:
+            reasons.append("Generic anchor text")
+        elif item["suspicious_anchor"]:
+            reasons.append("Spammy or over optimised anchor text")
+
+        # Use the final destination after redirects when available, so a legitimate
+        # redirect to the correct property type does not create a false positive.
+        checked = validation_by_url.get(item["url"]) if item.get("is_internal") else None
+        effective_url = (checked or {}).get("final_url") or item["url"]
+        effective_url_property_type = detect_property_type(urlparse(effective_url).path)
+        effective_url_transaction = detect_url_transaction_intent(effective_url)
+        anchor_property_type = item.get("anchor_property_type") or ""
+        anchor_transaction = item.get("anchor_transaction_intent") or ""
+
+        if (
+            anchor_property_type
+            and effective_url_property_type
+            and anchor_property_type != effective_url_property_type
+        ):
+            reasons.append(
+                f"Property type mismatch: anchor says {anchor_property_type} but URL targets {effective_url_property_type}"
+            )
+
+        if (
+            anchor_transaction
+            and effective_url_transaction
+            and anchor_transaction != effective_url_transaction
+        ):
+            reasons.append(
+                f"Transaction intent mismatch: anchor says {anchor_transaction} but URL targets {effective_url_transaction}"
+            )
+
+        if (
+            item["anchor_text"]''',
+              'internal intent issues',
+          )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python -m py_compile app.py
+
+      - name: Commit fixed app.py
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git commit -m "Catch internal property-type and sale-rent link mismatches"
+          git push origin main
