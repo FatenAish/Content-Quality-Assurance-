@@ -47,8 +47,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.43 HIDDEN LINKS RENDERER AUTO-BOOTSTRAP"
-ENGINE_BUILD = "2026.08.16.1"
+APP_VERSION = "V18.44 HIDDEN LINKS CSS FALLBACK"
+ENGINE_BUILD = "2026.08.16.2"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -1046,7 +1046,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "Inspect every HTTP(S) <a href> occurrence, internal or external, inside the isolated editorial article body. FAIL when an external link uses an empty, whitespace-only or punctuation-only anchor, or when the anchor/ancestor is concealed by supported HTML/CSS signals such as display:none, visibility:hidden, opacity:0, font-size:0, zero dimensions, off-screen positioning or clipping. Menus, sidebars, comments, social buttons, newsletters, cards and other UI modules are excluded."),
+    ("Hidden Links", "Inspect every HTTP(S) <a href> occurrence, internal or external, inside the isolated editorial article body. FAIL when an external link uses an empty, whitespace-only or punctuation-only anchor, or when the anchor/ancestor is concealed by supported HTML/CSS signals such as display:none, visibility:hidden, opacity:0, font-size:0, zero dimensions, off-screen positioning or clipping. Source HTML, inline styles and linked stylesheets are checked without requiring Playwright; rendered Chromium is used as an additional verification layer when available. Menus, sidebars, comments, social buttons, newsletters, cards and other UI modules are excluded."),
     ("Link Spam", "Review all external links found inside the isolated editorial body, including punctuation-only, whitespace-only, empty and image anchors. FAIL only when evidence shows links were inserted primarily to manipulate rankings; unusual anchor placement alone is REVIEW."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
@@ -1105,7 +1105,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final destination and redirect-chain comparison; content parity is handled separately by Mobile Content",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Complete body-link inventory (internal + external), exact anchor representation, empty/whitespace/punctuation anchor detection, source-level hiding signals, rendered Chromium computed styles when available, and UI/module exclusions",
+    "Hidden Links": "Complete body-link inventory (internal + external), exact anchor representation, empty/whitespace/punctuation anchor detection, source-level hiding signals, inline/linked stylesheet CSS selector checks, rendered Chromium computed styles when available, and UI/module exclusions",
     "Keyword Stuffing": "Editorial article text only, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context; TruBroker/property widgets, banners, newsletter, social UI and other embedded modules are excluded",
     "Link Spam": "Complete isolated-body external-link inventory, exact anchor representation, anchor type, destination domain, repeated anchor analysis and suspicious punctuation/blank anchor detection",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
@@ -3340,19 +3340,16 @@ _PLAYWRIGHT_BOOTSTRAP_ERROR = ""
 
 def _ensure_playwright_runtime():
     """
-    Make the rendered Hidden Links check self-healing on hosted environments.
+    Detect a usable Playwright/Chromium runtime without trying to pip-install
+    packages while the Streamlit app is already running.
 
-    Order of operations:
-    1. Use an already-imported Playwright runtime when available.
-    2. If the Python package is missing, install it once in the current runtime.
-    3. Re-import sync_playwright.
-    4. Verify that Chromium can launch.
-    5. If the bundled browser is missing, install Chromium once and verify again.
+    Hosted runtimes commonly block or restrict runtime package/browser installs.
+    Hidden Links therefore has a stylesheet-aware fallback below, so a missing
+    browser is no longer treated as an automatic REVIEW.
 
-    The function returns (available, error_message, executable_path).
-    A system Chromium/Chrome executable is preferred when one is already present.
+    Returns: (available, error_message, executable_path)
     """
-    global PLAYWRIGHT_AVAILABLE, sync_playwright
+    global PLAYWRIGHT_AVAILABLE
     global _PLAYWRIGHT_BOOTSTRAP_DONE, _PLAYWRIGHT_BOOTSTRAP_ERROR
 
     system_browser = (
@@ -3363,75 +3360,39 @@ def _ensure_playwright_runtime():
     )
 
     with _PLAYWRIGHT_BOOTSTRAP_LOCK:
-        if _PLAYWRIGHT_BOOTSTRAP_DONE and PLAYWRIGHT_AVAILABLE:
-            return True, "", system_browser
-        if _PLAYWRIGHT_BOOTSTRAP_DONE and not PLAYWRIGHT_AVAILABLE:
-            return False, _PLAYWRIGHT_BOOTSTRAP_ERROR or "Playwright runtime unavailable.", system_browser
-
-        errors = []
+        if _PLAYWRIGHT_BOOTSTRAP_DONE:
+            return bool(PLAYWRIGHT_AVAILABLE), _PLAYWRIGHT_BOOTSTRAP_ERROR, system_browser
 
         if not PLAYWRIGHT_AVAILABLE:
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "--quiet", "playwright>=1.47,<2"],
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=180,
-                )
-                module = importlib.import_module("playwright.sync_api")
-                sync_playwright = module.sync_playwright
-                PLAYWRIGHT_AVAILABLE = True
-            except Exception as exc:
-                errors.append(f"Playwright package bootstrap failed: {exc}")
+            _PLAYWRIGHT_BOOTSTRAP_DONE = True
+            _PLAYWRIGHT_BOOTSTRAP_ERROR = (
+                "Playwright package is not installed in this runtime; "
+                "using HTML + stylesheet CSS fallback."
+            )
+            return False, _PLAYWRIGHT_BOOTSTRAP_ERROR, system_browser
 
-        if PLAYWRIGHT_AVAILABLE:
-            launch_kwargs = {
-                "headless": True,
-                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
-            }
-            if system_browser:
-                launch_kwargs["executable_path"] = system_browser
+        launch_kwargs = {
+            "headless": True,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+        }
+        if system_browser:
+            launch_kwargs["executable_path"] = system_browser
 
-            try:
-                with sync_playwright() as p:
-                    browser = p.chromium.launch(**launch_kwargs)
-                    browser.close()
-                _PLAYWRIGHT_BOOTSTRAP_DONE = True
-                _PLAYWRIGHT_BOOTSTRAP_ERROR = ""
-                return True, "", system_browser
-            except Exception as first_exc:
-                errors.append(f"Initial Chromium launch failed: {first_exc}")
-
-                # If no working system browser exists, install Playwright Chromium.
-                # This is intentionally attempted only once per app runtime.
-                if not system_browser:
-                    try:
-                        subprocess.run(
-                            [sys.executable, "-m", "playwright", "install", "chromium"],
-                            check=True,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True,
-                            timeout=300,
-                        )
-                        with sync_playwright() as p:
-                            browser = p.chromium.launch(
-                                headless=True,
-                                args=["--no-sandbox", "--disable-dev-shm-usage"],
-                            )
-                            browser.close()
-                        _PLAYWRIGHT_BOOTSTRAP_DONE = True
-                        _PLAYWRIGHT_BOOTSTRAP_ERROR = ""
-                        return True, "", None
-                    except Exception as install_exc:
-                        errors.append(f"Chromium bootstrap failed: {install_exc}")
-
-        PLAYWRIGHT_AVAILABLE = False
-        _PLAYWRIGHT_BOOTSTRAP_DONE = True
-        _PLAYWRIGHT_BOOTSTRAP_ERROR = " | ".join(errors) or "Playwright/Chromium unavailable."
-        return False, _PLAYWRIGHT_BOOTSTRAP_ERROR, system_browser
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(**launch_kwargs)
+                browser.close()
+            _PLAYWRIGHT_BOOTSTRAP_DONE = True
+            _PLAYWRIGHT_BOOTSTRAP_ERROR = ""
+            return True, "", system_browser
+        except Exception as exc:
+            PLAYWRIGHT_AVAILABLE = False
+            _PLAYWRIGHT_BOOTSTRAP_DONE = True
+            _PLAYWRIGHT_BOOTSTRAP_ERROR = (
+                f"Playwright/Chromium could not launch: {exc}. "
+                "Using HTML + stylesheet CSS fallback."
+            )
+            return False, _PLAYWRIGHT_BOOTSTRAP_ERROR, system_browser
 
 
 @lru_cache(maxsize=64)
@@ -3697,6 +3658,360 @@ def rendered_hidden_link_details(page_url):
     )
 
 
+
+CSS_HIDDEN_LINK_MAX_STYLESHEETS = 24
+CSS_HIDDEN_LINK_MAX_BYTES = 2_500_000
+CSS_HIDDEN_LINK_TIMEOUT = 5
+
+
+def _css_remove_comments(css_text):
+    return re.sub(r"/\*.*?\*/", "", str(css_text or ""), flags=re.S)
+
+
+def _css_top_level_rules(css_text):
+    """
+    Yield only unconditional top-level qualified CSS rules.
+
+    @media/@supports/@container/@keyframes blocks are intentionally skipped by
+    the fallback. This avoids false positives where a link is hidden only at a
+    different breakpoint or interaction state. Playwright, when available,
+    remains the authoritative check for computed conditional styles.
+    """
+    css = _css_remove_comments(css_text)
+    n = len(css)
+    i = 0
+
+    while i < n:
+        while i < n and css[i].isspace():
+            i += 1
+        if i >= n:
+            break
+
+        header_start = i
+        in_quote = None
+        escape = False
+        paren = 0
+        bracket = 0
+
+        while i < n:
+            ch = css[i]
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif in_quote:
+                if ch == in_quote:
+                    in_quote = None
+            elif ch in {"'", '"'}:
+                in_quote = ch
+            elif ch == "(":
+                paren += 1
+            elif ch == ")" and paren:
+                paren -= 1
+            elif ch == "[":
+                bracket += 1
+            elif ch == "]" and bracket:
+                bracket -= 1
+            elif ch == ";" and paren == 0 and bracket == 0:
+                # Top-level @import / @charset etc.
+                i += 1
+                break
+            elif ch == "{" and paren == 0 and bracket == 0:
+                header = css[header_start:i].strip()
+                depth = 1
+                body_start = i + 1
+                i += 1
+                body_quote = None
+                body_escape = False
+
+                while i < n and depth:
+                    c = css[i]
+                    if body_escape:
+                        body_escape = False
+                    elif c == "\\":
+                        body_escape = True
+                    elif body_quote:
+                        if c == body_quote:
+                            body_quote = None
+                    elif c in {"'", '"'}:
+                        body_quote = c
+                    elif c == "{":
+                        depth += 1
+                    elif c == "}":
+                        depth -= 1
+                    i += 1
+
+                body = css[body_start:max(body_start, i - 1)]
+                if header and not header.lstrip().startswith("@"):
+                    yield header, body
+                break
+            else:
+                i += 1
+
+
+def _css_split_selectors(selector_text):
+    selectors = []
+    start = 0
+    in_quote = None
+    escape = False
+    paren = 0
+    bracket = 0
+
+    for i, ch in enumerate(selector_text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if in_quote:
+            if ch == in_quote:
+                in_quote = None
+            continue
+        if ch in {"'", '"'}:
+            in_quote = ch
+            continue
+        if ch == "(":
+            paren += 1
+        elif ch == ")" and paren:
+            paren -= 1
+        elif ch == "[":
+            bracket += 1
+        elif ch == "]" and bracket:
+            bracket -= 1
+        elif ch == "," and paren == 0 and bracket == 0:
+            part = selector_text[start:i].strip()
+            if part:
+                selectors.append(part)
+            start = i + 1
+
+    part = selector_text[start:].strip()
+    if part:
+        selectors.append(part)
+    return selectors
+
+
+def _css_hidden_declaration_reasons(declarations):
+    raw = str(declarations or "").lower()
+    compact = re.sub(r"\s+", "", raw)
+    reasons = []
+
+    if re.search(r"(?:^|;)\s*display\s*:\s*none(?:\s*!important)?\s*(?:;|$)", raw, flags=re.I):
+        reasons.append("display:none (stylesheet)")
+    if re.search(r"(?:^|;)\s*visibility\s*:\s*(?:hidden|collapse)(?:\s*!important)?\s*(?:;|$)", raw, flags=re.I):
+        reasons.append("visibility:hidden (stylesheet)")
+    if re.search(r"(?:^|;)\s*opacity\s*:\s*(?:0+(?:\.0+)?)\s*(?:!important)?\s*(?:;|$)", raw, flags=re.I):
+        reasons.append("opacity:0 (stylesheet)")
+    if re.search(r"(?:^|;)\s*font-size\s*:\s*0(?:px|em|rem|%|pt)?\s*(?:!important)?\s*(?:;|$)", raw, flags=re.I):
+        reasons.append("font-size:0 (stylesheet)")
+
+    width_zero = bool(re.search(r"(?:^|;)\s*(?:width|max-width)\s*:\s*0(?:px|em|rem|%|pt)?\s*(?:!important)?\s*(?:;|$)", raw, flags=re.I))
+    height_zero = bool(re.search(r"(?:^|;)\s*(?:height|max-height)\s*:\s*0(?:px|em|rem|%|pt)?\s*(?:!important)?\s*(?:;|$)", raw, flags=re.I))
+    if width_zero and height_zero:
+        reasons.append("zero dimensions (stylesheet)")
+
+    if re.search(r"(?:left|right|top|bottom|text-indent)\s*:\s*-\s*\d{3,}(?:px|em|rem|pt)", raw, flags=re.I):
+        reasons.append("off-screen positioning (stylesheet)")
+    if "clip:rect(0,0,0,0)" in compact or "clip:rect(0px,0px,0px,0px)" in compact or "clip-path:inset(50%)" in compact:
+        reasons.append("clipped (stylesheet)")
+    if re.search(r"(?:^|;)\s*content-visibility\s*:\s*hidden(?:\s*!important)?\s*(?:;|$)", raw, flags=re.I):
+        reasons.append("content-visibility:hidden (stylesheet)")
+    if "transform:scale(0)" in compact or "transform:scalex(0)" in compact or "transform:scaley(0)" in compact:
+        reasons.append("scale(0) (stylesheet)")
+
+    return list(dict.fromkeys(reasons))
+
+
+def _selector_is_safe_for_static_match(selector):
+    s = str(selector or "").strip()
+    if not s:
+        return False
+
+    # These are state/viewport-dependent and should be left to a real renderer.
+    conditional_pseudos = (
+        ":hover", ":active", ":focus", ":focus-visible", ":focus-within",
+        ":visited", ":target", "::before", "::after", "::marker",
+        "::first-letter", "::first-line", ":fullscreen",
+    )
+    if any(p in s.lower() for p in conditional_pseudos):
+        return False
+
+    return True
+
+
+def _stylesheet_hidden_link_details(article_soup, page_soup, base_url):
+    """
+    Browser-free fallback for class/stylesheet based hiding.
+
+    It checks:
+    - every body HTTP(S) link already accepted by the editorial-body inventory;
+    - inline <style> blocks from the fetched page;
+    - linked CSS stylesheets fetched over HTTP(S);
+    - unconditional CSS selectors that set supported hiding declarations.
+
+    It intentionally skips conditional @media/@supports blocks to avoid
+    responsive false positives when no browser is available.
+    """
+    result = {
+        "available": True,
+        "items": [],
+        "stylesheets_checked": 0,
+        "inline_style_blocks_checked": 0,
+        "rules_checked": 0,
+        "fetch_errors": [],
+    }
+
+    if article_soup is None:
+        result["available"] = False
+        result["fetch_errors"].append("Editorial body unavailable for stylesheet fallback.")
+        return result
+
+    if page_soup is None:
+        try:
+            r = requests.get(base_url, headers=UA_DESKTOP, timeout=PAGE_FETCH_TIMEOUT)
+            r.raise_for_status()
+            page_soup = BeautifulSoup(r.text, "html.parser")
+        except Exception as exc:
+            result["available"] = False
+            result["fetch_errors"].append(f"Could not fetch page HTML for CSS fallback: {exc}")
+            return result
+
+    body_inventory = content_body_link_inventory(article_soup, base_url)
+    if not body_inventory:
+        return result
+
+    inventory_by_anchor_id = {
+        id(item.get("_anchor_node")): item
+        for item in body_inventory
+        if item.get("_anchor_node") is not None
+    }
+
+    css_sources = []
+    for style in page_soup.find_all("style"):
+        css_text = style.string if style.string is not None else style.get_text("\n", strip=False)
+        if css_text and css_text.strip():
+            css_sources.append(("inline <style>", css_text))
+            result["inline_style_blocks_checked"] += 1
+
+    seen_css_urls = set()
+    linked = []
+    for link in page_soup.find_all("link", href=True):
+        rel = " ".join(str(x).lower() for x in (link.get("rel") or []))
+        as_value = str(link.get("as") or "").lower()
+        href = str(link.get("href") or "").strip()
+        if not href:
+            continue
+        if "stylesheet" not in rel and not ("preload" in rel and as_value == "style"):
+            continue
+        css_url = normalized_link_url(href, base_url)
+        if not css_url or css_url in seen_css_urls:
+            continue
+        seen_css_urls.add(css_url)
+        linked.append(css_url)
+
+    total_bytes = 0
+    for css_url in linked[:CSS_HIDDEN_LINK_MAX_STYLESHEETS]:
+        try:
+            r = requests.get(css_url, headers=UA_DESKTOP, timeout=CSS_HIDDEN_LINK_TIMEOUT)
+            if r.status_code >= 400:
+                result["fetch_errors"].append(f"CSS {r.status_code}: {css_url}")
+                continue
+            css_text = r.text or ""
+            encoded_size = len(css_text.encode("utf-8", errors="ignore"))
+            if total_bytes + encoded_size > CSS_HIDDEN_LINK_MAX_BYTES:
+                remaining = max(0, CSS_HIDDEN_LINK_MAX_BYTES - total_bytes)
+                css_text = css_text.encode("utf-8", errors="ignore")[:remaining].decode("utf-8", errors="ignore")
+                result["fetch_errors"].append("CSS scan byte budget reached; remaining stylesheet content was truncated.")
+            total_bytes += len(css_text.encode("utf-8", errors="ignore"))
+            css_sources.append((css_url, css_text))
+            result["stylesheets_checked"] += 1
+            if total_bytes >= CSS_HIDDEN_LINK_MAX_BYTES:
+                break
+        except Exception as exc:
+            result["fetch_errors"].append(f"CSS fetch failed: {css_url} ({exc})")
+
+    findings = []
+    seen_findings = set()
+
+    for source_name, css_text in css_sources:
+        for selector_group, declarations in _css_top_level_rules(css_text):
+            reasons = _css_hidden_declaration_reasons(declarations)
+            if not reasons:
+                continue
+            result["rules_checked"] += 1
+
+            for selector in _css_split_selectors(selector_group):
+                if not _selector_is_safe_for_static_match(selector):
+                    continue
+                try:
+                    matched_nodes = article_soup.select(selector)
+                except Exception:
+                    continue
+                if not matched_nodes:
+                    continue
+
+                matched_ids = {id(node) for node in matched_nodes}
+
+                for anchor_id, item in inventory_by_anchor_id.items():
+                    anchor = item.get("_anchor_node")
+                    node = anchor
+                    matched_element = None
+                    while node is not None:
+                        if id(node) in matched_ids:
+                            matched_element = node
+                            break
+                        if node is article_soup:
+                            break
+                        node = getattr(node, "parent", None)
+
+                    if matched_element is None:
+                        continue
+
+                    context = nearest_editorial_context(anchor, max_chars=220)
+                    ui_context = _token_string(
+                        element_label(anchor),
+                        element_label(matched_element),
+                        item.get("anchor_text"),
+                        anchor.get("aria-label"),
+                        anchor.get("title"),
+                        anchor.get("role"),
+                        item.get("url"),
+                        context,
+                    )
+                    legitimate_reason = known_ui_reason_from_text(ui_context)
+                    if legitimate_reason:
+                        continue
+
+                    key = (
+                        item.get("occurrence"),
+                        item.get("url"),
+                        selector,
+                        tuple(reasons),
+                    )
+                    if key in seen_findings:
+                        continue
+                    seen_findings.add(key)
+
+                    findings.append({
+                        "occurrence": item.get("occurrence"),
+                        "url": item.get("url"),
+                        "anchor_text": item.get("anchor_text") or "",
+                        "anchor_display": item.get("anchor_display") or "[EMPTY]",
+                        "anchor_type": item.get("anchor_type") or "Unknown",
+                        "hidden_element": element_label(matched_element),
+                        "hidden_because": ", ".join(reasons),
+                        "status": FAIL,
+                        "source": f"Stylesheet CSS fallback: {source_name}",
+                        "anchor_html": re.sub(r"\s+", " ", str(anchor)).strip()[:500],
+                        "context": context,
+                        "issue_type": f"Hidden/suspicious {str(item.get('link_scope', 'body')).lower()} link",
+                        "css_selector": selector,
+                    })
+
+    result["items"] = findings
+    return result
+
+
 def _merge_hidden_link_details(static_items, rendered_items):
     """
     Merge static and rendered detections while retaining distinct occurrences.
@@ -3724,39 +4039,64 @@ def _merge_hidden_link_details(static_items, rendered_items):
     return merged
 
 
-def hidden_link_details(article_soup, base_url):
+def hidden_link_details(article_soup, base_url, page_soup=None):
     """
-    Hidden Links scans ALL HTTP(S) links in the isolated editorial body.
+    Hidden Links scans every HTTP(S) link occurrence in the isolated editorial body.
 
-    Source-level detection catches:
-      empty / whitespace / punctuation anchors and inline HTML/CSS hiding.
+    Detection layers:
+    1. HTML/source scan: empty, whitespace, punctuation anchors + inline hiding.
+    2. Stylesheet fallback: unconditional class/selector based hiding from inline
+       and linked CSS. This works even when Playwright is not installed.
+    3. Rendered Chromium computed styles when Playwright/Chromium is available.
 
-    Rendered Chromium detection catches:
-      stylesheet/class-based display:none, visibility:hidden, opacity:0,
-      font-size:0, zero-size, off-screen, clipped and scale/content-visibility
-      hiding when Playwright/Chromium is available.
+    Missing Playwright alone no longer forces REVIEW.
     """
-    static_items = static_hidden_link_details(
+    static_items = static_hidden_link_details(article_soup, base_url)
+
+    css_check = _stylesheet_hidden_link_details(
         article_soup,
+        page_soup,
         base_url,
     )
+    css_items = css_check.get("items", []) if css_check.get("available") else []
 
     rendered = rendered_hidden_link_details(base_url)
     rendered_items = rendered.get("items", []) if rendered.get("available") else []
 
     details = _merge_hidden_link_details(
         static_items,
-        rendered_items,
+        list(css_items) + list(rendered_items),
     )
 
+    if rendered.get("available"):
+        verification_mode = "rendered"
+        source = "HTML/source + stylesheet CSS + rendered Chromium computed styles"
+        available = True
+    elif css_check.get("available"):
+        verification_mode = "css_fallback"
+        source = "HTML/source + inline/linked stylesheet CSS fallback"
+        available = True
+    else:
+        verification_mode = "source_only"
+        source = "Isolated editorial HTML body only"
+        available = False
+
+    notes = []
+    if rendered.get("error"):
+        notes.append(rendered.get("error"))
+    if css_check.get("fetch_errors"):
+        notes.extend(css_check.get("fetch_errors")[:5])
+
     return details, {
-        "available": bool(rendered.get("available")),
-        "source": (
-            "Isolated editorial HTML body + rendered Chromium computed styles"
-            if rendered.get("available")
-            else "Isolated editorial HTML body only"
-        ),
-        "error": rendered.get("error", ""),
+        "available": available,
+        "verification_mode": verification_mode,
+        "source": source,
+        "error": " | ".join(str(x) for x in notes if x),
+        "rendered_available": bool(rendered.get("available")),
+        "css_fallback_available": bool(css_check.get("available")),
+        "stylesheets_checked": int(css_check.get("stylesheets_checked", 0) or 0),
+        "inline_style_blocks_checked": int(css_check.get("inline_style_blocks_checked", 0) or 0),
+        "css_rules_checked": int(css_check.get("rules_checked", 0) or 0),
     }
 
 def classify_hidden_text_static(node):
@@ -6471,6 +6811,7 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
     hidden_links, hidden_inventory = hidden_link_details(
         article_soup,
         desktop_r.url,
+        page_soup=soup,
     )
 
     if hidden_links:
@@ -6501,21 +6842,33 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
         hidden_action = "Remove or rewrite each flagged external link. Use a meaningful visible anchor, or remove the link if it should not be present."
 
     else:
+        verification_mode = hidden_inventory.get("verification_mode")
         if hidden_inventory.get("available"):
             hidden_status = PASS
-            hidden_result = (
-                "No hidden links found after scanning all HTTP(S) links in the isolated editorial body "
-                "and checking rendered Chromium computed styles."
-            )
+            if verification_mode == "rendered":
+                hidden_result = (
+                    "No hidden links found after scanning every HTTP(S) link occurrence in the isolated editorial body, "
+                    "checking source/inline hiding, stylesheet CSS and rendered Chromium computed styles."
+                )
+            else:
+                hidden_result = (
+                    "No hidden links found after scanning every HTTP(S) link occurrence in the isolated editorial body, "
+                    "checking empty/whitespace/punctuation anchors, inline hiding and class/stylesheet-based hiding. "
+                    f"CSS fallback checked {hidden_inventory.get('inline_style_blocks_checked', 0)} inline style block(s), "
+                    f"{hidden_inventory.get('stylesheets_checked', 0)} linked stylesheet(s) and "
+                    f"{hidden_inventory.get('css_rules_checked', 0)} hiding rule(s). "
+                    "Chromium was unavailable, so dynamic JavaScript-applied computed styles were not evaluated; "
+                    "this alone does not make the article a REVIEW."
+                )
             hidden_action = ""
         else:
             hidden_status = REVIEW
             hidden_result = (
-                "No source-level hidden links were found, but rendered computed-style verification was unavailable. "
-                "CSS-class or stylesheet-based hiding cannot be ruled out. "
-                f"Renderer detail: {hidden_inventory.get('error') or 'Chromium/Playwright unavailable.'}"
+                "No source-level hidden links were found, but neither rendered computed-style verification nor the "
+                "stylesheet CSS fallback could run reliably. "
+                f"Verifier detail: {hidden_inventory.get('error') or 'Browser and CSS verification unavailable.'}"
             )
-            hidden_action = "Rerun where Playwright/Chromium is available before treating Hidden Links as clear."
+            hidden_action = "Review the runtime/network configuration because both browser and stylesheet verification were unavailable."
 
     rows.append(result(
         "Hidden Links",
