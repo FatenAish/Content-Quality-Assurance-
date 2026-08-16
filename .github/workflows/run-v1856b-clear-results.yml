@@ -26,3 +26,4 @@ jobs:
           git add app.py
           git commit -m "Make issue results concise and grouped"
           git push origin main
+# retry after patch-script fix
