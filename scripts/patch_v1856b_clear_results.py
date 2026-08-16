@@ -106,21 +106,21 @@ new_func = r'''def deterministic_editorial_quality_issues(article_soup, limit=30
 '''
 
 func_pattern = re.compile(r'def deterministic_editorial_quality_issues\(article_soup, limit=30\):.*?\n\ndef audit_content\(', re.S)
-text, n = func_pattern.subn(new_func + '\n\ndef audit_content(', text, count=1)
-if n != 1:
-    raise SystemExit('editorial function not replaced')
+match = func_pattern.search(text)
+if not match:
+    raise SystemExit('editorial function not found')
+text = text[:match.start()] + new_func + '\n\ndef audit_content(' + text[match.end():]
 
-# Replace only the verbose grammar summary section, keeping the existing rows.append call.
 grammar_pattern = re.compile(
     r'    grammar_finding = \(.*?\n    rows\.append\(result\(\n        "Grammar / Readability",',
     re.S,
 )
+match = grammar_pattern.search(text)
+if not match:
+    raise SystemExit('grammar summary not found')
 grammar_replacement = '''    if editorial_quality_issues:\n        grammar_finding = "\\n".join(\n            f"{index}: {item}"\n            for index, item in enumerate(editorial_quality_issues[:20], start=1)\n        )\n    elif avg > 32 or malformed >= 4:\n        grammar_finding = f"Readability issue — Average sentence length is {avg:.1f} words with {malformed} unusually long or potentially malformed fragment(s)."\n    else:\n        grammar_finding = "No high-confidence grammar or CMS-formatting issues found."\n    rows.append(result(\n        "Grammar / Readability",'''
-text, n = grammar_pattern.subn(grammar_replacement, text, count=1)
-if n != 1:
-    raise SystemExit('grammar summary not replaced')
+text = text[:match.start()] + grammar_replacement + text[match.end():]
 
-# Use colon numbering across compact issue summaries.
 text = text.replace('result_lines.append(f"{number}. {title}: {detail}")', 'result_lines.append(f"{number}: {title}: {detail}")')
 text = text.replace('action_lines.append(f"{number}. {action}")', 'action_lines.append(f"{number}: {action}")')
 text = text.replace('source_lines.append(f"{number}. {source}")', 'source_lines.append(f"{number}: {source}")')
