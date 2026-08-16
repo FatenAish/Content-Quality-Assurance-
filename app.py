@@ -47,7 +47,7 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.44 HIDDEN LINKS CSS FALLBACK"
+APP_VERSION = "V18.45 FAST HIDDEN LINKS CSS FALLBACK"
 ENGINE_BUILD = "2026.08.16.2"
 CURRENT_YEAR = 2026
 
@@ -3659,9 +3659,12 @@ def rendered_hidden_link_details(page_url):
 
 
 
-CSS_HIDDEN_LINK_MAX_STYLESHEETS = 24
-CSS_HIDDEN_LINK_MAX_BYTES = 2_500_000
-CSS_HIDDEN_LINK_TIMEOUT = 5
+CSS_HIDDEN_LINK_MAX_STYLESHEETS = 6
+CSS_HIDDEN_LINK_MAX_BYTES = 750_000
+CSS_HIDDEN_LINK_CONNECT_TIMEOUT = 0.8
+CSS_HIDDEN_LINK_READ_TIMEOUT = 1.6
+CSS_HIDDEN_LINK_TOTAL_BUDGET = 4.5
+CSS_HIDDEN_LINK_MAX_HIDING_RULES = 2500
 
 
 def _css_remove_comments(css_text):
@@ -3670,12 +3673,11 @@ def _css_remove_comments(css_text):
 
 def _css_top_level_rules(css_text):
     """
-    Yield only unconditional top-level qualified CSS rules.
+    Yield unconditional top-level qualified CSS rules only.
 
-    @media/@supports/@container/@keyframes blocks are intentionally skipped by
-    the fallback. This avoids false positives where a link is hidden only at a
-    different breakpoint or interaction state. Playwright, when available,
-    remains the authoritative check for computed conditional styles.
+    Conditional @media/@supports/@container/@keyframes blocks are skipped in the
+    browser-free fallback. A real rendered browser remains authoritative for
+    viewport/state dependent rules when available.
     """
     css = _css_remove_comments(css_text)
     n = len(css)
@@ -3713,7 +3715,6 @@ def _css_top_level_rules(css_text):
             elif ch == "]" and bracket:
                 bracket -= 1
             elif ch == ";" and paren == 0 and bracket == 0:
-                # Top-level @import / @charset etc.
                 i += 1
                 break
             elif ch == "{" and paren == 0 and bracket == 0:
@@ -3827,31 +3828,137 @@ def _selector_is_safe_for_static_match(selector):
     if not s:
         return False
 
-    # These are state/viewport-dependent and should be left to a real renderer.
     conditional_pseudos = (
         ":hover", ":active", ":focus", ":focus-visible", ":focus-within",
         ":visited", ":target", "::before", "::after", "::marker",
         "::first-letter", "::first-line", ":fullscreen",
     )
-    if any(p in s.lower() for p in conditional_pseudos):
+    low = s.lower()
+    if any(p in low for p in conditional_pseudos):
+        return False
+
+    # Complex selector features are deliberately left to Chromium. Keeping the
+    # fallback simple prevents BeautifulSoup selector evaluation from stalling
+    # on large production stylesheets.
+    if any(x in s for x in ("[", "]", ":not(", ":has(", ":is(", ":where(", "+", "~")):
         return False
 
     return True
 
 
+def _simple_compound_selector_matches(node, compound):
+    """Fast match for tag/#id/.class compounds such as div.foo#bar."""
+    s = str(compound or "").strip()
+    if not s or node is None or not getattr(node, "name", None):
+        return False
+
+    # Strip the universal selector; unsupported syntax is rejected.
+    s = s.replace("*", "")
+    if not s:
+        return True
+    if re.search(r"[^A-Za-z0-9_\-\.#]", s):
+        return False
+
+    tag_match = re.match(r"^[A-Za-z][A-Za-z0-9_-]*", s)
+    if tag_match and str(node.name).lower() != tag_match.group(0).lower():
+        return False
+
+    id_matches = re.findall(r"#([A-Za-z0-9_-]+)", s)
+    if id_matches:
+        node_id = str(node.get("id") or "")
+        if any(node_id != wanted for wanted in id_matches):
+            return False
+
+    class_matches = re.findall(r"\.([A-Za-z0-9_-]+)", s)
+    if class_matches:
+        node_classes = {str(x) for x in (node.get("class") or [])}
+        if any(wanted not in node_classes for wanted in class_matches):
+            return False
+
+    return True
+
+
+def _selector_matches_anchor_path(selector, anchor, article_root):
+    """
+    Fast browser-free selector matching against the anchor and its ancestors.
+
+    Supports common descendant/child selectors composed of tag/#id/.class.
+    This is intentionally narrower than a full CSS engine, but it catches the
+    production hiding patterns we care about without expensive soup.select().
+    """
+    s = re.sub(r"\s+", " ", str(selector or "").strip())
+    if not _selector_is_safe_for_static_match(s):
+        return None
+
+    # Convert child combinators to token boundaries. The fallback treats them
+    # conservatively as ancestor relationships; Chromium handles exact layout
+    # semantics when present.
+    parts = [p for p in re.split(r"\s*>\s*|\s+", s) if p]
+    if not parts or len(parts) > 8:
+        return None
+
+    path = []
+    node = anchor
+    while node is not None and getattr(node, "name", None):
+        path.append(node)  # anchor -> ancestors
+        if node is article_root:
+            break
+        node = getattr(node, "parent", None)
+    if not path:
+        return None
+
+    # Rightmost selector must match the anchor or one of its ancestors if that
+    # ancestor itself is the element carrying display:none etc.
+    for right_index, candidate in enumerate(path):
+        if not _simple_compound_selector_matches(candidate, parts[-1]):
+            continue
+        current_index = right_index + 1
+        ok = True
+        for part in reversed(parts[:-1]):
+            found = False
+            while current_index < len(path):
+                if _simple_compound_selector_matches(path[current_index], part):
+                    found = True
+                    current_index += 1
+                    break
+                current_index += 1
+            if not found:
+                ok = False
+                break
+        if ok:
+            return candidate
+    return None
+
+
+def _fetch_css_source(css_url):
+    try:
+        r = requests.get(
+            css_url,
+            headers=UA_DESKTOP,
+            timeout=(CSS_HIDDEN_LINK_CONNECT_TIMEOUT, CSS_HIDDEN_LINK_READ_TIMEOUT),
+        )
+        if r.status_code >= 400:
+            return css_url, "", f"CSS {r.status_code}: {css_url}"
+        return css_url, (r.text or ""), ""
+    except Exception as exc:
+        return css_url, "", f"CSS fetch failed: {css_url} ({exc})"
+
+
 def _stylesheet_hidden_link_details(article_soup, page_soup, base_url):
     """
-    Browser-free fallback for class/stylesheet based hiding.
+    Fast browser-free fallback for class/stylesheet based hiding.
 
-    It checks:
-    - every body HTTP(S) link already accepted by the editorial-body inventory;
-    - inline <style> blocks from the fetched page;
-    - linked CSS stylesheets fetched over HTTP(S);
-    - unconditional CSS selectors that set supported hiding declarations.
+    Performance safeguards:
+    - at most 6 linked stylesheets;
+    - concurrent CSS fetches with short connect/read timeouts;
+    - 750 KB total CSS scan budget;
+    - 4.5 second overall fallback budget;
+    - no BeautifulSoup soup.select() calls across whole stylesheets;
+    - only simple tag/#id/.class selector matching on each link ancestry path.
 
-    It intentionally skips conditional @media/@supports blocks to avoid
-    responsive false positives when no browser is available.
+    Missing/slow stylesheet requests never freeze the full audit.
     """
+    started = time.monotonic()
     result = {
         "available": True,
         "items": [],
@@ -3859,6 +3966,7 @@ def _stylesheet_hidden_link_details(article_soup, page_soup, base_url):
         "inline_style_blocks_checked": 0,
         "rules_checked": 0,
         "fetch_errors": [],
+        "timed_out": False,
     }
 
     if article_soup is None:
@@ -3867,103 +3975,114 @@ def _stylesheet_hidden_link_details(article_soup, page_soup, base_url):
         return result
 
     if page_soup is None:
-        try:
-            r = requests.get(base_url, headers=UA_DESKTOP, timeout=PAGE_FETCH_TIMEOUT)
-            r.raise_for_status()
-            page_soup = BeautifulSoup(r.text, "html.parser")
-        except Exception as exc:
-            result["available"] = False
-            result["fetch_errors"].append(f"Could not fetch page HTML for CSS fallback: {exc}")
-            return result
+        result["available"] = False
+        result["fetch_errors"].append("Page HTML unavailable for stylesheet fallback.")
+        return result
 
     body_inventory = content_body_link_inventory(article_soup, base_url)
     if not body_inventory:
         return result
 
-    inventory_by_anchor_id = {
-        id(item.get("_anchor_node")): item
-        for item in body_inventory
+    anchor_items = [
+        item for item in body_inventory
         if item.get("_anchor_node") is not None
-    }
+    ]
 
     css_sources = []
     for style in page_soup.find_all("style"):
+        if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
+            result["timed_out"] = True
+            break
         css_text = style.string if style.string is not None else style.get_text("\n", strip=False)
         if css_text and css_text.strip():
-            css_sources.append(("inline <style>", css_text))
+            # Inline styles are already in memory; retain only a bounded amount.
+            css_sources.append(("inline <style>", css_text[:250_000]))
             result["inline_style_blocks_checked"] += 1
 
     seen_css_urls = set()
     linked = []
     for link in page_soup.find_all("link", href=True):
         rel = " ".join(str(x).lower() for x in (link.get("rel") or []))
-        as_value = str(link.get("as") or "").lower()
         href = str(link.get("href") or "").strip()
-        if not href:
-            continue
-        if "stylesheet" not in rel and not ("preload" in rel and as_value == "style"):
+        if not href or "stylesheet" not in rel:
             continue
         css_url = normalized_link_url(href, base_url)
         if not css_url or css_url in seen_css_urls:
             continue
         seen_css_urls.add(css_url)
         linked.append(css_url)
+        if len(linked) >= CSS_HIDDEN_LINK_MAX_STYLESHEETS:
+            break
+
+    if linked and not result["timed_out"]:
+        workers = min(4, len(linked))
+        executor = ThreadPoolExecutor(max_workers=workers)
+        future_map = {executor.submit(_fetch_css_source, url): url for url in linked}
+        try:
+            remaining = max(0.1, CSS_HIDDEN_LINK_TOTAL_BUDGET - (time.monotonic() - started))
+            for future in as_completed(future_map, timeout=remaining):
+                if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
+                    result["timed_out"] = True
+                    break
+                css_url, css_text, err = future.result()
+                if err:
+                    result["fetch_errors"].append(err)
+                    continue
+                if css_text:
+                    css_sources.append((css_url, css_text))
+                    result["stylesheets_checked"] += 1
+        except Exception:
+            result["timed_out"] = True
+            result["fetch_errors"].append("CSS fallback time budget reached; unfinished stylesheet requests were skipped.")
+        finally:
+            for future in future_map:
+                if not future.done():
+                    future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
 
     total_bytes = 0
-    for css_url in linked[:CSS_HIDDEN_LINK_MAX_STYLESHEETS]:
-        try:
-            r = requests.get(css_url, headers=UA_DESKTOP, timeout=CSS_HIDDEN_LINK_TIMEOUT)
-            if r.status_code >= 400:
-                result["fetch_errors"].append(f"CSS {r.status_code}: {css_url}")
-                continue
-            css_text = r.text or ""
-            encoded_size = len(css_text.encode("utf-8", errors="ignore"))
-            if total_bytes + encoded_size > CSS_HIDDEN_LINK_MAX_BYTES:
-                remaining = max(0, CSS_HIDDEN_LINK_MAX_BYTES - total_bytes)
-                css_text = css_text.encode("utf-8", errors="ignore")[:remaining].decode("utf-8", errors="ignore")
-                result["fetch_errors"].append("CSS scan byte budget reached; remaining stylesheet content was truncated.")
-            total_bytes += len(css_text.encode("utf-8", errors="ignore"))
-            css_sources.append((css_url, css_text))
-            result["stylesheets_checked"] += 1
-            if total_bytes >= CSS_HIDDEN_LINK_MAX_BYTES:
-                break
-        except Exception as exc:
-            result["fetch_errors"].append(f"CSS fetch failed: {css_url} ({exc})")
+    bounded_sources = []
+    for source_name, css_text in css_sources:
+        if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
+            result["timed_out"] = True
+            break
+        data = str(css_text or "").encode("utf-8", errors="ignore")
+        remaining_bytes = CSS_HIDDEN_LINK_MAX_BYTES - total_bytes
+        if remaining_bytes <= 0:
+            break
+        if len(data) > remaining_bytes:
+            data = data[:remaining_bytes]
+        total_bytes += len(data)
+        bounded_sources.append((source_name, data.decode("utf-8", errors="ignore")))
 
     findings = []
     seen_findings = set()
 
-    for source_name, css_text in css_sources:
+    for source_name, css_text in bounded_sources:
+        if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
+            result["timed_out"] = True
+            break
+
         for selector_group, declarations in _css_top_level_rules(css_text):
+            if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
+                result["timed_out"] = True
+                break
+
             reasons = _css_hidden_declaration_reasons(declarations)
             if not reasons:
                 continue
             result["rules_checked"] += 1
+            if result["rules_checked"] > CSS_HIDDEN_LINK_MAX_HIDING_RULES:
+                result["fetch_errors"].append("CSS hiding-rule cap reached; remaining rules were skipped.")
+                break
 
             for selector in _css_split_selectors(selector_group):
                 if not _selector_is_safe_for_static_match(selector):
                     continue
-                try:
-                    matched_nodes = article_soup.select(selector)
-                except Exception:
-                    continue
-                if not matched_nodes:
-                    continue
 
-                matched_ids = {id(node) for node in matched_nodes}
-
-                for anchor_id, item in inventory_by_anchor_id.items():
+                for item in anchor_items:
                     anchor = item.get("_anchor_node")
-                    node = anchor
-                    matched_element = None
-                    while node is not None:
-                        if id(node) in matched_ids:
-                            matched_element = node
-                            break
-                        if node is article_soup:
-                            break
-                        node = getattr(node, "parent", None)
-
+                    matched_element = _selector_matches_anchor_path(selector, anchor, article_soup)
                     if matched_element is None:
                         continue
 
@@ -4001,7 +4120,7 @@ def _stylesheet_hidden_link_details(article_soup, page_soup, base_url):
                         "hidden_element": element_label(matched_element),
                         "hidden_because": ", ".join(reasons),
                         "status": FAIL,
-                        "source": f"Stylesheet CSS fallback: {source_name}",
+                        "source": f"Fast stylesheet CSS fallback: {source_name}",
                         "anchor_html": re.sub(r"\s+", " ", str(anchor)).strip()[:500],
                         "context": context,
                         "issue_type": f"Hidden/suspicious {str(item.get('link_scope', 'body')).lower()} link",
@@ -4072,9 +4191,9 @@ def hidden_link_details(article_soup, base_url, page_soup=None):
         verification_mode = "rendered"
         source = "HTML/source + stylesheet CSS + rendered Chromium computed styles"
         available = True
-    elif css_check.get("available"):
+    elif css_check.get("available") and not css_check.get("timed_out"):
         verification_mode = "css_fallback"
-        source = "HTML/source + inline/linked stylesheet CSS fallback"
+        source = "HTML/source + fast inline/linked stylesheet CSS fallback"
         available = True
     else:
         verification_mode = "source_only"
@@ -4097,6 +4216,7 @@ def hidden_link_details(article_soup, base_url, page_soup=None):
         "stylesheets_checked": int(css_check.get("stylesheets_checked", 0) or 0),
         "inline_style_blocks_checked": int(css_check.get("inline_style_blocks_checked", 0) or 0),
         "css_rules_checked": int(css_check.get("rules_checked", 0) or 0),
+        "css_timed_out": bool(css_check.get("timed_out")),
     }
 
 def classify_hidden_text_static(node):
@@ -6865,8 +6985,8 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
             hidden_status = REVIEW
             hidden_result = (
                 "No source-level hidden links were found, but neither rendered computed-style verification nor the "
-                "stylesheet CSS fallback could run reliably. "
-                f"Verifier detail: {hidden_inventory.get('error') or 'Browser and CSS verification unavailable.'}"
+                "stylesheet CSS fallback could complete reliably. "
+                f"Verifier detail: {hidden_inventory.get('error') or 'Browser/CSS verification unavailable or exceeded the fast scan budget.'}"
             )
             hidden_action = "Review the runtime/network configuration because both browser and stylesheet verification were unavailable."
 
