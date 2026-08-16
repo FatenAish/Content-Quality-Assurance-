@@ -14,6 +14,11 @@ from functools import lru_cache
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 import urllib.robotparser
+import subprocess
+import sys
+import shutil
+import importlib
+import threading
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -42,8 +47,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.42 HIDDEN LINKS ALL BODY LINKS"
-ENGINE_BUILD = "2026.08.13.11"
+APP_VERSION = "V18.43 HIDDEN LINKS RENDERER AUTO-BOOTSTRAP"
+ENGINE_BUILD = "2026.08.16.1"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -3328,6 +3333,107 @@ def static_hidden_link_details(article_soup, base_url):
     return details
 
 
+_PLAYWRIGHT_BOOTSTRAP_LOCK = threading.Lock()
+_PLAYWRIGHT_BOOTSTRAP_DONE = False
+_PLAYWRIGHT_BOOTSTRAP_ERROR = ""
+
+
+def _ensure_playwright_runtime():
+    """
+    Make the rendered Hidden Links check self-healing on hosted environments.
+
+    Order of operations:
+    1. Use an already-imported Playwright runtime when available.
+    2. If the Python package is missing, install it once in the current runtime.
+    3. Re-import sync_playwright.
+    4. Verify that Chromium can launch.
+    5. If the bundled browser is missing, install Chromium once and verify again.
+
+    The function returns (available, error_message, executable_path).
+    A system Chromium/Chrome executable is preferred when one is already present.
+    """
+    global PLAYWRIGHT_AVAILABLE, sync_playwright
+    global _PLAYWRIGHT_BOOTSTRAP_DONE, _PLAYWRIGHT_BOOTSTRAP_ERROR
+
+    system_browser = (
+        shutil.which("chromium")
+        or shutil.which("chromium-browser")
+        or shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+    )
+
+    with _PLAYWRIGHT_BOOTSTRAP_LOCK:
+        if _PLAYWRIGHT_BOOTSTRAP_DONE and PLAYWRIGHT_AVAILABLE:
+            return True, "", system_browser
+        if _PLAYWRIGHT_BOOTSTRAP_DONE and not PLAYWRIGHT_AVAILABLE:
+            return False, _PLAYWRIGHT_BOOTSTRAP_ERROR or "Playwright runtime unavailable.", system_browser
+
+        errors = []
+
+        if not PLAYWRIGHT_AVAILABLE:
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--quiet", "playwright>=1.47,<2"],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=180,
+                )
+                module = importlib.import_module("playwright.sync_api")
+                sync_playwright = module.sync_playwright
+                PLAYWRIGHT_AVAILABLE = True
+            except Exception as exc:
+                errors.append(f"Playwright package bootstrap failed: {exc}")
+
+        if PLAYWRIGHT_AVAILABLE:
+            launch_kwargs = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+            }
+            if system_browser:
+                launch_kwargs["executable_path"] = system_browser
+
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(**launch_kwargs)
+                    browser.close()
+                _PLAYWRIGHT_BOOTSTRAP_DONE = True
+                _PLAYWRIGHT_BOOTSTRAP_ERROR = ""
+                return True, "", system_browser
+            except Exception as first_exc:
+                errors.append(f"Initial Chromium launch failed: {first_exc}")
+
+                # If no working system browser exists, install Playwright Chromium.
+                # This is intentionally attempted only once per app runtime.
+                if not system_browser:
+                    try:
+                        subprocess.run(
+                            [sys.executable, "-m", "playwright", "install", "chromium"],
+                            check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            timeout=300,
+                        )
+                        with sync_playwright() as p:
+                            browser = p.chromium.launch(
+                                headless=True,
+                                args=["--no-sandbox", "--disable-dev-shm-usage"],
+                            )
+                            browser.close()
+                        _PLAYWRIGHT_BOOTSTRAP_DONE = True
+                        _PLAYWRIGHT_BOOTSTRAP_ERROR = ""
+                        return True, "", None
+                    except Exception as install_exc:
+                        errors.append(f"Chromium bootstrap failed: {install_exc}")
+
+        PLAYWRIGHT_AVAILABLE = False
+        _PLAYWRIGHT_BOOTSTRAP_DONE = True
+        _PLAYWRIGHT_BOOTSTRAP_ERROR = " | ".join(errors) or "Playwright/Chromium unavailable."
+        return False, _PLAYWRIGHT_BOOTSTRAP_ERROR, system_browser
+
+
 @lru_cache(maxsize=64)
 def _rendered_hidden_links_cached(page_url, _bucket):
     """
@@ -3342,8 +3448,9 @@ def _rendered_hidden_links_cached(page_url, _bucket):
         "error": "",
     }
 
-    if not PLAYWRIGHT_AVAILABLE:
-        result["error"] = "Playwright is not available."
+    runtime_ok, runtime_error, browser_executable = _ensure_playwright_runtime()
+    if not runtime_ok:
+        result["error"] = runtime_error or "Playwright/Chromium is not available."
         return result
 
     article_selectors = [
@@ -3547,7 +3654,13 @@ def _rendered_hidden_links_cached(page_url, _bucket):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            launch_kwargs = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+            }
+            if browser_executable:
+                launch_kwargs["executable_path"] = browser_executable
+            browser = p.chromium.launch(**launch_kwargs)
             page = browser.new_page(
                 user_agent=UA_DESKTOP.get("User-Agent", ""),
                 viewport={"width": 1440, "height": 1200},
