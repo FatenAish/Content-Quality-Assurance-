@@ -47,7 +47,7 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.45 FAST HIDDEN LINKS CSS FALLBACK"
+APP_VERSION = "V18.46 ULTRA FAST HIDDEN LINKS"
 ENGINE_BUILD = "2026.08.16.2"
 CURRENT_YEAR = 2026
 
@@ -1046,7 +1046,7 @@ SPAM_RULES = [
     ("Sneaky Redirect", "FAIL when crawler and user are sent to materially different destinations or users are deceptively redirected."),
     ("Device Spam Redirect", "FAIL when mobile or device users are redirected to unrelated or spam destinations while other visitors are not."),
     ("Hidden Text", "Inspect why text is hidden before assigning a result. Legitimate interface, responsive and accessibility hiding should PASS. Unexplained hiding should REVIEW. Hiding intended to manipulate search rankings should FAIL."),
-    ("Hidden Links", "Inspect every HTTP(S) <a href> occurrence, internal or external, inside the isolated editorial article body. FAIL when an external link uses an empty, whitespace-only or punctuation-only anchor, or when the anchor/ancestor is concealed by supported HTML/CSS signals such as display:none, visibility:hidden, opacity:0, font-size:0, zero dimensions, off-screen positioning or clipping. Source HTML, inline styles and linked stylesheets are checked without requiring Playwright; rendered Chromium is used as an additional verification layer when available. Menus, sidebars, comments, social buttons, newsletters, cards and other UI modules are excluded."),
+    ("Hidden Links", "Inspect every HTTP(S) <a href> occurrence, internal or external, inside the isolated editorial article body. FAIL when an external link uses an empty, whitespace-only or punctuation-only anchor, or when the anchor/ancestor is concealed by supported HTML/CSS signals such as display:none, visibility:hidden, opacity:0, font-size:0, zero dimensions, off-screen positioning or clipping. The default fast scan checks source HTML and inline hiding without extra network/browser work; optional deep mode can add linked stylesheet and rendered Chromium verification. Menus, sidebars, comments, social buttons, newsletters, cards and other UI modules are excluded."),
     ("Link Spam", "Review all external links found inside the isolated editorial body, including punctuation-only, whitespace-only, empty and image anchors. FAIL only when evidence shows links were inserted primarily to manipulate rankings; unusual anchor placement alone is REVIEW."),
     ("Hacked Content", "FAIL when unauthorized spam text, pages, links or redirects are injected."),
     ("Spam JavaScript", "FAIL when scripts inject spam content, hidden links or deceptive redirects."),
@@ -1105,7 +1105,7 @@ SYSTEM_USES = {
     "Sneaky Redirect": "Desktop User Agent, Googlebot User Agent, HTTP redirect handling, final destination comparison",
     "Device Spam Redirect": "Desktop User Agent, Mobile User Agent, final destination and redirect-chain comparison; content parity is handled separately by Mobile Content",
     "Hidden Text": "Rendered DOM when available, computed CSS, hidden attribute, accessibility attributes, responsive visibility, interface context, text length and hiding reason classification",
-    "Hidden Links": "Complete body-link inventory (internal + external), exact anchor representation, empty/whitespace/punctuation anchor detection, source-level hiding signals, inline/linked stylesheet CSS selector checks, rendered Chromium computed styles when available, and UI/module exclusions",
+    "Hidden Links": "Complete body-link inventory (internal + external), exact anchor representation, empty/whitespace/punctuation anchor detection, source-level and inline hiding signals, and UI/module exclusions; optional deep mode adds stylesheet and rendered-browser checks",
     "Keyword Stuffing": "Editorial article text only, Focus Keyword, Secondary Keywords, exact phrase counts, repetition per 1,000 words, N gram frequency, primary topic phrase detection, title, H1 and URL context; TruBroker/property widgets, banners, newsletter, social UI and other embedded modules are excluded",
     "Link Spam": "Complete isolated-body external-link inventory, exact anchor representation, anchor type, destination domain, repeated anchor analysis and suspicious punctuation/blank anchor detection",
     "Hacked Content": "Rendered page text, suspicious spam terms, injected content pattern matching",
@@ -4160,17 +4160,40 @@ def _merge_hidden_link_details(static_items, rendered_items):
 
 def hidden_link_details(article_soup, base_url, page_soup=None):
     """
-    Hidden Links scans every HTTP(S) link occurrence in the isolated editorial body.
+    Fast Hidden Links audit.
 
-    Detection layers:
-    1. HTML/source scan: empty, whitespace, punctuation anchors + inline hiding.
-    2. Stylesheet fallback: unconditional class/selector based hiding from inline
-       and linked CSS. This works even when Playwright is not installed.
-    3. Rendered Chromium computed styles when Playwright/Chromium is available.
+    Default mode is intentionally network-free after the page HTML has loaded:
+    - scans every HTTP(S) link occurrence in the isolated editorial body;
+    - catches empty, whitespace-only and punctuation-only anchors;
+    - catches supported source/inline hiding on the anchor or its ancestors.
 
-    Missing Playwright alone no longer forces REVIEW.
+    This directly covers the main hidden-link spam cases this auditor is meant
+    to catch (for example a link placed on '.', whitespace, or an empty anchor)
+    without fetching stylesheets or launching Chromium for every URL.
+
+    Optional deep verification can be enabled with:
+        MYBAYUT_DEEP_HIDDEN_LINK_SCAN=1
+    That adds linked-stylesheet and rendered-browser verification, but is slower.
     """
     static_items = static_hidden_link_details(article_soup, base_url)
+
+    deep_scan = str(os.getenv("MYBAYUT_DEEP_HIDDEN_LINK_SCAN", "0")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+    if not deep_scan:
+        return static_items, {
+            "available": True,
+            "verification_mode": "fast_source",
+            "source": "Fast isolated editorial HTML/source scan",
+            "error": "",
+            "rendered_available": False,
+            "css_fallback_available": False,
+            "stylesheets_checked": 0,
+            "inline_style_blocks_checked": 0,
+            "css_rules_checked": 0,
+            "css_timed_out": False,
+        }
 
     css_check = _stylesheet_hidden_link_details(
         article_soup,
@@ -4193,12 +4216,14 @@ def hidden_link_details(article_soup, base_url, page_soup=None):
         available = True
     elif css_check.get("available") and not css_check.get("timed_out"):
         verification_mode = "css_fallback"
-        source = "HTML/source + fast inline/linked stylesheet CSS fallback"
+        source = "HTML/source + inline/linked stylesheet CSS fallback"
         available = True
     else:
-        verification_mode = "source_only"
-        source = "Isolated editorial HTML body only"
-        available = False
+        # Deep mode is optional. Source-level results remain valid even if the
+        # optional browser/CSS layer cannot finish.
+        verification_mode = "fast_source"
+        source = "Fast isolated editorial HTML/source scan"
+        available = True
 
     notes = []
     if rendered.get("error"):
@@ -6970,15 +6995,16 @@ def audit_spam(url, desktop_r, mobile_r, bot_r, soup, body_text, focus_keyword="
                     "No hidden links found after scanning every HTTP(S) link occurrence in the isolated editorial body, "
                     "checking source/inline hiding, stylesheet CSS and rendered Chromium computed styles."
                 )
-            else:
+            elif verification_mode == "css_fallback":
                 hidden_result = (
                     "No hidden links found after scanning every HTTP(S) link occurrence in the isolated editorial body, "
-                    "checking empty/whitespace/punctuation anchors, inline hiding and class/stylesheet-based hiding. "
-                    f"CSS fallback checked {hidden_inventory.get('inline_style_blocks_checked', 0)} inline style block(s), "
-                    f"{hidden_inventory.get('stylesheets_checked', 0)} linked stylesheet(s) and "
-                    f"{hidden_inventory.get('css_rules_checked', 0)} hiding rule(s). "
-                    "Chromium was unavailable, so dynamic JavaScript-applied computed styles were not evaluated; "
-                    "this alone does not make the article a REVIEW."
+                    "including empty/whitespace/punctuation anchors, inline hiding and stylesheet-based hiding."
+                )
+            else:
+                hidden_result = (
+                    "No hidden links found in the fast source scan. Every HTTP(S) link occurrence in the isolated editorial body "
+                    "was checked for empty, whitespace-only and punctuation-only anchors plus supported inline/source hiding. "
+                    "External stylesheet and Chromium checks are skipped by default for speed."
                 )
             hidden_action = ""
         else:
