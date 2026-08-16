@@ -43,8 +43,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.52 HOMEPAGE INTERNAL LINK FIX"
-ENGINE_BUILD = "2026.08.16.52"
+APP_VERSION = "V18.53 INTERNAL LINK INTENT FIX"
+ENGINE_BUILD = "2026.08.16.53"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -4024,6 +4024,48 @@ def external_link_inventory_text(inventory, validation=None):
 
     return "\n".join(lines)
 
+
+PROPERTY_TYPE_TERMS = {
+    "villas": {"villa", "villas"},
+    "apartments": {"apartment", "apartments", "flat", "flats"},
+    "townhouses": {"townhouse", "townhouses"},
+    "penthouses": {"penthouse", "penthouses"},
+    "plots": {"plot", "plots"},
+    "offices": {"office", "offices"},
+    "shops": {"shop", "shops"},
+    "warehouses": {"warehouse", "warehouses"},
+}
+
+
+def detect_property_type(text):
+    """Return one unambiguous property type from visible text/path tokens."""
+    tokens = set(re.findall(r"[a-z]+", str(text or "").casefold()))
+    matches = [
+        canonical
+        for canonical, aliases in PROPERTY_TYPE_TERMS.items()
+        if tokens.intersection(aliases)
+    ]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def detect_anchor_transaction_intent(text):
+    """Detect only explicit buy/sale vs rent intent to avoid broad false positives."""
+    value = re.sub(r"\s+", " ", str(text or "").casefold()).strip()
+    sale = bool(re.search(r"\bfor sale\b|\bbuy\b|\bbuying\b", value))
+    rent = bool(re.search(r"\bfor rent\b|\bto rent\b|\brenting\b", value))
+    if sale == rent:
+        return ""
+    return "sale" if sale else "rent"
+
+
+def detect_url_transaction_intent(url):
+    path = urlparse(str(url or "")).path.casefold()
+    if "/for-sale/" in path:
+        return "sale"
+    if "/to-rent/" in path:
+        return "rent"
+    return ""
+
 def content_internal_link_inventory(article_soup, base_url):
     """
     Inspect only real inline editorial hyperlinks inside the article copy.
@@ -4095,6 +4137,14 @@ def content_internal_link_inventory(article_soup, base_url):
         # covers http/https and www/non-www variants of the same homepage.
         is_homepage_destination = (parsed.path or "/") in {"", "/"}
 
+        # Explicit intent checks catch high-value mismatches that simple word-overlap
+        # scoring misses, e.g. "Al Shamkha villas for sale" pointing to an
+        # /apartments/ URL. These checks are local and add no network delay.
+        anchor_property_type = detect_property_type(anchor_text)
+        url_property_type = detect_property_type(parsed.path)
+        anchor_transaction_intent = detect_anchor_transaction_intent(anchor_text)
+        url_transaction_intent = detect_url_transaction_intent(href)
+
         inventory.append({
             "url": href,
             "anchor_text": anchor_text,
@@ -4104,6 +4154,10 @@ def content_internal_link_inventory(article_soup, base_url):
             "suspicious_anchor": suspicious_anchor,
             "anchor_slug_overlap": anchor_slug_overlap,
             "is_homepage_destination": is_homepage_destination,
+            "anchor_property_type": anchor_property_type,
+            "url_property_type": url_property_type,
+            "anchor_transaction_intent": anchor_transaction_intent,
+            "url_transaction_intent": url_transaction_intent,
         })
 
     unique = []
@@ -4283,6 +4337,32 @@ def internal_link_issues(inventory, validation):
             reasons.append("Generic anchor text")
         elif item["suspicious_anchor"]:
             reasons.append("Spammy or over optimised anchor text")
+
+        # Compare the anchor intent with the final URL after redirects when available.
+        checked = validation_by_url.get(item["url"]) if item.get("is_internal") else None
+        effective_url = (checked or {}).get("final_url") or item["url"]
+        effective_url_property_type = detect_property_type(urlparse(effective_url).path)
+        effective_url_transaction = detect_url_transaction_intent(effective_url)
+        anchor_property_type = item.get("anchor_property_type") or ""
+        anchor_transaction = item.get("anchor_transaction_intent") or ""
+
+        if (
+            anchor_property_type
+            and effective_url_property_type
+            and anchor_property_type != effective_url_property_type
+        ):
+            reasons.append(
+                f"Property type mismatch: anchor says {anchor_property_type} but URL targets {effective_url_property_type}"
+            )
+
+        if (
+            anchor_transaction
+            and effective_url_transaction
+            and anchor_transaction != effective_url_transaction
+        ):
+            reasons.append(
+                f"Transaction intent mismatch: anchor says {anchor_transaction} but URL targets {effective_url_transaction}"
+            )
 
         if (
             item["anchor_text"]
