@@ -1,0 +1,28 @@
+name: Run v18.55 precision QA patch
+
+on:
+  push:
+    paths:
+      - '.github/workflows/run-v1855-precision.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Patch app
+        run: python scripts/patch_v1855_precision.py
+      - name: Validate app
+        run: python -m py_compile app.py
+      - name: Commit app
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git commit -m "Fix QA misses and false positives"
+          git push origin main
