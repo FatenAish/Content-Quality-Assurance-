@@ -43,8 +43,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.48 SPEED OPTIMIZED FULL QA"
-ENGINE_BUILD = "2026.08.16.48"
+APP_VERSION = "V18.52 HOMEPAGE INTERNAL LINK FIX"
+ENGINE_BUILD = "2026.08.16.52"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -4090,6 +4090,11 @@ def content_internal_link_inventory(article_soup, base_url):
         else:
             anchor_slug_overlap = 0.0
 
+        # Homepage URLs have no meaningful slug. Do not treat a valid brand/home
+        # link such as Bayut.com -> / as an anchor-to-slug mismatch. This also
+        # covers http/https and www/non-www variants of the same homepage.
+        is_homepage_destination = (parsed.path or "/") in {"", "/"}
+
         inventory.append({
             "url": href,
             "anchor_text": anchor_text,
@@ -4098,6 +4103,7 @@ def content_internal_link_inventory(article_soup, base_url):
             "generic_anchor": generic_anchor,
             "suspicious_anchor": suspicious_anchor,
             "anchor_slug_overlap": anchor_slug_overlap,
+            "is_homepage_destination": is_homepage_destination,
         })
 
     unique = []
@@ -4174,6 +4180,10 @@ def internal_link_title_mismatches(inventory, max_workers=8):
         # Restrict destination-title comparison to named entities/places/projects to
         # avoid false positives for broad editorial anchors.
         if not looks_like_entity_phrase(anchor):
+            continue
+        # A homepage has no useful path slug/title relationship for this heuristic.
+        # Skip destination-title mismatch checks for valid internal home links.
+        if item.get("is_homepage_destination"):
             continue
         # Most correct named links already match their destination slug. Fetching every
         # destination page was one of the largest audit delays. Only perform the extra
@@ -4278,6 +4288,7 @@ def internal_link_issues(inventory, validation):
             item["anchor_text"]
             and len(tokenize(item["anchor_text"])) >= 2
             and item["anchor_slug_overlap"] < 0.12
+            and not item.get("is_homepage_destination")
         ):
             reasons.append("Anchor text may not match the linked page")
 
