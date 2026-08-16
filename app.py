@@ -14,11 +14,8 @@ from functools import lru_cache
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 import urllib.robotparser
-import subprocess
 import sys
-import shutil
 import importlib
-import threading
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -27,11 +24,10 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
-try:
-    from playwright.sync_api import sync_playwright
-    PLAYWRIGHT_AVAILABLE = True
-except Exception:
-    PLAYWRIGHT_AVAILABLE = False
+# Playwright/Chromium deliberately disabled in the fast deployment build.
+# Hidden Links uses a source-level editorial-body scan only so Streamlit Cloud
+# does not import, install, or launch a browser during startup or auditing.
+PLAYWRIGHT_AVAILABLE = False
 
 # =========================================================
 # BAYUT URL QUALITY AUDITOR
@@ -47,17 +43,17 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.46 ULTRA FAST HIDDEN LINKS"
-ENGINE_BUILD = "2026.08.16.2"
+APP_VERSION = "V18.48 SPEED OPTIMIZED FULL QA"
+ENGINE_BUILD = "2026.08.16.48"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
 # The verifier uses public search result pages plus direct HTTP requests to source pages.
 # Search/network failures never stop the audit; unresolved claims become REVIEW.
-FREE_SEARCH_TIMEOUT = int(os.getenv("MYBAYUT_FREE_SEARCH_TIMEOUT", "10"))
-FREE_SOURCE_TIMEOUT = int(os.getenv("MYBAYUT_FREE_SOURCE_TIMEOUT", "8"))
-FREE_MAX_CLAIMS = int(os.getenv("MYBAYUT_FREE_MAX_CLAIMS", "12"))
-FREE_MAX_SEARCH_RESULTS = int(os.getenv("MYBAYUT_FREE_MAX_SEARCH_RESULTS", "8"))
+FREE_SEARCH_TIMEOUT = float(os.getenv("MYBAYUT_FREE_SEARCH_TIMEOUT", "4"))
+FREE_SOURCE_TIMEOUT = float(os.getenv("MYBAYUT_FREE_SOURCE_TIMEOUT", "4"))
+FREE_MAX_CLAIMS = int(os.getenv("MYBAYUT_FREE_MAX_CLAIMS", "6"))
+FREE_MAX_SEARCH_RESULTS = int(os.getenv("MYBAYUT_FREE_MAX_SEARCH_RESULTS", "5"))
 FREE_SEARCH_URL = os.getenv("MYBAYUT_FREE_SEARCH_URL", "https://html.duckduckgo.com/html/").strip()
 
 AI_BLOCKED_SOURCE_DOMAINS = [
@@ -68,21 +64,21 @@ AI_BLOCKED_SOURCE_DOMAINS = [
 ]
 
 # Performance controls
-PAGE_FETCH_TIMEOUT = 9
-SITEMAP_REQUEST_TIMEOUT = 4
-SITEMAP_MAX_FILES = 36
+PAGE_FETCH_TIMEOUT = 6
+SITEMAP_REQUEST_TIMEOUT = 2.5
+SITEMAP_MAX_FILES = 16
 SITEMAP_MAX_DEPTH = 3
 SITEMAP_WORKERS = 8
-SITEMAP_TIME_BUDGET = 12
+SITEMAP_TIME_BUDGET = 5
 PLAYWRIGHT_NAV_TIMEOUT = 12000
 PLAYWRIGHT_SETTLE_MS = 450
 
-LINK_CHECK_TIMEOUT = 3
+LINK_CHECK_TIMEOUT = 2.5
 LINK_CHECK_WORKERS = 16
-INTERNAL_LINK_CHECK_TIMEOUT = 5
+INTERNAL_LINK_CHECK_TIMEOUT = 3
 INTERNAL_LINK_CHECK_WORKERS = 24
 ROBOTS_REQUEST_TIMEOUT = 4
-RESOURCE_CHECK_TIMEOUT = 3
+RESOURCE_CHECK_TIMEOUT = 2.5
 RESOURCE_CHECK_WORKERS = 24
 
 
@@ -3333,915 +3329,36 @@ def static_hidden_link_details(article_soup, base_url):
     return details
 
 
-_PLAYWRIGHT_BOOTSTRAP_LOCK = threading.Lock()
-_PLAYWRIGHT_BOOTSTRAP_DONE = False
-_PLAYWRIGHT_BOOTSTRAP_ERROR = ""
-
-
-def _ensure_playwright_runtime():
-    """
-    Detect a usable Playwright/Chromium runtime without trying to pip-install
-    packages while the Streamlit app is already running.
-
-    Hosted runtimes commonly block or restrict runtime package/browser installs.
-    Hidden Links therefore has a stylesheet-aware fallback below, so a missing
-    browser is no longer treated as an automatic REVIEW.
-
-    Returns: (available, error_message, executable_path)
-    """
-    global PLAYWRIGHT_AVAILABLE
-    global _PLAYWRIGHT_BOOTSTRAP_DONE, _PLAYWRIGHT_BOOTSTRAP_ERROR
-
-    system_browser = (
-        shutil.which("chromium")
-        or shutil.which("chromium-browser")
-        or shutil.which("google-chrome")
-        or shutil.which("google-chrome-stable")
-    )
-
-    with _PLAYWRIGHT_BOOTSTRAP_LOCK:
-        if _PLAYWRIGHT_BOOTSTRAP_DONE:
-            return bool(PLAYWRIGHT_AVAILABLE), _PLAYWRIGHT_BOOTSTRAP_ERROR, system_browser
-
-        if not PLAYWRIGHT_AVAILABLE:
-            _PLAYWRIGHT_BOOTSTRAP_DONE = True
-            _PLAYWRIGHT_BOOTSTRAP_ERROR = (
-                "Playwright package is not installed in this runtime; "
-                "using HTML + stylesheet CSS fallback."
-            )
-            return False, _PLAYWRIGHT_BOOTSTRAP_ERROR, system_browser
-
-        launch_kwargs = {
-            "headless": True,
-            "args": ["--no-sandbox", "--disable-dev-shm-usage"],
-        }
-        if system_browser:
-            launch_kwargs["executable_path"] = system_browser
-
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(**launch_kwargs)
-                browser.close()
-            _PLAYWRIGHT_BOOTSTRAP_DONE = True
-            _PLAYWRIGHT_BOOTSTRAP_ERROR = ""
-            return True, "", system_browser
-        except Exception as exc:
-            PLAYWRIGHT_AVAILABLE = False
-            _PLAYWRIGHT_BOOTSTRAP_DONE = True
-            _PLAYWRIGHT_BOOTSTRAP_ERROR = (
-                f"Playwright/Chromium could not launch: {exc}. "
-                "Using HTML + stylesheet CSS fallback."
-            )
-            return False, _PLAYWRIGHT_BOOTSTRAP_ERROR, system_browser
-
-
-@lru_cache(maxsize=64)
-def _rendered_hidden_links_cached(page_url, _bucket):
-    """
-    Inspect computed browser styles for links inside the live editorial body.
-
-    This complements source-level inspection and catches hiding applied through
-    CSS classes / stylesheets, e.g. `.secret-link { display:none }`.
-    """
-    result = {
-        "available": False,
-        "items": [],
-        "error": "",
-    }
-
-    runtime_ok, runtime_error, browser_executable = _ensure_playwright_runtime()
-    if not runtime_ok:
-        result["error"] = runtime_error or "Playwright/Chromium is not available."
-        return result
-
-    article_selectors = [
-        "[itemprop='articleBody']",
-        ".entry-content",
-        ".post-content",
-        ".article-content",
-        ".post-body",
-        ".article-body",
-        ".single-post-content",
-        ".td-post-content",
-        "article",
-        "main",
-        "[role='main']",
-    ]
-
-    exclude_patterns = BODY_LINK_EXCLUDE_PATTERNS
-    exclude_href_patterns = BODY_LINK_EXCLUDE_HREF_PATTERNS
-
-    js = r"""
-    ({articleSelectors, excludePatterns, excludeHrefPatterns}) => {
-      function norm(s) {
-        return (s || "").replace(/\s+/g, " ").trim();
-      }
-
-      function attrsText(el) {
-        if (!el) return "";
-        return [
-          el.tagName || "",
-          el.id || "",
-          typeof el.className === "string" ? el.className : "",
-          el.getAttribute && (el.getAttribute("role") || ""),
-          el.getAttribute && (el.getAttribute("aria-label") || "")
-        ].join(" ").toLowerCase();
-      }
-
-      function excludedByUI(a, root) {
-        let n = a;
-        while (n && n !== root.parentElement) {
-          const tag = (n.tagName || "").toLowerCase();
-          if (["nav","aside","footer","form","button"].includes(tag)) return true;
-          const sig = attrsText(n);
-          if (excludePatterns.some(p => sig.includes(p))) return true;
-          if (n === root) break;
-          n = n.parentElement;
-        }
-        const href = (a.getAttribute("href") || "").toLowerCase();
-        if (excludeHrefPatterns.some(p => href.includes(p))) return true;
-        return false;
-      }
-
-      function bestRoot() {
-        let best = null;
-        let bestScore = -1;
-        for (let i = 0; i < articleSelectors.length; i++) {
-          for (const el of document.querySelectorAll(articleSelectors[i])) {
-            const textLen = norm(el.innerText || el.textContent || "").length;
-            const links = el.querySelectorAll("a[href]").length;
-            const score = textLen - Math.max(0, links - 10) * 2 + (articleSelectors.length - i) * 5000;
-            if (score > bestScore && textLen >= 150) {
-              best = el;
-              bestScore = score;
-            }
-          }
-        }
-        return best || document.body;
-      }
-
-      function classifyAnchor(a) {
-        const raw = a.textContent || "";
-        const normalized = norm(raw);
-        if (normalized) {
-          if (!/[\p{L}\p{N}_]/u.test(normalized)) {
-            return {type:"Punctuation only", display:normalized};
-          }
-          return {type:"Text", display:normalized};
-        }
-
-        if (raw && raw.trim() === "") {
-          return {type:"Whitespace only", display:"[WHITESPACE ONLY]"};
-        }
-
-        const img = a.querySelector("img");
-        if (img) {
-          const alt = norm(img.getAttribute("alt") || "");
-          return {type:"Image", display:alt ? `[IMAGE: ${alt}]` : "[IMAGE: no alt]"};
-        }
-
-        const icon = a.querySelector("svg,i,use");
-        if (icon) {
-          const label = norm(a.getAttribute("aria-label") || a.getAttribute("title") || "");
-          return {type:"Icon/SVG", display:label ? `[ICON/SVG: ${label}]` : "[ICON/SVG]"};
-        }
-
-        return {type:"Empty", display:"[EMPTY]"};
-      }
-
-      function computedReasons(a, root) {
-        const reasons = [];
-        let n = a;
-        while (n && n !== root.parentElement) {
-          const cs = getComputedStyle(n);
-          const rect = n.getBoundingClientRect();
-
-          if (n.hidden) reasons.push("hidden attribute");
-          if (n.hasAttribute && n.hasAttribute("inert")) reasons.push("inert attribute");
-          if (cs.display === "none") reasons.push("display:none (computed)");
-          if (cs.visibility === "hidden" || cs.visibility === "collapse") reasons.push(`visibility:${cs.visibility} (computed)`);
-
-          const opacity = parseFloat(cs.opacity || "1");
-          if (!Number.isNaN(opacity) && opacity <= 0.001) reasons.push("opacity:0 (computed)");
-
-          const fs = parseFloat(cs.fontSize || "16");
-          if (!Number.isNaN(fs) && fs <= 0.1) reasons.push("font-size:0 (computed)");
-
-          if ((rect.width <= 0.1 || rect.height <= 0.1) && n === a) {
-            reasons.push("zero-size anchor (rendered)");
-          }
-
-          if (
-            rect.right < -500 ||
-            rect.bottom < -500 ||
-            rect.left > window.innerWidth + 5000 ||
-            rect.top > window.innerHeight + 10000
-          ) {
-            reasons.push("off-screen positioning (rendered)");
-          }
-
-          const clip = (cs.clip || "").replace(/\s+/g,"").toLowerCase();
-          const clipPath = (cs.clipPath || "").replace(/\s+/g,"").toLowerCase();
-          if (clip === "rect(0px,0px,0px,0px)" || clip === "rect(0,0,0,0)" || clipPath === "inset(50%)") {
-            reasons.push("clipped (computed)");
-          }
-
-          if ((cs.contentVisibility || "").toLowerCase() === "hidden") {
-            reasons.push("content-visibility:hidden (computed)");
-          }
-
-          const transform = (cs.transform || "").toLowerCase();
-          if (transform === "matrix(0, 0, 0, 0, 0, 0)" || transform === "matrix(0,0,0,0,0,0)") {
-            reasons.push("scale(0) / zero transform (computed)");
-          }
-
-          if (n === root) break;
-          n = n.parentElement;
-        }
-        return [...new Set(reasons)];
-      }
-
-      const root = bestRoot();
-      const baseHost = location.hostname.replace(/^www\./, "").toLowerCase();
-      const rows = [];
-      let occurrence = 0;
-
-      for (const a of root.querySelectorAll("a[href]")) {
-        occurrence += 1;
-        if (excludedByUI(a, root)) continue;
-
-        let absolute = "";
-        try {
-          absolute = new URL(a.getAttribute("href"), location.href).href;
-        } catch (e) {
-          continue;
-        }
-
-        if (!/^https?:/i.test(absolute)) continue;
-
-        const rep = classifyAnchor(a);
-        const reasons = [];
-
-        if (rep.type === "Empty") reasons.push("empty anchor");
-        else if (rep.type === "Whitespace only") reasons.push("whitespace-only anchor");
-        else if (rep.type === "Punctuation only") reasons.push("punctuation-only anchor");
-
-        reasons.push(...computedReasons(a, root));
-
-        if (!reasons.length) continue;
-
-        let host = "";
-        try { host = new URL(absolute).hostname.replace(/^www\./, "").toLowerCase(); } catch (e) {}
-
-        const parentText = norm(
-          (a.closest("p,li,td,th,figcaption,h2,h3,h4,h5,h6,div,section") || a.parentElement || a).innerText || ""
-        ).slice(0, 220);
-
-        rows.push({
-          occurrence,
-          url: absolute.split("#")[0],
-          link_scope: host === baseHost ? "Internal" : "External",
-          anchor_display: rep.display,
-          anchor_type: rep.type,
-          hidden_because: [...new Set(reasons)].join(", "),
-          context: parentText,
-          source: "Rendered Chromium computed styles"
-        });
-      }
-
-      return rows;
-    }
-    """
-
-    try:
-        with sync_playwright() as p:
-            launch_kwargs = {
-                "headless": True,
-                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
-            }
-            if browser_executable:
-                launch_kwargs["executable_path"] = browser_executable
-            browser = p.chromium.launch(**launch_kwargs)
-            page = browser.new_page(
-                user_agent=UA_DESKTOP.get("User-Agent", ""),
-                viewport={"width": 1440, "height": 1200},
-            )
-            page.goto(
-                page_url,
-                wait_until="domcontentloaded",
-                timeout=PLAYWRIGHT_NAV_TIMEOUT,
-            )
-            page.wait_for_timeout(PLAYWRIGHT_SETTLE_MS)
-
-            items = page.evaluate(
-                js,
-                {
-                    "articleSelectors": ARTICLE_BODY_SELECTORS,
-                    "excludePatterns": exclude_patterns,
-                    "excludeHrefPatterns": exclude_href_patterns,
-                },
-            )
-            browser.close()
-
-        result["available"] = True
-        result["items"] = items or []
-        return result
-    except Exception as exc:
-        result["error"] = str(exc)
-        return result
-
-
-def rendered_hidden_link_details(page_url):
-    return _rendered_hidden_links_cached(
-        page_url,
-        cache_bucket(600),
-    )
-
-
-
-CSS_HIDDEN_LINK_MAX_STYLESHEETS = 6
-CSS_HIDDEN_LINK_MAX_BYTES = 750_000
-CSS_HIDDEN_LINK_CONNECT_TIMEOUT = 0.8
-CSS_HIDDEN_LINK_READ_TIMEOUT = 1.6
-CSS_HIDDEN_LINK_TOTAL_BUDGET = 4.5
-CSS_HIDDEN_LINK_MAX_HIDING_RULES = 2500
-
-
-def _css_remove_comments(css_text):
-    return re.sub(r"/\*.*?\*/", "", str(css_text or ""), flags=re.S)
-
-
-def _css_top_level_rules(css_text):
-    """
-    Yield unconditional top-level qualified CSS rules only.
-
-    Conditional @media/@supports/@container/@keyframes blocks are skipped in the
-    browser-free fallback. A real rendered browser remains authoritative for
-    viewport/state dependent rules when available.
-    """
-    css = _css_remove_comments(css_text)
-    n = len(css)
-    i = 0
-
-    while i < n:
-        while i < n and css[i].isspace():
-            i += 1
-        if i >= n:
-            break
-
-        header_start = i
-        in_quote = None
-        escape = False
-        paren = 0
-        bracket = 0
-
-        while i < n:
-            ch = css[i]
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif in_quote:
-                if ch == in_quote:
-                    in_quote = None
-            elif ch in {"'", '"'}:
-                in_quote = ch
-            elif ch == "(":
-                paren += 1
-            elif ch == ")" and paren:
-                paren -= 1
-            elif ch == "[":
-                bracket += 1
-            elif ch == "]" and bracket:
-                bracket -= 1
-            elif ch == ";" and paren == 0 and bracket == 0:
-                i += 1
-                break
-            elif ch == "{" and paren == 0 and bracket == 0:
-                header = css[header_start:i].strip()
-                depth = 1
-                body_start = i + 1
-                i += 1
-                body_quote = None
-                body_escape = False
-
-                while i < n and depth:
-                    c = css[i]
-                    if body_escape:
-                        body_escape = False
-                    elif c == "\\":
-                        body_escape = True
-                    elif body_quote:
-                        if c == body_quote:
-                            body_quote = None
-                    elif c in {"'", '"'}:
-                        body_quote = c
-                    elif c == "{":
-                        depth += 1
-                    elif c == "}":
-                        depth -= 1
-                    i += 1
-
-                body = css[body_start:max(body_start, i - 1)]
-                if header and not header.lstrip().startswith("@"):
-                    yield header, body
-                break
-            else:
-                i += 1
-
-
-def _css_split_selectors(selector_text):
-    selectors = []
-    start = 0
-    in_quote = None
-    escape = False
-    paren = 0
-    bracket = 0
-
-    for i, ch in enumerate(selector_text):
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if in_quote:
-            if ch == in_quote:
-                in_quote = None
-            continue
-        if ch in {"'", '"'}:
-            in_quote = ch
-            continue
-        if ch == "(":
-            paren += 1
-        elif ch == ")" and paren:
-            paren -= 1
-        elif ch == "[":
-            bracket += 1
-        elif ch == "]" and bracket:
-            bracket -= 1
-        elif ch == "," and paren == 0 and bracket == 0:
-            part = selector_text[start:i].strip()
-            if part:
-                selectors.append(part)
-            start = i + 1
-
-    part = selector_text[start:].strip()
-    if part:
-        selectors.append(part)
-    return selectors
-
-
-def _css_hidden_declaration_reasons(declarations):
-    raw = str(declarations or "").lower()
-    compact = re.sub(r"\s+", "", raw)
-    reasons = []
-
-    if re.search(r"(?:^|;)\s*display\s*:\s*none(?:\s*!important)?\s*(?:;|$)", raw, flags=re.I):
-        reasons.append("display:none (stylesheet)")
-    if re.search(r"(?:^|;)\s*visibility\s*:\s*(?:hidden|collapse)(?:\s*!important)?\s*(?:;|$)", raw, flags=re.I):
-        reasons.append("visibility:hidden (stylesheet)")
-    if re.search(r"(?:^|;)\s*opacity\s*:\s*(?:0+(?:\.0+)?)\s*(?:!important)?\s*(?:;|$)", raw, flags=re.I):
-        reasons.append("opacity:0 (stylesheet)")
-    if re.search(r"(?:^|;)\s*font-size\s*:\s*0(?:px|em|rem|%|pt)?\s*(?:!important)?\s*(?:;|$)", raw, flags=re.I):
-        reasons.append("font-size:0 (stylesheet)")
-
-    width_zero = bool(re.search(r"(?:^|;)\s*(?:width|max-width)\s*:\s*0(?:px|em|rem|%|pt)?\s*(?:!important)?\s*(?:;|$)", raw, flags=re.I))
-    height_zero = bool(re.search(r"(?:^|;)\s*(?:height|max-height)\s*:\s*0(?:px|em|rem|%|pt)?\s*(?:!important)?\s*(?:;|$)", raw, flags=re.I))
-    if width_zero and height_zero:
-        reasons.append("zero dimensions (stylesheet)")
-
-    if re.search(r"(?:left|right|top|bottom|text-indent)\s*:\s*-\s*\d{3,}(?:px|em|rem|pt)", raw, flags=re.I):
-        reasons.append("off-screen positioning (stylesheet)")
-    if "clip:rect(0,0,0,0)" in compact or "clip:rect(0px,0px,0px,0px)" in compact or "clip-path:inset(50%)" in compact:
-        reasons.append("clipped (stylesheet)")
-    if re.search(r"(?:^|;)\s*content-visibility\s*:\s*hidden(?:\s*!important)?\s*(?:;|$)", raw, flags=re.I):
-        reasons.append("content-visibility:hidden (stylesheet)")
-    if "transform:scale(0)" in compact or "transform:scalex(0)" in compact or "transform:scaley(0)" in compact:
-        reasons.append("scale(0) (stylesheet)")
-
-    return list(dict.fromkeys(reasons))
-
-
-def _selector_is_safe_for_static_match(selector):
-    s = str(selector or "").strip()
-    if not s:
-        return False
-
-    conditional_pseudos = (
-        ":hover", ":active", ":focus", ":focus-visible", ":focus-within",
-        ":visited", ":target", "::before", "::after", "::marker",
-        "::first-letter", "::first-line", ":fullscreen",
-    )
-    low = s.lower()
-    if any(p in low for p in conditional_pseudos):
-        return False
-
-    # Complex selector features are deliberately left to Chromium. Keeping the
-    # fallback simple prevents BeautifulSoup selector evaluation from stalling
-    # on large production stylesheets.
-    if any(x in s for x in ("[", "]", ":not(", ":has(", ":is(", ":where(", "+", "~")):
-        return False
-
-    return True
-
-
-def _simple_compound_selector_matches(node, compound):
-    """Fast match for tag/#id/.class compounds such as div.foo#bar."""
-    s = str(compound or "").strip()
-    if not s or node is None or not getattr(node, "name", None):
-        return False
-
-    # Strip the universal selector; unsupported syntax is rejected.
-    s = s.replace("*", "")
-    if not s:
-        return True
-    if re.search(r"[^A-Za-z0-9_\-\.#]", s):
-        return False
-
-    tag_match = re.match(r"^[A-Za-z][A-Za-z0-9_-]*", s)
-    if tag_match and str(node.name).lower() != tag_match.group(0).lower():
-        return False
-
-    id_matches = re.findall(r"#([A-Za-z0-9_-]+)", s)
-    if id_matches:
-        node_id = str(node.get("id") or "")
-        if any(node_id != wanted for wanted in id_matches):
-            return False
-
-    class_matches = re.findall(r"\.([A-Za-z0-9_-]+)", s)
-    if class_matches:
-        node_classes = {str(x) for x in (node.get("class") or [])}
-        if any(wanted not in node_classes for wanted in class_matches):
-            return False
-
-    return True
-
-
-def _selector_matches_anchor_path(selector, anchor, article_root):
-    """
-    Fast browser-free selector matching against the anchor and its ancestors.
-
-    Supports common descendant/child selectors composed of tag/#id/.class.
-    This is intentionally narrower than a full CSS engine, but it catches the
-    production hiding patterns we care about without expensive soup.select().
-    """
-    s = re.sub(r"\s+", " ", str(selector or "").strip())
-    if not _selector_is_safe_for_static_match(s):
-        return None
-
-    # Convert child combinators to token boundaries. The fallback treats them
-    # conservatively as ancestor relationships; Chromium handles exact layout
-    # semantics when present.
-    parts = [p for p in re.split(r"\s*>\s*|\s+", s) if p]
-    if not parts or len(parts) > 8:
-        return None
-
-    path = []
-    node = anchor
-    while node is not None and getattr(node, "name", None):
-        path.append(node)  # anchor -> ancestors
-        if node is article_root:
-            break
-        node = getattr(node, "parent", None)
-    if not path:
-        return None
-
-    # Rightmost selector must match the anchor or one of its ancestors if that
-    # ancestor itself is the element carrying display:none etc.
-    for right_index, candidate in enumerate(path):
-        if not _simple_compound_selector_matches(candidate, parts[-1]):
-            continue
-        current_index = right_index + 1
-        ok = True
-        for part in reversed(parts[:-1]):
-            found = False
-            while current_index < len(path):
-                if _simple_compound_selector_matches(path[current_index], part):
-                    found = True
-                    current_index += 1
-                    break
-                current_index += 1
-            if not found:
-                ok = False
-                break
-        if ok:
-            return candidate
-    return None
-
-
-def _fetch_css_source(css_url):
-    try:
-        r = requests.get(
-            css_url,
-            headers=UA_DESKTOP,
-            timeout=(CSS_HIDDEN_LINK_CONNECT_TIMEOUT, CSS_HIDDEN_LINK_READ_TIMEOUT),
-        )
-        if r.status_code >= 400:
-            return css_url, "", f"CSS {r.status_code}: {css_url}"
-        return css_url, (r.text or ""), ""
-    except Exception as exc:
-        return css_url, "", f"CSS fetch failed: {css_url} ({exc})"
-
-
-def _stylesheet_hidden_link_details(article_soup, page_soup, base_url):
-    """
-    Fast browser-free fallback for class/stylesheet based hiding.
-
-    Performance safeguards:
-    - at most 6 linked stylesheets;
-    - concurrent CSS fetches with short connect/read timeouts;
-    - 750 KB total CSS scan budget;
-    - 4.5 second overall fallback budget;
-    - no BeautifulSoup soup.select() calls across whole stylesheets;
-    - only simple tag/#id/.class selector matching on each link ancestry path.
-
-    Missing/slow stylesheet requests never freeze the full audit.
-    """
-    started = time.monotonic()
-    result = {
-        "available": True,
-        "items": [],
-        "stylesheets_checked": 0,
-        "inline_style_blocks_checked": 0,
-        "rules_checked": 0,
-        "fetch_errors": [],
-        "timed_out": False,
-    }
-
-    if article_soup is None:
-        result["available"] = False
-        result["fetch_errors"].append("Editorial body unavailable for stylesheet fallback.")
-        return result
-
-    if page_soup is None:
-        result["available"] = False
-        result["fetch_errors"].append("Page HTML unavailable for stylesheet fallback.")
-        return result
-
-    body_inventory = content_body_link_inventory(article_soup, base_url)
-    if not body_inventory:
-        return result
-
-    anchor_items = [
-        item for item in body_inventory
-        if item.get("_anchor_node") is not None
-    ]
-
-    css_sources = []
-    for style in page_soup.find_all("style"):
-        if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
-            result["timed_out"] = True
-            break
-        css_text = style.string if style.string is not None else style.get_text("\n", strip=False)
-        if css_text and css_text.strip():
-            # Inline styles are already in memory; retain only a bounded amount.
-            css_sources.append(("inline <style>", css_text[:250_000]))
-            result["inline_style_blocks_checked"] += 1
-
-    seen_css_urls = set()
-    linked = []
-    for link in page_soup.find_all("link", href=True):
-        rel = " ".join(str(x).lower() for x in (link.get("rel") or []))
-        href = str(link.get("href") or "").strip()
-        if not href or "stylesheet" not in rel:
-            continue
-        css_url = normalized_link_url(href, base_url)
-        if not css_url or css_url in seen_css_urls:
-            continue
-        seen_css_urls.add(css_url)
-        linked.append(css_url)
-        if len(linked) >= CSS_HIDDEN_LINK_MAX_STYLESHEETS:
-            break
-
-    if linked and not result["timed_out"]:
-        workers = min(4, len(linked))
-        executor = ThreadPoolExecutor(max_workers=workers)
-        future_map = {executor.submit(_fetch_css_source, url): url for url in linked}
-        try:
-            remaining = max(0.1, CSS_HIDDEN_LINK_TOTAL_BUDGET - (time.monotonic() - started))
-            for future in as_completed(future_map, timeout=remaining):
-                if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
-                    result["timed_out"] = True
-                    break
-                css_url, css_text, err = future.result()
-                if err:
-                    result["fetch_errors"].append(err)
-                    continue
-                if css_text:
-                    css_sources.append((css_url, css_text))
-                    result["stylesheets_checked"] += 1
-        except Exception:
-            result["timed_out"] = True
-            result["fetch_errors"].append("CSS fallback time budget reached; unfinished stylesheet requests were skipped.")
-        finally:
-            for future in future_map:
-                if not future.done():
-                    future.cancel()
-            executor.shutdown(wait=False, cancel_futures=True)
-
-    total_bytes = 0
-    bounded_sources = []
-    for source_name, css_text in css_sources:
-        if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
-            result["timed_out"] = True
-            break
-        data = str(css_text or "").encode("utf-8", errors="ignore")
-        remaining_bytes = CSS_HIDDEN_LINK_MAX_BYTES - total_bytes
-        if remaining_bytes <= 0:
-            break
-        if len(data) > remaining_bytes:
-            data = data[:remaining_bytes]
-        total_bytes += len(data)
-        bounded_sources.append((source_name, data.decode("utf-8", errors="ignore")))
-
-    findings = []
-    seen_findings = set()
-
-    for source_name, css_text in bounded_sources:
-        if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
-            result["timed_out"] = True
-            break
-
-        for selector_group, declarations in _css_top_level_rules(css_text):
-            if time.monotonic() - started > CSS_HIDDEN_LINK_TOTAL_BUDGET:
-                result["timed_out"] = True
-                break
-
-            reasons = _css_hidden_declaration_reasons(declarations)
-            if not reasons:
-                continue
-            result["rules_checked"] += 1
-            if result["rules_checked"] > CSS_HIDDEN_LINK_MAX_HIDING_RULES:
-                result["fetch_errors"].append("CSS hiding-rule cap reached; remaining rules were skipped.")
-                break
-
-            for selector in _css_split_selectors(selector_group):
-                if not _selector_is_safe_for_static_match(selector):
-                    continue
-
-                for item in anchor_items:
-                    anchor = item.get("_anchor_node")
-                    matched_element = _selector_matches_anchor_path(selector, anchor, article_soup)
-                    if matched_element is None:
-                        continue
-
-                    context = nearest_editorial_context(anchor, max_chars=220)
-                    ui_context = _token_string(
-                        element_label(anchor),
-                        element_label(matched_element),
-                        item.get("anchor_text"),
-                        anchor.get("aria-label"),
-                        anchor.get("title"),
-                        anchor.get("role"),
-                        item.get("url"),
-                        context,
-                    )
-                    legitimate_reason = known_ui_reason_from_text(ui_context)
-                    if legitimate_reason:
-                        continue
-
-                    key = (
-                        item.get("occurrence"),
-                        item.get("url"),
-                        selector,
-                        tuple(reasons),
-                    )
-                    if key in seen_findings:
-                        continue
-                    seen_findings.add(key)
-
-                    findings.append({
-                        "occurrence": item.get("occurrence"),
-                        "url": item.get("url"),
-                        "anchor_text": item.get("anchor_text") or "",
-                        "anchor_display": item.get("anchor_display") or "[EMPTY]",
-                        "anchor_type": item.get("anchor_type") or "Unknown",
-                        "hidden_element": element_label(matched_element),
-                        "hidden_because": ", ".join(reasons),
-                        "status": FAIL,
-                        "source": f"Fast stylesheet CSS fallback: {source_name}",
-                        "anchor_html": re.sub(r"\s+", " ", str(anchor)).strip()[:500],
-                        "context": context,
-                        "issue_type": f"Hidden/suspicious {str(item.get('link_scope', 'body')).lower()} link",
-                        "css_selector": selector,
-                    })
-
-    result["items"] = findings
-    return result
-
-
-def _merge_hidden_link_details(static_items, rendered_items):
-    """
-    Merge static and rendered detections while retaining distinct occurrences.
-    """
-    merged = []
-    seen = set()
-
-    for item in list(static_items or []) + list(rendered_items or []):
-        key = (
-            item.get("url") or "",
-            item.get("anchor_display") or item.get("anchor_text") or "",
-            item.get("anchor_type") or "",
-            item.get("context") or "",
-            item.get("hidden_because") or "",
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-
-        normalized = dict(item)
-        normalized.setdefault("status", FAIL)
-        normalized.setdefault("issue_type", f"Hidden/suspicious {str(item.get('link_scope', 'body')).lower()} link")
-        merged.append(normalized)
-
-    return merged
-
+# Deep Playwright/Chromium and linked-stylesheet scanning removed from the fast build.
 
 def hidden_link_details(article_soup, base_url, page_soup=None):
     """
-    Fast Hidden Links audit.
+    Ultra-fast Hidden Links audit for Streamlit Cloud.
 
-    Default mode is intentionally network-free after the page HTML has loaded:
-    - scans every HTTP(S) link occurrence in the isolated editorial body;
-    - catches empty, whitespace-only and punctuation-only anchors;
-    - catches supported source/inline hiding on the anchor or its ancestors.
+    No Playwright, Chromium, browser bootstrap, stylesheet downloads or extra
+    network requests are used. The check scans every HTTP(S) link occurrence
+    in the isolated editorial body and detects:
+      - empty anchors;
+      - whitespace-only anchors;
+      - punctuation-only anchors such as '.';
+      - supported source/inline hiding on the anchor or its ancestors,
+        including display:none, visibility:hidden, opacity:0, font-size:0,
+        zero dimensions, off-screen positioning and clipping.
 
-    This directly covers the main hidden-link spam cases this auditor is meant
-    to catch (for example a link placed on '.', whitespace, or an empty anchor)
-    without fetching stylesheets or launching Chromium for every URL.
-
-    Optional deep verification can be enabled with:
-        MYBAYUT_DEEP_HIDDEN_LINK_SCAN=1
-    That adds linked-stylesheet and rendered-browser verification, but is slower.
+    This keeps the hidden-link check deterministic and fast.
     """
     static_items = static_hidden_link_details(article_soup, base_url)
-
-    deep_scan = str(os.getenv("MYBAYUT_DEEP_HIDDEN_LINK_SCAN", "0")).strip().lower() in {
-        "1", "true", "yes", "on"
-    }
-
-    if not deep_scan:
-        return static_items, {
-            "available": True,
-            "verification_mode": "fast_source",
-            "source": "Fast isolated editorial HTML/source scan",
-            "error": "",
-            "rendered_available": False,
-            "css_fallback_available": False,
-            "stylesheets_checked": 0,
-            "inline_style_blocks_checked": 0,
-            "css_rules_checked": 0,
-            "css_timed_out": False,
-        }
-
-    css_check = _stylesheet_hidden_link_details(
-        article_soup,
-        page_soup,
-        base_url,
-    )
-    css_items = css_check.get("items", []) if css_check.get("available") else []
-
-    rendered = rendered_hidden_link_details(base_url)
-    rendered_items = rendered.get("items", []) if rendered.get("available") else []
-
-    details = _merge_hidden_link_details(
-        static_items,
-        list(css_items) + list(rendered_items),
-    )
-
-    if rendered.get("available"):
-        verification_mode = "rendered"
-        source = "HTML/source + stylesheet CSS + rendered Chromium computed styles"
-        available = True
-    elif css_check.get("available") and not css_check.get("timed_out"):
-        verification_mode = "css_fallback"
-        source = "HTML/source + inline/linked stylesheet CSS fallback"
-        available = True
-    else:
-        # Deep mode is optional. Source-level results remain valid even if the
-        # optional browser/CSS layer cannot finish.
-        verification_mode = "fast_source"
-        source = "Fast isolated editorial HTML/source scan"
-        available = True
-
-    notes = []
-    if rendered.get("error"):
-        notes.append(rendered.get("error"))
-    if css_check.get("fetch_errors"):
-        notes.extend(css_check.get("fetch_errors")[:5])
-
-    return details, {
-        "available": available,
-        "verification_mode": verification_mode,
-        "source": source,
-        "error": " | ".join(str(x) for x in notes if x),
-        "rendered_available": bool(rendered.get("available")),
-        "css_fallback_available": bool(css_check.get("available")),
-        "stylesheets_checked": int(css_check.get("stylesheets_checked", 0) or 0),
-        "inline_style_blocks_checked": int(css_check.get("inline_style_blocks_checked", 0) or 0),
-        "css_rules_checked": int(css_check.get("rules_checked", 0) or 0),
-        "css_timed_out": bool(css_check.get("timed_out")),
+    return static_items, {
+        "available": True,
+        "verification_mode": "fast_source",
+        "source": "Fast isolated editorial HTML/source scan",
+        "error": "",
+        "rendered_available": False,
+        "css_fallback_available": False,
+        "stylesheets_checked": 0,
+        "inline_style_blocks_checked": 0,
+        "css_rules_checked": 0,
+        "css_timed_out": False,
     }
 
 def classify_hidden_text_static(node):
@@ -4335,8 +3452,9 @@ def _probe_http_url_cached(url, timeout, _bucket):
             allow_redirects=True,
         )
 
-        # Some sites do not support HEAD correctly. Use a lightweight GET fallback.
-        if response.status_code in {400, 403, 405, 406, 429}:
+        # Confirm only statuses where HEAD is often misleading. Automated restrictions
+        # (403/429) are diagnostic and do not need a second network request.
+        if response.status_code in {400, 404, 405, 406, 410}:
             response = requests.get(
                 url,
                 headers=UA_DESKTOP,
@@ -4365,7 +3483,7 @@ def _internal_get_probe(url, timeout):
     response = requests.get(
         url,
         headers=UA_DESKTOP,
-        timeout=max(float(timeout), 5.0),
+        timeout=max(float(timeout), 2.5),
         allow_redirects=True,
         stream=True,
     )
@@ -4396,7 +3514,7 @@ def _probe_internal_http_url_cached(url, timeout, _bucket):
         "attempts": [],
     }
 
-    effective_timeout = max(float(timeout), 5.0)
+    effective_timeout = max(float(timeout), 2.5)
 
     # Fast first probe.
     try:
@@ -4416,44 +3534,33 @@ def _probe_internal_http_url_cached(url, timeout, _bucket):
             result_data["probe_method"] = "HEAD"
             result_data["elapsed"] = time.time() - started
             return result_data
+
+        # Restrictions and temporary server errors are not editorially actionable.
+        # Returning the HEAD result avoids a second request for every protected URL.
+        if head_status in {401, 403, 406, 429} or head_status >= 500:
+            result_data["status"] = head_status
+            result_data["final_url"] = head_final
+            result_data["probe_method"] = "HEAD"
+            result_data["elapsed"] = time.time() - started
+            return result_data
+
     except Exception as exc:
         result_data["attempts"].append("HEAD failed")
         result_data["error"] = str(exc)
 
-    # Confirm using normal GET. Retry once on transient failure.
-    get_errors = []
-
-    for attempt in range(2):
-        try:
-            get_status, get_final = _internal_get_probe(
-                url,
-                effective_timeout,
-            )
-
-            result_data["attempts"].append(f"GET {get_status}")
-            result_data["status"] = get_status
-            result_data["final_url"] = get_final
-            result_data["probe_method"] = "GET"
-
-            if get_status in {404, 410}:
-                result_data["confirmed_broken"] = True
-                break
-
-            # Retry temporary server errors once.
-            if get_status >= 500 and attempt == 0:
-                continue
-
-            break
-
-        except Exception as exc:
-            get_errors.append(str(exc))
-            result_data["attempts"].append("GET failed")
-
-            if attempt == 0:
-                continue
-
-    if result_data["status"] is None and get_errors:
-        result_data["error"] = get_errors[-1]
+    # Use one GET confirmation only when HEAD is inconclusive or reports a possible
+    # broken/method-specific status. This preserves 404/410 accuracy without retries.
+    try:
+        get_status, get_final = _internal_get_probe(url, effective_timeout)
+        result_data["attempts"].append(f"GET {get_status}")
+        result_data["status"] = get_status
+        result_data["final_url"] = get_final
+        result_data["probe_method"] = "GET"
+        if get_status in {404, 410}:
+            result_data["confirmed_broken"] = True
+    except Exception as exc:
+        result_data["attempts"].append("GET failed")
+        result_data["error"] = str(exc)
         result_data["probe_method"] = "GET"
 
     result_data["elapsed"] = time.time() - started
@@ -5030,7 +4137,7 @@ def _internal_target_identity_cached(url, bucket):
         r = requests.get(
             url,
             headers={**UA_DESKTOP, "Accept-Language": "en-US,en;q=0.8"},
-            timeout=max(INTERNAL_LINK_CHECK_TIMEOUT, 5),
+            timeout=max(INTERNAL_LINK_CHECK_TIMEOUT, 3),
             allow_redirects=True,
         )
         ctype = (r.headers.get("content-type") or "").lower()
@@ -5067,6 +4174,11 @@ def internal_link_title_mismatches(inventory, max_workers=8):
         # Restrict destination-title comparison to named entities/places/projects to
         # avoid false positives for broad editorial anchors.
         if not looks_like_entity_phrase(anchor):
+            continue
+        # Most correct named links already match their destination slug. Fetching every
+        # destination page was one of the largest audit delays. Only perform the extra
+        # title/H1 request when the cheap slug check is already suspicious.
+        if float(item.get("anchor_slug_overlap", 0.0) or 0.0) >= 0.12:
             continue
         if item["url"] in seen_urls:
             continue
@@ -8292,8 +7404,13 @@ def _freeqa_search(query):
     except Exception:
         pass
 
+    # One useful search engine response is enough for candidate discovery. Avoid
+    # serially querying three engines on every factual claim.
+    if results:
+        return results[:FREE_MAX_SEARCH_RESULTS]
+
     # 2. Bing public HTML fallback.
-    if len(results) < FREE_MAX_SEARCH_RESULTS:
+    if not results:
         try:
             r = requests.get(
                 "https://www.bing.com/search",
@@ -8318,8 +7435,11 @@ def _freeqa_search(query):
         except Exception:
             pass
 
-    # 3. Google HTML fallback. Only used when the first two engines are inconclusive.
-    if len(results) < FREE_MAX_SEARCH_RESULTS:
+    if results:
+        return results[:FREE_MAX_SEARCH_RESULTS]
+
+    # 3. Google HTML fallback. Only used when the first two engines returned nothing.
+    if not results:
         try:
             r = requests.get(
                 "https://www.google.com/search",
@@ -9039,10 +8159,31 @@ def official_source_content_checks(url, soup, body_text, focus_keyword="", secon
         # Research factual candidates, but keep ONLY officially proven contradictions.
         fact_items = []
         candidates = _freeqa_claim_candidates(article_soup, body_text, target_topic=target_topic)
-        for item in candidates:
+
+        # Official-source verification is network-heavy. Verify independent claims in
+        # parallel so six claims cost roughly one network window instead of six.
+        verified_claims = []
+        if candidates:
+            with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as executor:
+                future_map = {
+                    executor.submit(
+                        _freeqa_verify_claim,
+                        item["text"],
+                        item["kind"],
+                        target_topic,
+                    ): item
+                    for item in candidates
+                }
+                for future in as_completed(future_map):
+                    item = future_map[future]
+                    try:
+                        verification = future.result()
+                    except Exception:
+                        continue
+                    verified_claims.append((item, verification))
+
+        for item, verification in verified_claims:
             claim = item["text"]
-            kind = item["kind"]
-            verification = _freeqa_verify_claim(claim, kind, target_topic=target_topic)
             if verification.get("status") != FAIL:
                 continue
             source = re.sub(r"\s+", " ", str(verification.get("source", "") or "")).strip()
@@ -9717,7 +8858,6 @@ with st.sidebar:
             _robots_sitemaps_cached,
             _fetch_sitemap_document_cached,
             _find_url_in_sitemaps_cached,
-            _rendered_hidden_links_cached,
             _probe_http_url_cached,
             _robots_access_cached,
         ]:
@@ -9828,7 +8968,7 @@ if run:
             expanded=True,
         )
 
-        audit_status.write(f"{APP_VERSION}  1 of 5  Fetching Desktop, Mobile and Googlebot versions in parallel")
+        audit_status.write(f"{APP_VERSION}  1 of 4  Fetching Desktop, Mobile and Googlebot versions in parallel")
         (
             desktop_r,
             desktop_elapsed,
@@ -9844,6 +8984,7 @@ if run:
         # Separate read trees for parallel workers.
         spam_soup = soup_of(desktop_r.text)
         content_soup = soup_of(desktop_r.text)
+        evidence_soup = soup_of(desktop_r.text)
 
         audit_status.write(
             f"Page variants fetched in parallel. "
@@ -9866,11 +9007,11 @@ if run:
         resource_urls = extract_resource_urls(soup, desktop_r.url)
 
         audit_status.write(
-            "2 of 5  Running Spam, Content, Sitemap, Robots, Internal Link, External Link and Resource checks in parallel"
+            "2 of 4  Running Spam, Content, official-source, Sitemap, Robots and link/resource checks in parallel"
         )
 
         parallel_results = {}
-        with ThreadPoolExecutor(max_workers=7) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {
                 executor.submit(
                     audit_spam,
@@ -9891,6 +9032,14 @@ if run:
                     focus_keyword,
                     secondary_keywords,
                 ): "Content",
+                executor.submit(
+                    official_source_content_checks,
+                    desktop_r.url,
+                    evidence_soup,
+                    body_text,
+                    focus_keyword,
+                    secondary_keywords,
+                ): "Evidence Content",
                 executor.submit(
                     find_url_in_sitemaps,
                     desktop_r.url,
@@ -9952,16 +9101,7 @@ if run:
 
         spam_rows = parallel_results["Spam"]
         content_rows = parallel_results["Content"]
-
-        audit_status.write("3 of 5  Running free official-source Content verification")
-        evidence_content_rows = official_source_content_checks(
-            desktop_r.url,
-            soup_of(desktop_r.text),
-            body_text,
-            focus_keyword,
-            secondary_keywords,
-        )
-        content_rows.extend(evidence_content_rows)
+        content_rows.extend(parallel_results.get("Evidence Content", []))
 
         sitemap_result = parallel_results["Sitemap"]
         internal_validation = parallel_results["Internal Links"]
@@ -9969,7 +9109,7 @@ if run:
         resource_validation = parallel_results["Resources"]
         robots_txt_result = parallel_results["Robots"]
 
-        audit_status.write("4 of 5  Finalising SEO checks")
+        audit_status.write("3 of 4  Finalising SEO checks")
         seo_rows = audit_seo(
             url,
             desktop_r,
@@ -9987,7 +9127,7 @@ if run:
         )
 
         total_audit_time = time.time() - audit_started
-        audit_status.write("5 of 5  Preparing results")
+        audit_status.write("4 of 4  Preparing results")
         audit_status.update(
             label=f"Audit completed in {total_audit_time:.1f} seconds",
             state="complete",
