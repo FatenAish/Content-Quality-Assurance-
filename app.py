@@ -43,8 +43,8 @@ FAIL = "FAIL"
 REVIEW = "REVIEW"
 PASS = "PASS"
 
-APP_VERSION = "V18.57 CLEAR EXACT LOCATIONS"
-ENGINE_BUILD = "2026.08.16.57"
+APP_VERSION = "V18.58 EDITORIAL INIT FIX"
+ENGINE_BUILD = "2026.08.17.58"
 CURRENT_YEAR = 2026
 
 # Free official-source Content QA. No API key is required.
@@ -8921,6 +8921,11 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
     article_soup = main_content_node(soup)
     body_text = clean_text(article_soup)
 
+    editorial_quality_issues = deterministic_editorial_quality_issues(
+        article_soup,
+        limit=30,
+    )
+
     title = title_text(soup)
     h1 = page_primary_h1(soup)
     wc = word_count(body_text)
@@ -9426,7 +9431,7 @@ def audit_content(url, soup, body_text, focus_keyword="", secondary_keywords=Non
         1 for s in sentences
         if len(s.strip()) > 180 and not re.search(r"[.!?؟]$", s.strip())
     )
-    gr = REVIEW if avg > 32 or malformed >= 4 else PASS
+    gr = REVIEW if editorial_quality_issues or avg > 32 or malformed >= 4 else PASS
     if editorial_quality_issues:
         grammar_finding = "\n".join(
             f"{index}: {item}"
