@@ -1,0 +1,31 @@
+name: Export current app
+
+on:
+  push:
+    paths:
+      - '.github/workflows/export-current-app.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Validate app
+        run: python -m py_compile app.py
+      - name: Package app
+        run: |
+          mkdir -p export
+          cp app.py export/app.py
+          zip -j export/app_v18_58_fixed.zip app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-v18-58-fixed
+          path: |
+            export/app.py
+            export/app_v18_58_fixed.zip
+          if-no-files-found: error
